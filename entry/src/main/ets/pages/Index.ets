@@ -1,18 +1,27 @@
+import { common } from '@kit.AbilityKit';
 import { EmptyView } from '../components/EmptyView';
 import {
   DetailParam,
   PlaceholderParam,
   ROUTE_BOOK_DETAIL,
+  ROUTE_GENERAL_SETTINGS,
   ROUTE_PLACEHOLDER,
   ROUTE_READER,
+  ROUTE_READING_SETTINGS,
   ROUTE_SEARCH_RESULT,
   ROUTE_SOURCE_MANAGE,
-  SearchParam
+  SearchParam,
+  TAB_SHELF,
+  TAB_SEARCH,
+  TAB_SETTINGS
 } from '../common/Const';
 import { Book, BookSearchItem, BookSource } from '../engine/types';
+import { importLocalTxt } from '../model/LocalBook';
 import { BookDetailPage } from './BookDetail';
 import { BookSourceManagePage } from './BookSourceManage';
+import { GeneralSettingsPage } from './GeneralSettings';
 import { ReaderPage } from './Reader';
+import { ReadingSettingsPage } from './ReadingSettings';
 import { SearchPage } from './Search';
 import { SearchResultPage } from './SearchResult';
 import { SettingsPage } from './Settings';
@@ -21,9 +30,12 @@ import { ShelfPage } from './Shelf';
 @Entry
 @ComponentV2
 struct Index {
-  @Local activeTab: number = 0;
+  @Local activeTab: number = TAB_SHELF;
   @Local shelfRefresh: number = 0;
+  @Local settingsRefresh: number = 0;
+  @Local shelfViewMode: number = 0;
   @Local pathStack: NavPathStack = new NavPathStack();
+  private tabsController: TabsController = new TabsController();
 
   private pushPlaceholder(title: string): void {
     this.pathStack.pushPath({ name: ROUTE_PLACEHOLDER, param: new PlaceholderParam(title) });
@@ -31,6 +43,18 @@ struct Index {
 
   private openSourceManage(): void {
     this.pathStack.pushPath({ name: ROUTE_SOURCE_MANAGE });
+  }
+
+  private onSettingsNavigate(title: string): void {
+    if (title === '书源管理') {
+      this.openSourceManage();
+    } else if (title === '阅读设置') {
+      this.pathStack.pushPath({ name: ROUTE_READING_SETTINGS });
+    } else if (title === '通用设置') {
+      this.pathStack.pushPath({ name: ROUTE_GENERAL_SETTINGS });
+    } else {
+      this.pushPlaceholder(title);
+    }
   }
 
   private openSearchResult(keyword: string): void {
@@ -45,17 +69,82 @@ struct Index {
     this.pathStack.pushPath({ name: ROUTE_READER, param: new DetailParam(source, undefined, book) });
   }
 
+  private async doImportLocal(): Promise<void> {
+    const ctx: common.UIAbilityContext | undefined =
+      this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
+    if (ctx === undefined) {
+      return;
+    }
+    try {
+      const book: Book | undefined = await importLocalTxt(ctx);
+      if (book !== undefined) {
+        this.getUIContext().getPromptAction().showToast({ message: '已导入《' + book.name + '》' });
+        this.shelfRefresh = this.shelfRefresh + 1;
+      }
+    } catch (err) {
+      this.getUIContext().getPromptAction().showToast({ message: '导入失败，请选择 TXT 文本文件' });
+    }
+  }
+
+  private shelfMenuItems(): MenuElement[] {
+    return [
+      {
+        value: '导入本地书籍',
+        action: () => {
+          this.doImportLocal();
+        }
+      },
+      {
+        value: this.shelfViewMode === 0 ? '切换列表模式' : '切换宫格模式',
+        action: () => {
+          this.shelfViewMode = this.shelfViewMode === 0 ? 1 : 0;
+        }
+      }
+    ];
+  }
+
+  // ── Top navigation bar ────────────────────────────────────────
+
   @Builder
-  tabItem(label: string, index: number) {
-    Column() {
-      Text(label)
-        .fontSize(17)
-        .fontWeight(this.activeTab === index ? FontWeight.Bold : FontWeight.Normal)
-        .fontColor(this.activeTab === index ? $r('app.color.brand') : $r('app.color.text_2'))
+  topTab(label: string, index: number) {
+    Text(label)
+      .fontSize(18)
+      .fontWeight(this.activeTab === index ? FontWeight.Bold : FontWeight.Normal)
+      .fontColor(this.activeTab === index ? $r('app.color.text_1') : $r('app.color.text_2'))
+      .onClick(() => {
+        this.activeTab = index;
+        this.tabsController.changeIndex(index);
+      })
+  }
+
+  @Builder
+  menuTrigger() {
+    Row({ space: 3 }) {
+      Row().width(4).height(4).borderRadius(2).backgroundColor($r('app.color.text_2'))
+      Row().width(4).height(4).borderRadius(2).backgroundColor($r('app.color.text_2'))
+      Row().width(4).height(4).borderRadius(2).backgroundColor($r('app.color.text_2'))
+    }
+    .padding({ left: 10, right: 10, top: 10, bottom: 10 })
+    .bindMenu(this.shelfMenuItems())
+  }
+
+  @Builder
+  topBar() {
+    Row() {
+      Row({ space: 20 }) {
+        this.topTab('书架', TAB_SHELF)
+        this.topTab('搜索', TAB_SEARCH)
+        this.topTab('设置', TAB_SETTINGS)
+      }
+      Blank()
+      if (this.activeTab === TAB_SHELF) {
+        this.menuTrigger()
+      }
     }
     .width('100%')
-    .height('100%')
-    .justifyContent(FlexAlign.Center)
+    .height(52)
+    .padding({ left: 16, right: 16 })
+    .alignItems(VerticalAlign.Center)
   }
 
   @Builder
@@ -66,14 +155,27 @@ struct Index {
       }
       .title('书源管理')
       .backgroundColor($r('app.color.bg_page'))
+    } else if (name === ROUTE_READING_SETTINGS) {
+      NavDestination() {
+        ReadingSettingsPage()
+      }
+      .title('阅读设置')
+      .backgroundColor($r('app.color.bg_page'))
+    } else if (name === ROUTE_GENERAL_SETTINGS) {
+      NavDestination() {
+        GeneralSettingsPage()
+      }
+      .title('通用设置')
+      .backgroundColor($r('app.color.bg_page'))
     } else if (name === ROUTE_SEARCH_RESULT) {
       NavDestination() {
         SearchResultPage({
           keyword: (param as SearchParam).keyword,
-          onOpenDetail: (source: BookSource, item: BookSearchItem) => this.openDetail(source, item)
+          onOpenDetail: (source: BookSource, item: BookSearchItem) => this.openDetail(source, item),
+          onBack: () => this.pathStack.pop()
         })
       }
-      .title('搜索结果')
+      .hideTitleBar(true)
       .backgroundColor($r('app.color.bg_page'))
     } else if (name === ROUTE_BOOK_DETAIL) {
       NavDestination() {
@@ -81,10 +183,11 @@ struct Index {
           source: (param as DetailParam).source,
           item: (param as DetailParam).item,
           book: (param as DetailParam).book,
-          onRead: (source: BookSource, book: Book) => this.openReader(source, book)
+          onRead: (source: BookSource, book: Book) => this.openReader(source, book),
+          onBack: () => this.pathStack.pop()
         })
       }
-      .title('书籍详情')
+      .hideTitleBar(true)
       .backgroundColor($r('app.color.bg_page'))
     } else if (name === ROUTE_READER) {
       NavDestination() {
@@ -119,55 +222,68 @@ struct Index {
 
   build() {
     Navigation(this.pathStack) {
-      Tabs({ barPosition: BarPosition.Start, index: this.activeTab }) {
-        TabContent() {
-          ShelfPage({
-            refreshToken: this.shelfRefresh,
-            onGoSearch: () => {
-              this.activeTab = 1;
-            },
-            onOpenBook: (source: BookSource, book: Book) => this.openDetail(source, undefined, book)
-          })
-        }
-        .tabBar(this.tabItem('书架', 0))
+      Column() {
+        this.topBar()
 
-        TabContent() {
-          SearchPage({
-            onSearch: (keyword: string) => this.openSearchResult(keyword),
-            onOpenSource: () => this.openSourceManage()
-          })
-        }
-        .tabBar(this.tabItem('搜索', 1))
+        Tabs({ barPosition: BarPosition.Start, index: this.activeTab, controller: this.tabsController }) {
+          TabContent() {
+            ShelfPage({
+              refreshToken: this.shelfRefresh,
+              viewMode: this.shelfViewMode,
+              onGoSearch: () => {
+                this.activeTab = TAB_SEARCH;
+                this.tabsController.changeIndex(TAB_SEARCH);
+              },
+              onOpenBook: (source: BookSource, book: Book) => this.openReader(source, book)
+            })
+          }
+          .tabBar('')
 
-        TabContent() {
-          SettingsPage({
-            onNavigate: (title: string) => {
-              if (title === '书源管理') {
-                this.openSourceManage();
-              } else {
-                this.pushPlaceholder(title);
-              }
-            }
-          })
+          TabContent() {
+            SearchPage({
+              onSearch: (keyword: string) => this.openSearchResult(keyword),
+              onOpenSource: () => this.openSourceManage()
+            })
+          }
+          .tabBar('')
+
+          TabContent() {
+            SettingsPage({
+              refreshToken: this.settingsRefresh,
+              onNavigate: (title: string) => this.onSettingsNavigate(title)
+            })
+          }
+          .tabBar('')
         }
-        .tabBar(this.tabItem('设置', 2))
+        .barMode(BarMode.Fixed)
+        .barHeight(0)
+        .scrollable(true)
+        .onChange((index: number) => {
+          this.activeTab = index;
+          if (index === TAB_SHELF) {
+            this.shelfRefresh = this.shelfRefresh + 1;
+          } else if (index === TAB_SETTINGS) {
+            this.settingsRefresh = this.settingsRefresh + 1;
+          }
+        })
+        .layoutWeight(1)
+        .width('100%')
+        .backgroundColor($r('app.color.bg_page'))
       }
-      .barMode(BarMode.Fixed)
-      .barHeight(52)
-      .scrollable(true)
-      .onChange((index: number) => {
-        this.activeTab = index;
-        if (index === 0) {
-          this.shelfRefresh = this.shelfRefresh + 1;
-        }
-      })
       .width('100%')
       .height('100%')
-      .backgroundColor($r('app.color.bg_page'))
     }
     .mode(NavigationMode.Stack)
     .hideTitleBar(true)
     .navDestination(this.pageMap)
+    .onNavBarStateChange((isVisible: boolean) => {
+      if (isVisible && this.activeTab === TAB_SHELF) {
+        this.shelfRefresh = this.shelfRefresh + 1;
+      }
+      if (isVisible && this.activeTab === TAB_SETTINGS) {
+        this.settingsRefresh = this.settingsRefresh + 1;
+      }
+    })
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.bg_page'))

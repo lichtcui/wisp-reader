@@ -1,11 +1,10 @@
 import { common } from '@kit.AbilityKit';
-import { SegmentedCell } from '../components/ListCells';
 import { BookCover } from '../components/BookCover';
 import { EmptyView } from '../components/EmptyView';
-import { SORT_OPTIONS, VIEW_MODE_OPTIONS } from '../common/Const';
 import { Book, BookSource, ReadProgress } from '../engine/types';
 import { getBooks, getProgress, initShelf } from '../model/ShelfRepository';
 import { loadSources } from '../model/SourceRepository';
+import { isLocalBook, localSource } from '../model/LocalBook';
 import { shelfProgressText } from '../common/Format';
 
 export interface ShelfBookItem {
@@ -17,7 +16,7 @@ export interface ShelfBookItem {
 @ComponentV2
 export struct ShelfPage {
   @Param refreshToken: number = 0;
-  @Local viewMode: number = 0;
+  @Param viewMode: number = 0;
   @Local entries: ShelfBookItem[] = [];
   @Event onGoSearch: () => void = () => {};
   @Event onOpenBook: (source: BookSource, book: Book) => void = () => {};
@@ -47,7 +46,11 @@ export struct ShelfPage {
     const entries: ShelfBookItem[] = [];
     for (const book of books) {
       const progress: ReadProgress | undefined = await getProgress(book.bookId);
-      entries.push({ book: book, source: byUrl.get(book.sourceUrl), progress: progress });
+      let source: BookSource | undefined = byUrl.get(book.sourceUrl);
+      if (source === undefined && isLocalBook(book)) {
+        source = localSource();
+      }
+      entries.push({ book: book, source: source, progress: progress });
     }
     this.entries = entries;
   }
@@ -59,27 +62,9 @@ export struct ShelfPage {
           .fontSize(13)
           .fontColor($r('app.color.text_4'))
         Blank()
-        SegmentedCell({
-          options: VIEW_MODE_OPTIONS,
-          selected: this.viewMode,
-          onSelect: (index: number) => {
-            this.viewMode = index;
-          }
-        })
-          .width(140)
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 12, bottom: 4 })
-
-      Row() {
-        Text(SORT_OPTIONS[0])
-          .fontSize(13)
-          .fontColor($r('app.color.text_4'))
-          .padding({ top: 4, bottom: 4, right: 12 })
-        Blank()
-      }
-      .width('100%')
-      .padding({ left: 16, right: 16, bottom: 8 })
+      .padding({ left: 16, right: 16, top: 12, bottom: 8 })
 
       if (this.entries.length === 0) {
         Column() {
@@ -93,46 +78,10 @@ export struct ShelfPage {
         .layoutWeight(1)
         .width('100%')
         .justifyContent(FlexAlign.Center)
+      } else if (this.viewMode === 1) {
+        this.listView()
       } else {
-        Grid() {
-          ForEach(this.entries, (entry: ShelfBookItem) => {
-            GridItem() {
-              Column() {
-                BookCover({
-                  source: entry.source,
-                  coverUrl: entry.book.coverUrl,
-                  name: entry.book.name,
-                  coverWidth: 96,
-                  coverHeight: 128,
-                  radius: 8
-                })
-                Text(entry.book.name)
-                  .fontSize(13)
-                  .fontColor($r('app.color.text_1'))
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .margin({ top: 8 })
-                Text(this.progressText(entry))
-                  .fontSize(12)
-                  .fontColor($r('app.color.text_4'))
-                  .margin({ top: 2 })
-              }
-              .width('100%')
-              .onClick(() => {
-                if (entry.source !== undefined) {
-                  this.onOpenBook(entry.source, entry.book);
-                }
-              })
-            }
-          }, (entry: ShelfBookItem) => entry.book.bookId)
-        }
-        .columnsTemplate('1fr 1fr 1fr')
-        .columnsGap(12)
-        .rowsGap(16)
-        .layoutWeight(1)
-        .width('100%')
-        .padding({ left: 16, right: 16 })
-        .scrollBar(BarState.Off)
+        this.gridView()
       }
     }
     .width('100%')
@@ -140,13 +89,114 @@ export struct ShelfPage {
     .backgroundColor($r('app.color.bg_page'))
   }
 
+  @Builder
+  gridView() {
+    Grid() {
+      ForEach(this.entries, (entry: ShelfBookItem) => {
+        GridItem() {
+          Column() {
+            BookCover({
+              source: entry.source,
+              coverUrl: entry.book.coverUrl,
+              name: entry.book.name,
+              coverWidth: 96,
+              coverHeight: 128,
+              radius: 8
+            })
+            Text(entry.book.name)
+              .fontSize(13)
+              .fontColor($r('app.color.text_1'))
+              .lineHeight(18)
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .constraintSize({ minHeight: 36 })
+              .margin({ top: 8 })
+            Text(this.progressText(entry))
+              .fontSize(12)
+              .fontColor($r('app.color.text_4'))
+              .margin({ top: 2 })
+          }
+          .width('100%')
+          .onClick(() => {
+            if (entry.source !== undefined) {
+              this.onOpenBook(entry.source, entry.book);
+            }
+          })
+        }
+      }, (entry: ShelfBookItem) => this.entryKey(entry))
+    }
+    .columnsTemplate('1fr 1fr 1fr')
+    .columnsGap(12)
+    .rowsGap(16)
+    .layoutWeight(1)
+    .width('100%')
+    .padding({ left: 16, right: 16 })
+    .scrollBar(BarState.Off)
+  }
+
+  @Builder
+  listView() {
+    List({ space: 0 }) {
+      ForEach(this.entries, (entry: ShelfBookItem) => {
+        ListItem() {
+          Row() {
+            BookCover({
+              source: entry.source,
+              coverUrl: entry.book.coverUrl,
+              name: entry.book.name,
+              coverWidth: 56,
+              coverHeight: 76,
+              radius: 6
+            })
+            Column({ space: 4 }) {
+              Text(entry.book.name)
+                .fontSize(15)
+                .fontColor($r('app.color.text_1'))
+                .lineHeight(21)
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .constraintSize({ minHeight: 42 })
+                .width('100%')
+              Text(entry.book.author.length > 0 ? entry.book.author : '佚名')
+                .fontSize(12)
+                .fontColor($r('app.color.text_4'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .width('100%')
+              Text(this.progressText(entry))
+                .fontSize(12)
+                .fontColor($r('app.color.text_4'))
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+            .margin({ left: 12 })
+          }
+          .width('100%')
+          .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+          .onClick(() => {
+            if (entry.source !== undefined) {
+              this.onOpenBook(entry.source, entry.book);
+            }
+          })
+        }
+      }, (entry: ShelfBookItem) => this.entryKey(entry))
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .scrollBar(BarState.Off)
+  }
+
+  private entryKey(entry: ShelfBookItem): string {
+    const p: ReadProgress | undefined = entry.progress;
+    const sig: string = p === undefined ? 'none' : `${p.chapterIndex}_${p.percent}`;
+    return entry.book.bookId + '#' + sig;
+  }
+
   private progressText(entry: ShelfBookItem): string {
     const p: ReadProgress | undefined = entry.progress;
     if (p === undefined) {
       return '未读过';
     }
-    // `percent` is chapterIndex+1/total, so total is recoverable without a
-    // stored column; percent==1 on the last chapter yields the "latest" state.
     const total: number = p.percent > 0 ? Math.round((p.chapterIndex + 1) / p.percent) : 0;
     return shelfProgressText(p.chapterIndex, total, true);
   }

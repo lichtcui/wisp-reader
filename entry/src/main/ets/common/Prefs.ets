@@ -42,6 +42,32 @@ export function putNumber(ctx: common.UIAbilityContext, key: string, value: numb
   }
 }
 
+export function getBoolean(ctx: common.UIAbilityContext, key: string, def: boolean): boolean {
+  const p: preferences.Preferences | undefined = getPref(ctx);
+  if (p === undefined) {
+    return def;
+  }
+  try {
+    const value: preferences.ValueType = p.getSync(key, def);
+    return typeof value === 'boolean' ? value : def;
+  } catch (err) {
+    return def;
+  }
+}
+
+export function putBoolean(ctx: common.UIAbilityContext, key: string, value: boolean): void {
+  const p: preferences.Preferences | undefined = getPref(ctx);
+  if (p === undefined) {
+    return;
+  }
+  try {
+    p.putSync(key, value);
+    p.flush();
+  } catch (err) {
+    return;
+  }
+}
+
 export function getString(ctx: common.UIAbilityContext, key: string, def: string): string {
   const p: preferences.Preferences | undefined = getPref(ctx);
   if (p === undefined) {

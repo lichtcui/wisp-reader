@@ -98,3 +98,10 @@ values
 diagnostics
 rule
 message
+# LocalBook (filesDir JSON: toc.json)
+chapters
+start
+end
+# Local import picker options
+fileSuffixFilters
+maxSelectNumber

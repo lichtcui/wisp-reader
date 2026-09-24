@@ -39,3 +39,13 @@ export function saveAndApplyThemeMode(ctx: common.UIAbilityContext, mode: ThemeM
   putNumber(ctx, KEY_THEME_MODE, mode);
   applyThemeMode(ctx, mode);
 }
+
+export function themeModeLabel(mode: number): string {
+  if (mode === ThemeMode.Light) {
+    return '浅色';
+  }
+  if (mode === ThemeMode.Dark) {
+    return '深色';
+  }
+  return '跟随系统';
+}

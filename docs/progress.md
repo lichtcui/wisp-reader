@@ -158,6 +158,125 @@
 - `model/ShelfRepository.ets`：`books` / `progress` 两张表。
 - `pages/Index.ets`：路由 `SearchResult / BookDetail / Reader` 与 `openReader`；阅读页返回刷新书架。
 
+## 书架页整改（2026-09-24，真机验证）
+
+按 `docs/bug.md` §书架页 与 `plan.md` §12 附录 1 demo 调整：
+
+| 验证项 | 结果 |
+|---|---|
+| 书架点书 → **直接进阅读页**（不再先经详情） | ✅ |
+| 顶部导航：三 Tab（书架/搜索/设置）**靠左** + 右侧「…」功能键 | ✅ 物理像素实测 Tab 位于左侧，`•••` 在右 |
+| 「…」下拉菜单含「导入本地书籍」「切换列表模式/切换宫格模式」 | ✅ |
+| 宫格 / 列表双视图切换 | ✅ 列表项 封面+书名+作者+进度 |
+| 书名固定占两行（短标题补足、长标题省略） | ✅ `maxLines(2)` + `constraintSize(minHeight)` |
+| 本地 TXT 导入 → 直接可读 | ✅ 真机导入「测试书」→ 阅读三章正常 |
+| 进度三态（未读过 / N章/总数章 / 已读到最新章） | ✅ 分别实测「未读过」「1章/3章」「已读到最新章」 |
+
+- 新增 `model/LocalBook.ets`：`DocumentViewPicker` 选 `.txt` → 编码识别（UTF-8/UTF-16/GBK 兜底）→
+  「第X章/回/节…」正则分章 → 落盘 `files/local/{bookId}/{book.txt,toc.json}`；`sourceUrl` 用哨兵值 `local://`。
+  阅读页与书架按 `local://` 分支走本地数据，不进引擎。
+- 改造 `pages/Index.ets`：`Tabs` 隐藏自带 bar（`barHeight(0)`），自绘顶栏（Tab 靠左 + `bindMenu` 功能键）；
+  菜单项动态生成（导入 / 视图切换）。
+- 改造 `pages/Shelf.ets`：双视图 + 书名两行 + 本地书源解析（`localSource()`）。
+- **修复 Bug**：`ForEach` 复用 key 未含进度 → 阅读返回后书架进度不刷新。key 改为
+  `bookId#chapterIndex_percent`（`entryKey`），进度变化即重建列表项。
+- **修复 Bug**：用**系统返回手势**退出阅读页时读不到 `Reader.onBack`，书架不刷新（进度停在旧值）。
+  `Navigation` 加 `onNavBarStateChange`，导航栏重新可见且当前是书架 Tab 时 `shelfRefresh++`。
+- 顶栏功能键三个点改为三个 4vp 圆点（原 `'•••'` 在 CJK 字体下按全宽渲染，间距过大）。
+- **待办**：本地书的「详情页」尚未适配（阅读页「更多」→ 详情对 `local://` 走引擎会失败），
+  归入后续阅读页/详情页整改。
+  - 2026-09-24 更新：本地书「更多 → 详情」实测可用（`book` 直传，不再走引擎 `bookInfo`）。
+
+## 详情页整改（2026-09-24，真机验证）
+
+按 `plan.md` §6 / 附录 2 demo 调整（第二轮：头部背景 + 卡片 + 去展开）：
+
+| 验证项 | 结果 |
+|---|---|
+| 顶栏：隐藏 `Navigation` 自带标题栏，自绘**无背景返回箭头**（去掉「书籍详情」标题） | ✅ |
+| 头部**深红渐变背景**（demo 同款 `#402028→#8C2C38`，160°，白字） | ✅ |
+| 「来源」移到作者下方（含「（只读）」）；**删除来源下方的类型/状态/字数等 meta 行** | ✅ |
+| 简介显示全部正文、**无「展开/收起」**、无「简介」标题 | ✅ |
+| 「目录 + 简介」= 白色圆角面板（圆角上边 + 负 margin 上叠红色头部），对齐 demo 的 content-wrap | ✅ |
+| 底部整体操作栏：左侧「✓ + 已在书架」纯文字（灰色、无按钮），右侧「立即阅读」红渐变胶囊按钮 | ✅ |
+| 本地书详情页可用（阅读页「更多」进入，来源显示「本地书籍」） | ✅ |
+
+- 改动文件：`pages/BookDetail.ets`（`topBar(light)` / `header(d)` 渐变 / `contentPanel(d)` / `bottomBar` 勾选 icon）、
+  `pages/Index.ets`（`ROUTE_BOOK_DETAIL` 改 `hideTitleBar(true)`，透传 `onBack`）。
+- 新增色令牌：`detail_header_a`(#402028) / `detail_header_b`(#8C2C38)（base + dark），对齐 demo 头部渐变。
+- 注：该头部渐变按用户要求对齐 demo（`plan.md:90` 原写「白底」，已按 demo 改为深红渐变）。
+
+## 搜索结果页整改（2026-09-24，真机验证）
+
+按 `plan.md` 附录 3 demo 与用户要求调整：
+
+| 验证项 | 结果 |
+|---|---|
+| 顶栏自绘（`hideTitleBar(true)`）：`‹` 无背景返回 + **可编辑搜索框**（预填关键词 / `✕` 清空 / 回车重搜） | ✅ 页面内直接重搜，不必退回搜索 Tab |
+| 去除「“关键词” + 共 N 条」头部（搜索目标 + 结果数量） | ✅ |
+| 列表行只留 封面 / 书名（红）/ `作者 · 最新章节` / 2 行简介；去 kind、字数、单一「来源」标签 | ✅ |
+| Legado `SearchModel.mergeItems` 语义：同名同作者**跨源合并**；分桶 精确→包含→其他；桶内按覆盖源数 → 源 `weight` → 书名 | ✅ 「夜的命名术」4 源合并排首位 |
+| 字段归一：剥离源规则残留的 `作者：` / `最新章节：` 前缀（否则合并失配、meta 重复标签） | ✅ 合并与显示均正常 |
+| 合并行显示 `N个来源`，点击弹来源选择 sheet（v1 无换源，选一个进详情） | ✅ 4 个来源可选，选中进详情 |
+| 搜索代次 guard（连续重搜不混入旧结果） | ✅ |
+| `ForEach` key 含 `origins.length`，合并后行才刷新（否则沿用旧行不更新） | ✅ |
+| 返回箭头逐级回退 | ✅ 详情 → 结果 → 搜索 Tab |
+| **封面修复**：`resolve_url("")` 曾返回源 base（无封面规则的源拿到 `http://m.bbiquge8.net`）；`##…##…/$1s.jpg` 中 `$1s` 被 Rust 正则当作组 `1s`（悠久小说封面变成 `…/.jpg###`） | ✅ 两处引擎 bug 修复，`cargo test` 54 passed，列表封面全部加载 |
+| 合并行按**提供封面的那个源**去下载封面（Referer/headers 匹配） | ✅ |
+| 仅对**多来源合并行**后台补拉一次 `bookInfo` 补简介/封面（并发 4、按 `sourceUrl|bookUrl` 缓存、代次 guard） | ✅ 合并行简介出现；单来源行维持搜索数据 |
+
+- 改动文件：`pages/SearchResult.ets`（重写）、`pages/Index.ets`（`ROUTE_SEARCH_RESULT` 去标题 + `onBack`）、
+  `rust/legado-engine/src/search_url.rs`（`resolve_url` 空串）、`rust/legado-engine/src/rule_dsl/combinator.rs`（`$1s` 归一化）。
+- 说明：用户先要求「去除来源」，后又选「Legado 完整版（含合并多源）」；折中为列表不显示单一来源名，仅合并时显示 `N个来源` 并可点选。如需彻底不显示来源，可改为直接取最高 `weight` 源打开。
+
+## 设置页整改（2026-09-25，真机验证）
+
+按 `plan.md` §12 附录 8 设置页 demo 的结构，视觉对齐参考项目 `harmony-pokerouge` 的设置页
+（**白底分组列表**：13sp `#999` 灰色分组标题 + 行 + 内缩分隔线，**不使用卡片**）：
+
+| 验证项 | 结果 |
+|---|---|
+| 主设置页采用灰色分组标题 + 白色行 + 内缩分隔线（无卡片，对齐 pokerouge） | ✅ |
+| 「设置」组：阅读设置 / 听书设置 / 书源管理 / 通用设置（右侧显示当前外观） | ✅ 通用设置值随主题变「浅色/深色」 |
+| 「数据」组：清理缓存 / 备份与恢复 / **应用更新（新增，显示「已是最新」）** | ✅ |
+| 「关于」组：应用版本 / 书源来源 / 作者 / GitHub / 法律与免责声明 | ✅ |
+| **屏幕常亮移入「阅读设置」**（并新增字号 / 行距调节） | ✅ 开关切换即时生效、`preferences` 持久化，重启后仍为开 |
+| **外观（主题）移入「通用设置」** | ✅ 跟随系统 / 浅色 / 深色；返回主设置页值同步刷新 |
+| 新增路由 `ReadingSettings` / `GeneralSettings`（`Index.pageMap`） | ✅ |
+| 编译（`hvigorw assembleHap` debug） | ✅ BUILD SUCCESSFUL |
+
+- 新增文件：`pages/ReadingSettings.ets`、`pages/GeneralSettings.ets`、`common/Window.ets`。
+- 改动文件：`pages/Settings.ets`（重写为 demo 卡片结构）、`pages/Index.ets`（新路由 + `settingsRefresh` 返回刷新）、
+  `common/Const.ets`（路由 / `KEY_KEEP_SCREEN_ON`）、`common/Prefs.ets`（`get/putBoolean`）、
+  `common/Theme.ets`（`themeModeLabel`）、`entryability/EntryAbility.ets`（`setMainWindow` + 启动应用屏幕常亮）。
+- 说明：`屏幕常亮` 经 `window.setWindowKeepScreenOn` 实现（主窗口在 `EntryAbility` 存于 `common/Window`）；
+  `听书设置 / 清理缓存 / 备份与恢复` 仍为占位（M5 / M6），`应用更新` 暂无远端清单，点击提示「当前已是最新版本」。
+
+## 阅读页整改（2026-09-25，真机验证）
+
+按用户反馈 + `plan.md` 附录 5/6 demo 重写 `pages/Reader.ets`（去掉 `bindSheet`，改为阅读页内浮层）：
+
+| 验证项 | 结果 |
+|---|---|
+| 正文冗余清除：去掉「当前位置：/作者/书名/章节名」面包屑、分页子页重复的章节名 | ✅ 真机正文只剩 1 个章节标题 |
+| 章节名仅作正文首个粗体标题出现一次（不再每页重复） | ✅ |
+| 去除章末「下一章」按钮 | ✅ |
+| 中键点击可呼出**并可再次点击收起**功能菜单 | ✅ 真机验证开/合 |
+| 顶栏返回箭头/章节名/更多纵向居中；「更多」= 三点图标 + `bindMenu` 下拉「书籍详情」（不再直接跳详情） | ✅ |
+| 底栏去 `N/M`、`%` 文字；进度条左右 `‹ ›` 切换上/下一章；进度条改为带旋钮**可拖动 `Slider`**（拖动到章跳转） | ✅ |
+| 目录/昼夜/设置均为图标（`sys.symbol`：line_3_horizontal / sun_max·moon / gearshape），图标间含昼夜切换 | ✅ |
+| 阅读页独立昼夜模式（`reader_*_day` 令牌），`preferences` 持久化 | ✅ 代码就绪、真机切换不崩 |
+| 目录改为**阅读区内浮层**：顶部导航栏下方 → 底栏上方（不再从手机底部弹出、不再过小） | ✅ 真机区域 [257..2367] |
+| 目录顶部书籍卡片（封面/书名/作者，点击进详情） | ✅ 封面走 `BookCover` 兜底 |
+| 正序/倒序切换后**滚动到目录最上方**再生效（避免 LazyForEach 中间态错乱） | ✅ 真机验证 |
+| 目录项 LazyForEach key 改为稳定 `chapter.index` | ✅ |
+
+- 改动文件：`pages/Reader.ets`（重写）、`common/Const.ets`（`KEY_READER_NIGHT` / `READER_NIGHT_DEFAULT`）、
+  `resources/{base,dark}/element/color.json`（`reader_bg_day` / `reader_text_day` / `reader_panel_day` / `reader_dim` / `reader_dim_day`）。
+- 说明：v1 正文为**竖向整章滚动**，故左右点击区与进度条 `‹ ›` 语义为**上/下一章**（非分页）；「下一章」引导按钮已按用户要求移除。
+  面包屑清洗在 ArkTS 侧完成（`Reader.sanitize`，带章节标题上下文），无需改 Rust `.so`。
+- 构建（`hvigorw assembleHap` debug）：✅ BUILD SUCCESSFUL（0 error）。
+
 ## 未决 / 风险
 
 - M5 TTS：Core Speech Kit 的 PCM → `AudioRenderer`/`AVPlayer` → `AVSession` 链路需单独 PoC。
@@ -165,7 +284,7 @@
 - 书源持久化仍用 `preferences` JSON（书籍/进度已用 `relationalStore`）；后续可迁移统一。
 - 规则「静默失败」诊断：`parseWithDiagnostics` 已可返回 regex/CSS/JS 诊断，调试器 UI 待 M6。
 - 文件导入/剪贴板导入：URL 导入已真机复验（成功 1 / 排除 2：需 JS 1、需登录 1）；文件/剪贴板走同一门禁函数。
-- 搜索排序目前按「源完成顺序」；书名相似度 + 源权重排序待打磨。
+- 搜索排序已改为 Legado 分桶 + 同名同作者跨源合并 + 源 `weight`（见「搜索结果页整改」）。
 
 ## 交接备忘
 

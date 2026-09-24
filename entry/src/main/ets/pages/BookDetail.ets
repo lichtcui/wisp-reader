@@ -1,4 +1,3 @@
-import { common } from '@kit.AbilityKit';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSearchItem, BookSource } from '../engine/types';
 import { BookCover } from '../components/BookCover';
@@ -11,11 +10,11 @@ export struct BookDetailPage {
   @Param item: BookSearchItem | undefined = undefined;
   @Param book: Book | undefined = undefined;
   @Event onRead: (source: BookSource, book: Book) => void = () => {};
+  @Event onBack: () => void = () => {};
 
   @Local detail: Book | undefined = undefined;
   @Local loading: boolean = true;
   @Local inShelf: boolean = false;
-  @Local expanded: boolean = false;
 
   aboutToAppear(): void {
     this.load();
@@ -78,9 +77,184 @@ export struct BookDetailPage {
     this.getUIContext().getPromptAction().showToast({ message: '已加入书架' });
   }
 
+  private startRead(): void {
+    const d: Book | undefined = this.detail;
+    const src: BookSource | undefined = this.source;
+    if (d !== undefined && src !== undefined) {
+      this.onRead(src, d);
+    }
+  }
+
+  @Builder
+  topBar(light: boolean) {
+    Row() {
+      Text('‹')
+        .fontSize(28)
+        .fontColor(light ? $r('app.color.on_brand') : $r('app.color.text_1'))
+        .width(44)
+        .height(44)
+        .textAlign(TextAlign.Center)
+        .accessibilityText('返回')
+        .onClick(() => this.onBack())
+    }
+    .width('100%')
+    .height(52)
+    .padding({ left: 4 })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  header(d: Book) {
+    Column() {
+      this.topBar(true)
+      Row() {
+        BookCover({
+          source: this.source,
+          coverUrl: d.coverUrl,
+          name: d.name,
+          coverWidth: 112,
+          coverHeight: 150,
+          radius: 8
+        })
+        Column({ space: 8 }) {
+          Text(d.name)
+            .fontSize(22)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.on_brand'))
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(d.author.length > 0 ? d.author : '佚名')
+            .fontSize(15)
+            .fontColor($r('app.color.on_brand'))
+            .opacity(0.9)
+          Row() {
+            Text('来源：')
+              .fontSize(13)
+              .fontColor($r('app.color.on_brand'))
+              .opacity(0.75)
+            Text(this.source !== undefined ? this.source.bookSourceName : '')
+              .fontSize(13)
+              .fontColor($r('app.color.on_brand'))
+              .opacity(0.95)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1)
+            Text('（只读）')
+              .fontSize(12)
+              .fontColor($r('app.color.on_brand'))
+              .opacity(0.6)
+          }
+          .width('100%')
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        .margin({ left: 16 })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 4 })
+      .alignItems(VerticalAlign.Top)
+    }
+    .width('100%')
+    .padding({ bottom: 32 })
+    .linearGradient({
+      angle: 160,
+      colors: [[$r('app.color.detail_header_a'), 0], [$r('app.color.detail_header_b'), 1]]
+    })
+  }
+
+  @Builder
+  contentPanel(d: Book) {
+    Column() {
+      Row() {
+        Text('目录')
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_1'))
+        Blank()
+        Text(this.latestText(d))
+          .fontSize(13)
+          .fontColor($r('app.color.text_4'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+          .textAlign(TextAlign.End)
+          .margin({ left: 12 })
+        Text('›')
+          .fontSize(16)
+          .fontColor($r('app.color.arrow'))
+          .margin({ left: 6 })
+      }
+      .width('100%')
+      .onClick(() => this.startRead())
+
+      Divider()
+        .color($r('app.color.divider'))
+        .strokeWidth(1)
+        .margin({ top: 12, bottom: 12 })
+
+      Text(d.intro.length > 0 ? d.intro : '暂无简介')
+        .fontSize(15)
+        .fontColor($r('app.color.text_2'))
+        .lineHeight(24)
+        .width('100%')
+    }
+    .width('100%')
+    .padding({ left: 20, right: 20, top: 20, bottom: 24 })
+    .backgroundColor($r('app.color.bg_page'))
+    .borderRadius({ topLeft: 16, topRight: 16 })
+    .margin({ top: -16 })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  bottomBar() {
+    Row() {
+      Row() {
+        if (this.inShelf) {
+          Text('✓')
+            .fontSize(11)
+            .fontColor($r('app.color.brand'))
+            .width(20)
+            .height(20)
+            .textAlign(TextAlign.Center)
+            .border({ width: 1.5, color: $r('app.color.brand'), radius: 10 })
+            .margin({ right: 6 })
+        }
+        Text(this.inShelf ? '已在书架' : '加入书架')
+          .fontSize(15)
+          .fontColor(this.inShelf ? $r('app.color.text_3') : $r('app.color.brand'))
+      }
+      .padding({ left: 4, right: 16, top: 12, bottom: 12 })
+      .alignItems(VerticalAlign.Center)
+      .onClick(() => {
+        if (!this.inShelf) {
+          this.addToShelf();
+        }
+      })
+      Blank()
+      Button('立即阅读')
+        .width(160)
+        .height(46)
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.on_brand'))
+        .borderRadius(23)
+        .linearGradient({
+          angle: 180,
+          colors: [[$r('app.color.brand_grad_a'), 0], [$r('app.color.brand_grad_b'), 1]]
+        })
+        .onClick(() => this.startRead())
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 10, bottom: 16 })
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor($r('app.color.bg_page'))
+  }
+
   build() {
     Column() {
       if (this.loading) {
+        this.topBar(false)
         Column() {
           LoadingProgress()
             .width(40)
@@ -91,6 +265,7 @@ export struct BookDetailPage {
         .width('100%')
         .justifyContent(FlexAlign.Center)
       } else if (this.detail === undefined) {
+        this.topBar(false)
         Column() {
           Text('加载失败')
             .fontSize(15)
@@ -102,86 +277,8 @@ export struct BookDetailPage {
       } else {
         Scroll() {
           Column() {
-            Row() {
-              BookCover({
-                source: this.source,
-                coverUrl: this.detail.coverUrl,
-                name: this.detail.name,
-                coverWidth: 112,
-                coverHeight: 150,
-                radius: 8
-              })
-              Column({ space: 6 }) {
-                Text(this.detail.name)
-                  .fontSize(22)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor($r('app.color.text_1'))
-                  .maxLines(2)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                Text(this.detail.author.length > 0 ? this.detail.author : '佚名')
-                  .fontSize(15)
-                  .fontColor($r('app.color.text_3'))
-                Text(this.metaLine())
-                  .fontSize(13)
-                  .fontColor($r('app.color.text_4'))
-                  .maxLines(2)
-              }
-              .layoutWeight(1)
-              .alignItems(HorizontalAlign.Start)
-              .margin({ left: 16 })
-            }
-            .width('100%')
-            .padding({ left: 16, right: 16, top: 20, bottom: 16 })
-            .alignItems(VerticalAlign.Top)
-
-            Row() {
-              Text('来源')
-                .fontSize(13)
-                .fontColor($r('app.color.text_4'))
-              Text(this.source !== undefined ? this.source.bookSourceName : '')
-                .fontSize(13)
-                .fontColor($r('app.color.text_2'))
-                .margin({ left: 8 })
-              Text('（只读）')
-                .fontSize(12)
-                .fontColor($r('app.color.text_5'))
-            }
-            .width('100%')
-            .padding({ left: 16, right: 16, bottom: 12 })
-
-            Divider()
-              .color($r('app.color.divider'))
-              .strokeWidth(1)
-              .margin({ left: 16, right: 16 })
-
-            Text('简介')
-              .fontSize(15)
-              .fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.text_1'))
-              .width('100%')
-              .padding({ left: 16, right: 16, top: 14, bottom: 6 })
-
-            Text(this.detail.intro.length > 0 ? this.detail.intro : '暂无简介')
-              .fontSize(15)
-              .fontColor($r('app.color.text_2'))
-              .lineHeight(24)
-              .maxLines(this.expanded ? 100 : 4)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%')
-              .padding({ left: 16, right: 16 })
-
-            if (this.detail.intro.length > 40) {
-              Text(this.expanded ? '收起' : '展开')
-                .fontSize(13)
-                .fontColor($r('app.color.brand'))
-                .margin({ left: 16, top: 6 })
-                .onClick(() => {
-                  this.expanded = !this.expanded;
-                })
-            }
-
-            Row()
-              .height(80)
+            this.header(this.detail)
+            this.contentPanel(this.detail)
           }
           .width('100%')
         }
@@ -190,36 +287,11 @@ export struct BookDetailPage {
         .align(Alignment.Top)
         .scrollBar(BarState.Off)
 
-        Row() {
-          Button(this.inShelf ? '已在书架' : '加入书架')
-            .layoutWeight(1)
-            .height(48)
-            .fontSize(16)
-            .fontColor(this.inShelf ? $r('app.color.text_4') : $r('app.color.brand'))
-            .backgroundColor(this.inShelf ? $r('app.color.bg_pill') : $r('app.color.bg_card'))
-            .borderRadius(24)
-            .enabled(!this.inShelf)
-            .onClick(() => {
-              this.addToShelf();
-            })
-          Button('立即阅读')
-            .layoutWeight(1)
-            .height(48)
-            .fontSize(16)
-            .fontColor($r('app.color.on_brand'))
-            .backgroundColor($r('app.color.brand'))
-            .borderRadius(24)
-            .margin({ left: 12 })
-            .onClick(() => {
-              const d: Book | undefined = this.detail;
-              const src: BookSource | undefined = this.source;
-              if (d !== undefined && src !== undefined) {
-                this.onRead(src, d);
-              }
-            })
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 10, bottom: 16 })
+        Divider()
+          .color($r('app.color.divider'))
+          .strokeWidth(1)
+
+        this.bottomBar()
       }
     }
     .width('100%')
@@ -227,24 +299,10 @@ export struct BookDetailPage {
     .backgroundColor($r('app.color.bg_page'))
   }
 
-  private metaLine(): string {
-    const d: Book | undefined = this.detail;
-    if (d === undefined) {
-      return '';
-    }
-    const parts: string[] = [];
-    if (d.kind.length > 0) {
-      parts.push(d.kind);
-    }
-    if (d.status.length > 0) {
-      parts.push(d.status);
-    }
-    if (d.wordCount.length > 0) {
-      parts.push(d.wordCount);
-    }
+  private latestText(d: Book): string {
     if (d.lastChapterTitle.length > 0) {
-      parts.push('最新：' + d.lastChapterTitle);
+      return '最新：' + d.lastChapterTitle;
     }
-    return parts.join(' · ');
+    return d.status.length > 0 ? d.status : '查看目录';
   }
 }

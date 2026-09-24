@@ -2,15 +2,23 @@ import { common } from '@kit.AbilityKit';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSource, Chapter, ReadProgress } from '../engine/types';
 import { ChapterDataSource } from '../common/ChapterDataSource';
+import { BookCover } from '../components/BookCover';
 import {
   KEY_READER_FONT_SIZE,
   KEY_READER_LINE_HEIGHT,
+  KEY_READER_NIGHT,
   READER_FONT_SIZE_DEFAULT,
-  READER_LINE_HEIGHT_DEFAULT
+  READER_LINE_HEIGHT_DEFAULT,
+  READER_NIGHT_DEFAULT
 } from '../common/Const';
-import { getNumber, putNumber } from '../common/Prefs';
+import { getBoolean, getNumber, putBoolean, putNumber } from '../common/Prefs';
 import { getProgress, saveProgress } from '../model/ShelfRepository';
 import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
+import { isLocalBook, loadLocalChapters, loadLocalContent } from '../model/LocalBook';
+
+const PANEL_NONE: string = '';
+const PANEL_TOC: string = 'toc';
+const PANEL_SETTINGS: string = 'settings';
 
 @ComponentV2
 export struct ReaderPage {
@@ -26,12 +34,13 @@ export struct ReaderPage {
   @Local loading: boolean = true;
   @Local failed: string = '';
   @Local menuVisible: boolean = false;
-  @Local sheetVisible: boolean = false;
-  @Local sheetMode: string = 'toc';
+  @Local panel: string = PANEL_NONE;
   @Local tocDescending: boolean = false;
   @Local fontSize: number = READER_FONT_SIZE_DEFAULT;
   @Local lineHeight: number = READER_LINE_HEIGHT_DEFAULT;
+  @Local nightMode: boolean = READER_NIGHT_DEFAULT;
   @Local contentWidth: number = 360;
+  @Local sliderValue: number = 1;
 
   private contentScroller: Scroller = new Scroller();
   private tocScroller: Scroller = new Scroller();
@@ -43,6 +52,7 @@ export struct ReaderPage {
     if (ctx !== undefined) {
       this.fontSize = getNumber(ctx, KEY_READER_FONT_SIZE, READER_FONT_SIZE_DEFAULT);
       this.lineHeight = getNumber(ctx, KEY_READER_LINE_HEIGHT, READER_LINE_HEIGHT_DEFAULT);
+      this.nightMode = getBoolean(ctx, KEY_READER_NIGHT, READER_NIGHT_DEFAULT);
     }
     this.load();
   }
@@ -60,7 +70,13 @@ export struct ReaderPage {
       return;
     }
     try {
-      const chapters: Chapter[] = await bookEngine.toc(src, book.tocUrl);
+      let chapters: Chapter[];
+      if (isLocalBook(book)) {
+        const c: common.UIAbilityContext | undefined = this.ctx();
+        chapters = c !== undefined ? loadLocalChapters(c, book) : [];
+      } else {
+        chapters = await bookEngine.toc(src, book.tocUrl);
+      }
       this.chapters = chapters;
       this.buildTocItems();
       const first: number = this.firstReadable();
@@ -124,6 +140,10 @@ export struct ReaderPage {
     if (src === undefined || book === undefined) {
       return '';
     }
+    if (isLocalBook(book)) {
+      const localCtx: common.UIAbilityContext | undefined = this.ctx();
+      return localCtx !== undefined ? loadLocalContent(localCtx, book, index) : '';
+    }
     const ctx: common.UIAbilityContext | undefined = this.ctx();
     if (ctx !== undefined) {
       const cached: string | undefined = getCachedChapter(ctx, book.bookId, index, chapter.url);
@@ -138,6 +158,38 @@ export struct ReaderPage {
     return result.content;
   }
 
+  /**
+   * Some sources render the chapter body inside a container that also carries
+   * the site breadcrumb ("当前位置：/作者/书名/章节名") and repeats the title on
+   * every paginated sub-page. Keep exactly one title heading, drop the rest.
+   */
+  private sanitize(raw: string, title: string): string[] {
+    const text: string = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const target: string = title.trim().replace(/\s/g, '');
+    const out: string[] = [];
+    for (const rawLine of text.split('\n')) {
+      const line: string = rawLine.trim();
+      if (line.length === 0) {
+        continue;
+      }
+      if (line.indexOf('当前位置') >= 0) {
+        continue;
+      }
+      const compact: string = line.replace(/\s/g, '');
+      if (compact === '/' || line.endsWith('/')) {
+        continue;
+      }
+      if (target.length > 0 && compact === target) {
+        continue;
+      }
+      out.push(line);
+    }
+    if (title.trim().length > 0) {
+      out.unshift(title.trim());
+    }
+    return out;
+  }
+
   private async loadChapter(index: number, restoreParagraph: number = 0): Promise<void> {
     if (!this.isReadable(index)) {
       return;
@@ -147,12 +199,14 @@ export struct ReaderPage {
     try {
       const chapter: Chapter = this.chapters[index];
       const content: string = await this.fetchContent(chapter, index);
-      this.paragraphs = content.split('\n');
+      const paragraphs: string[] = this.sanitize(content, chapter.title);
       this.chapterIndex = index;
+      this.paragraphs = paragraphs;
+      this.sliderValue = index + 1;
       this.paragraphIndex = restoreParagraph;
       this.loading = false;
-      const target: number = restoreParagraph > 0 && this.paragraphs.length > 0
-        ? Math.min(restoreParagraph, this.paragraphs.length - 1)
+      const target: number = restoreParagraph > 0 && paragraphs.length > 0
+        ? Math.min(restoreParagraph, paragraphs.length - 1)
         : 0;
       setTimeout(() => {
         try {
@@ -214,13 +268,61 @@ export struct ReaderPage {
   }
 
   private onContentTap(x: number, width: number): void {
+    if (this.menuVisible) {
+      return;
+    }
     if (x < width / 3) {
       this.prevChapter();
     } else if (x < width * 2 / 3) {
-      this.menuVisible = !this.menuVisible;
+      this.menuVisible = true;
     } else {
       this.nextChapter();
     }
+  }
+
+  // ── Overlay panels ────────────────────────────────────────────
+
+  private onTopBack(): void {
+    if (this.panel !== PANEL_NONE) {
+      this.panel = PANEL_NONE;
+      return;
+    }
+    this.onBack();
+  }
+
+  private openPanel(mode: string): void {
+    if (this.panel === mode) {
+      this.panel = PANEL_NONE;
+      return;
+    }
+    this.panel = mode;
+    this.menuVisible = true;
+    if (mode === PANEL_TOC) {
+      setTimeout(() => this.locateCurrentToc(), 80);
+    }
+  }
+
+  private openDetail(): void {
+    this.panel = PANEL_NONE;
+    this.menuVisible = false;
+    this.onMore();
+  }
+
+  private toggleNight(): void {
+    this.nightMode = !this.nightMode;
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx !== undefined) {
+      putBoolean(ctx, KEY_READER_NIGHT, this.nightMode);
+    }
+  }
+
+  private moreMenuItems(): MenuElement[] {
+    return [
+      {
+        value: '书籍详情',
+        action: () => this.openDetail()
+      }
+    ];
   }
 
   // ── TOC ordering / positioning ────────────────────────────────
@@ -258,13 +360,12 @@ export struct ReaderPage {
   private toggleTocOrder(): void {
     this.tocDescending = !this.tocDescending;
     this.buildTocItems();
-    setTimeout(() => this.locateCurrentToc(), 60);
-  }
-
-  private openToc(): void {
-    this.sheetMode = 'toc';
-    this.sheetVisible = true;
-    setTimeout(() => this.locateCurrentToc(), 120);
+    setTimeout(() => {
+      try {
+        this.tocScroller.scrollToIndex(0);
+      } catch (err) {
+      }
+    }, 60);
   }
 
   // ── Reader settings ───────────────────────────────────────────
@@ -287,94 +388,186 @@ export struct ReaderPage {
     }
   }
 
+  // ── Colors (reader keeps its own day/night, independent of global theme) ──
+
+  private bgColor(): Resource {
+    return this.nightMode ? $r('app.color.reader_bg') : $r('app.color.reader_bg_day');
+  }
+
+  private textColor(): Resource {
+    return this.nightMode ? $r('app.color.reader_text') : $r('app.color.reader_text_day');
+  }
+
+  private panelColor(): Resource {
+    return this.nightMode ? $r('app.color.reader_panel') : $r('app.color.reader_panel_day');
+  }
+
+  private dimColor(): Resource {
+    return this.nightMode ? $r('app.color.reader_dim') : $r('app.color.reader_dim_day');
+  }
+
   // ── UI builders ───────────────────────────────────────────────
+
+  @Builder
+  iconButton(icon: Resource, label: string, action: () => void) {
+    Row() {
+      SymbolGlyph(icon)
+        .fontSize(24)
+        .fontColor([this.textColor()])
+    }
+    .width(44)
+    .height(44)
+    .justifyContent(FlexAlign.Center)
+    .accessibilityText(label)
+    .onClick(action)
+  }
+
+  @Builder
+  moreButton() {
+    Row({ space: 3 }) {
+      Row().width(4).height(4).borderRadius(2).backgroundColor(this.dimColor())
+      Row().width(4).height(4).borderRadius(2).backgroundColor(this.dimColor())
+      Row().width(4).height(4).borderRadius(2).backgroundColor(this.dimColor())
+    }
+    .width(44)
+    .height(44)
+    .justifyContent(FlexAlign.Center)
+    .accessibilityText('更多')
+    .bindMenu(this.moreMenuItems())
+  }
 
   @Builder
   topBar() {
     Row() {
-      Text('‹')
-        .fontSize(26)
-        .fontColor($r('app.color.reader_text'))
-        .width(44)
-        .height(44)
-        .textAlign(TextAlign.Center)
-        .onClick(() => this.onBack())
-      Text(this.chapters.length > 0 ? this.chapters[this.chapterIndex].title : '')
+      this.iconButton($r('sys.symbol.arrow_left'), '返回', () => this.onTopBack())
+      Text(this.chapters.length > 0 && this.chapterIndex < this.chapters.length
+        ? this.chapters[this.chapterIndex].title
+        : '')
         .fontSize(16)
-        .fontColor($r('app.color.reader_text'))
+        .fontColor(this.textColor())
         .layoutWeight(1)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-      Text('更多')
-        .fontSize(14)
-        .fontColor($r('app.color.reader_text'))
-        .width(56)
-        .textAlign(TextAlign.Center)
-        .onClick(() => this.onMore())
+        .padding({ left: 4 })
+      this.moreButton()
     }
     .width('100%')
-    .height(56)
-    .padding({ left: 4, right: 8 })
-    .backgroundColor($r('app.color.reader_panel'))
+    .height(52)
+    .padding({ left: 4, right: 4 })
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor(this.bgColor())
+  }
+
+  @Builder
+  funcButton(icon: Resource, label: string, active: boolean, action: () => void) {
+    Row() {
+      SymbolGlyph(icon)
+        .fontSize(22)
+        .fontColor([active ? $r('app.color.brand') : this.textColor()])
+    }
+    .width(64)
+    .height(48)
+    .justifyContent(FlexAlign.Center)
+    .accessibilityText(label)
+    .onClick(action)
   }
 
   @Builder
   bottomBar() {
     Column() {
       Row() {
-        Text(`${this.chapterIndex + 1} / ${this.chapters.length}`)
-          .fontSize(13)
-          .fontColor($r('app.color.reader_text'))
-        Blank()
-        Progress({ value: this.chapterIndex + 1, total: Math.max(this.chapters.length, 1) })
+        this.iconButton($r('sys.symbol.chevron_left'), '上一章', () => this.prevChapter())
+        Slider({
+          value: this.sliderValue,
+          min: 1,
+          max: Math.max(this.chapters.length, 1),
+          step: 1
+        })
           .layoutWeight(1)
-          .color($r('app.color.brand'))
-          .backgroundColor($r('app.color.reader_panel'))
-          .margin({ left: 12, right: 12 })
-        Text(`${Math.round((this.chapterIndex + 1) / Math.max(this.chapters.length, 1) * 100)}%`)
-          .fontSize(13)
-          .fontColor($r('app.color.reader_text'))
+          .trackThickness(3)
+          .blockColor($r('app.color.brand'))
+          .selectedColor($r('app.color.brand'))
+          .trackColor(this.panelColor())
+          .onChange((value: number, mode: SliderChangeMode) => {
+            this.sliderValue = value;
+            if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+              const target: number = Math.round(value) - 1;
+              if (target !== this.chapterIndex) {
+                this.loadChapter(target);
+              }
+            }
+          })
+        this.iconButton($r('sys.symbol.chevron_right'), '下一章', () => this.nextChapter())
       }
       .width('100%')
-      .margin({ bottom: 16 })
+      .alignItems(VerticalAlign.Center)
 
       Row() {
-        this.barButton('上一章', () => this.prevChapter())
-        this.barButton('目录', () => this.openToc())
-        this.barButton('设置', () => {
-          this.sheetMode = 'settings';
-          this.sheetVisible = true;
-        })
-        this.barButton('下一章', () => this.nextChapter())
+        this.funcButton($r('sys.symbol.line_3_horizontal'), '目录', this.panel === PANEL_TOC,
+          () => this.openPanel(PANEL_TOC))
+        this.funcButton(this.nightMode ? $r('sys.symbol.sun_max') : $r('sys.symbol.moon'),
+          this.nightMode ? '日间模式' : '夜间模式', false, () => this.toggleNight())
+        this.funcButton($r('sys.symbol.gearshape'), '设置', this.panel === PANEL_SETTINGS,
+          () => this.openPanel(PANEL_SETTINGS))
       }
       .width('100%')
-      .justifyContent(FlexAlign.SpaceAround)
+      .justifyContent(FlexAlign.SpaceEvenly)
+      .margin({ top: 4 })
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 16, bottom: 24 })
-    .backgroundColor($r('app.color.reader_panel'))
+    .padding({ left: 8, right: 8, top: 12, bottom: 20 })
+    .backgroundColor(this.bgColor())
   }
 
   @Builder
-  barButton(label: string, action: () => void) {
-    Text(label)
-      .fontSize(14)
-      .fontColor($r('app.color.reader_text'))
-      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-      .onClick(action)
-  }
-
-  @Builder
-  tocSheet() {
+  tocPanel() {
     Column() {
       Row() {
+        BookCover({
+          source: this.source,
+          coverUrl: this.book !== undefined ? this.book.coverUrl : '',
+          name: this.book !== undefined ? this.book.name : '',
+          coverWidth: 44,
+          coverHeight: 58,
+          radius: 6
+        })
+        Column() {
+          Text(this.book !== undefined ? this.book.name : '')
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.textColor())
+            .width('100%')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(this.book !== undefined ? this.book.author : '')
+            .fontSize(13)
+            .fontColor(this.dimColor())
+            .width('100%')
+            .margin({ top: 4 })
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        .margin({ left: 12 })
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(18)
+          .fontColor([this.dimColor()])
+      }
+      .width('100%')
+      .padding(12)
+      .alignItems(VerticalAlign.Center)
+      .backgroundColor(this.panelColor())
+      .onClick(() => this.openDetail())
+
+      Row() {
         Text('目录')
-          .fontSize(17)
+          .fontSize(15)
           .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_1'))
+          .fontColor(this.textColor())
         Text(` · ${this.readableCount()} 章`)
           .fontSize(13)
-          .fontColor($r('app.color.text_4'))
+          .fontColor(this.dimColor())
         Blank()
         Text('定位')
           .fontSize(13)
@@ -388,16 +581,16 @@ export struct ReaderPage {
           .onClick(() => this.toggleTocOrder())
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 14, bottom: 8 })
+      .padding({ left: 16, right: 12, top: 10, bottom: 6 })
 
       List({ space: 0, scroller: this.tocScroller }) {
-        LazyForEach(this.dataSource, (chapter: Chapter, index: number) => {
+        LazyForEach(this.dataSource, (chapter: Chapter) => {
           ListItem() {
             if (chapter.isVolume === true) {
               Text(chapter.title)
                 .fontSize(13)
                 .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.text_4'))
+                .fontColor(this.dimColor())
                 .width('100%')
                 .padding({ left: 16, right: 16, top: 14, bottom: 6 })
                 .maxLines(1)
@@ -405,18 +598,20 @@ export struct ReaderPage {
             } else {
               Text(chapter.title)
                 .fontSize(15)
-                .fontColor(chapter.index === this.chapterIndex ? $r('app.color.brand') : $r('app.color.text_2'))
+                .fontColor(chapter.index === this.chapterIndex
+                  ? $r('app.color.brand')
+                  : this.textColor())
                 .width('100%')
                 .padding({ left: 16, right: 16, top: 12, bottom: 12 })
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
                 .onClick(() => {
-                  this.sheetVisible = false;
+                  this.panel = PANEL_NONE;
                   this.loadChapter(chapter.index);
                 })
             }
           }
-        }, (chapter: Chapter, index: number) => index.toString() + '_' + chapter.index.toString())
+        }, (chapter: Chapter) => chapter.index.toString())
       }
       .layoutWeight(1)
       .width('100%')
@@ -424,33 +619,24 @@ export struct ReaderPage {
       .scrollBar(BarState.Off)
     }
     .width('100%')
-    .height('100%')
-    .backgroundColor($r('app.color.bg_page'))
+    .layoutWeight(1)
+    .backgroundColor(this.bgColor())
   }
 
   @Builder
-  sheetContent() {
-    if (this.sheetMode === 'settings') {
-      this.settingsSheet()
-    } else {
-      this.tocSheet()
-    }
-  }
-
-  @Builder
-  settingsSheet() {
+  settingsPanel() {
     Column() {
       Text('阅读设置')
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_1'))
+        .fontColor(this.textColor())
         .width('100%')
         .padding({ left: 16, top: 16, bottom: 8 })
 
       Row() {
         Text('字号')
           .fontSize(15)
-          .fontColor($r('app.color.text_1'))
+          .fontColor(this.textColor())
         Blank()
         Text('A-')
           .fontSize(15)
@@ -459,7 +645,7 @@ export struct ReaderPage {
           .onClick(() => this.changeFont(-1))
         Text(`${this.fontSize}`)
           .fontSize(15)
-          .fontColor($r('app.color.text_2'))
+          .fontColor(this.dimColor())
           .width(40)
           .textAlign(TextAlign.Center)
         Text('A+')
@@ -474,7 +660,7 @@ export struct ReaderPage {
       Row() {
         Text('行距')
           .fontSize(15)
-          .fontColor($r('app.color.text_1'))
+          .fontColor(this.textColor())
         Blank()
         Text('−')
           .fontSize(18)
@@ -483,7 +669,7 @@ export struct ReaderPage {
           .onClick(() => this.changeLineHeight(-0.1))
         Text(this.lineHeight.toFixed(1))
           .fontSize(15)
-          .fontColor($r('app.color.text_2'))
+          .fontColor(this.dimColor())
           .width(40)
           .textAlign(TextAlign.Center)
         Text('+')
@@ -497,103 +683,101 @@ export struct ReaderPage {
 
       Text('阅读页独立于全局主题；设置即时生效并持久化。')
         .fontSize(12)
-        .fontColor($r('app.color.text_4'))
+        .fontColor(this.dimColor())
         .width('100%')
         .padding({ left: 16, right: 16, top: 12 })
     }
     .width('100%')
-    .height('100%')
-    .backgroundColor($r('app.color.bg_page'))
+    .layoutWeight(1)
+    .backgroundColor(this.bgColor())
   }
 
-  build() {
-    Column() {
-      Stack() {
-        if (this.loading) {
-          Column() {
-            LoadingProgress()
-              .width(40)
-              .height(40)
-              .color($r('app.color.brand'))
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.Center)
-        } else if (this.failed.length > 0) {
-          Column() {
-            Text(this.failed)
-              .fontSize(15)
-              .fontColor($r('app.color.reader_text'))
-            Button('重试')
-              .margin({ top: 12 })
-              .backgroundColor($r('app.color.brand'))
-              .fontColor($r('app.color.on_brand'))
-              .onClick(() => this.loadChapter(this.chapterIndex, this.paragraphIndex))
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.Center)
-        } else {
-          List({ space: 0, scroller: this.contentScroller }) {
-            ForEach(this.paragraphs, (p: string, index: number) => {
-              ListItem() {
-                Text(p)
-                  .fontSize(this.fontSize)
-                  .lineHeight(this.fontSize * this.lineHeight)
-                  .fontColor($r('app.color.reader_text'))
-                  .width('100%')
-                  .margin({ bottom: this.fontSize * 0.6 })
-              }
-            }, (p: string, index: number) => index.toString() + '_' + p.length.toString())
-
-            ListItem() {
-              Text(this.nextReadable(this.chapterIndex) >= 0 ? '下一章 ›' : '已是最后一章')
-                .fontSize(15)
-                .fontColor($r('app.color.brand'))
-                .width('100%')
-                .textAlign(TextAlign.Center)
-                .padding({ top: 24, bottom: 24 })
-                .onClick(() => this.nextChapter())
-            }
-          }
-          .width('100%')
-          .height('100%')
-          .padding({ left: 20, right: 20, top: 20, bottom: 40 })
-          .scrollBar(BarState.Off)
-          .onScrollIndex((start: number, end: number, center: number) => {
-            this.onScrollIndex(start);
-          })
-          .onScrollStop(() => {
-            this.persistProgress();
-          })
-          .onAreaChange((oldValue: Area, newValue: Area) => {
-            this.contentWidth = Number(newValue.width);
-          })
-          .onClick((event: ClickEvent) => {
-            this.onContentTap(event.x, this.contentWidth);
-          })
+  @Builder
+  contentList() {
+    List({ space: 0, scroller: this.contentScroller }) {
+      ForEach(this.paragraphs, (p: string, index: number) => {
+        ListItem() {
+          Text(p)
+            .fontSize(index === 0 ? this.fontSize + 3 : this.fontSize)
+            .fontWeight(index === 0 ? FontWeight.Bold : FontWeight.Normal)
+            .lineHeight(this.fontSize * this.lineHeight)
+            .fontColor(this.textColor())
+            .width('100%')
+            .margin({ bottom: index === 0 ? this.fontSize : this.fontSize * 0.6 })
         }
-
-        if (this.menuVisible && !this.loading && this.failed.length === 0) {
-          Column() {
-            this.topBar()
-            Blank()
-            this.bottomBar()
-          }
-          .width('100%')
-          .height('100%')
-        }
-      }
-      .layoutWeight(1)
-      .width('100%')
+      }, (p: string, index: number) => this.chapterIndex.toString() + '_' + index.toString())
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.reader_bg'))
-    .bindSheet($$this.sheetVisible, this.sheetContent(), {
-      height: SheetSize.MEDIUM,
-      dragBar: true,
-      showClose: false
+    .padding({ left: 20, right: 20, top: 20, bottom: 40 })
+    .scrollBar(BarState.Off)
+    .onScrollIndex((start: number) => {
+      this.onScrollIndex(start);
     })
+    .onScrollStop(() => {
+      this.persistProgress();
+    })
+    .onAreaChange((oldValue: Area, newValue: Area) => {
+      this.contentWidth = Number(newValue.width);
+    })
+    .onClick((event: ClickEvent) => {
+      this.onContentTap(event.x, this.contentWidth);
+    })
+  }
+
+  build() {
+    Stack() {
+      if (this.loading) {
+        Column() {
+          LoadingProgress()
+            .width(40)
+            .height(40)
+            .color($r('app.color.brand'))
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+      } else if (this.failed.length > 0) {
+        Column() {
+          Text(this.failed)
+            .fontSize(15)
+            .fontColor(this.textColor())
+          Button('重试')
+            .margin({ top: 12 })
+            .backgroundColor($r('app.color.brand'))
+            .fontColor($r('app.color.on_brand'))
+            .onClick(() => this.loadChapter(this.chapterIndex, this.paragraphIndex))
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+      } else {
+        this.contentList()
+      }
+
+      if (this.menuVisible && !this.loading && this.failed.length === 0) {
+        Column() {
+          this.topBar()
+          if (this.panel === PANEL_TOC) {
+            this.tocPanel()
+          } else if (this.panel === PANEL_SETTINGS) {
+            this.settingsPanel()
+          } else {
+            Column()
+              .width('100%')
+              .layoutWeight(1)
+              .onClick(() => {
+                this.menuVisible = false;
+              })
+          }
+          this.bottomBar()
+        }
+        .width('100%')
+        .height('100%')
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(this.bgColor())
   }
 }

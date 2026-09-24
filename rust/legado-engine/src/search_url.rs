@@ -78,7 +78,7 @@ fn resolve_template(s: &str, keyword: &str) -> String {
 pub fn resolve_url(url: &str, base: &str) -> String {
     let url = url.trim();
     if url.is_empty() {
-        return base.to_string();
+        return String::new();
     }
     if url.starts_with("http://") || url.starts_with("https://") {
         return url.to_string();
@@ -292,6 +292,8 @@ mod tests {
             resolve_url("//cdn.x/a.jpg", "https://example.com"),
             "https://cdn.x/a.jpg"
         );
+        // Empty input must stay empty (not fall back to the source base URL).
+        assert_eq!(resolve_url("", "https://example.com"), "");
     }
 
     #[test]

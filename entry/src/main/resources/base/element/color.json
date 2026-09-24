@@ -21,6 +21,14 @@
       "value": "#DA3838"
     },
     {
+      "name": "detail_header_a",
+      "value": "#402028"
+    },
+    {
+      "name": "detail_header_b",
+      "value": "#8C2C38"
+    },
+    {
       "name": "on_brand",
       "value": "#FFFFFF"
     },
@@ -87,6 +95,26 @@
     {
       "name": "reader_panel",
       "value": "#2C2C38"
+    },
+    {
+      "name": "reader_bg_day",
+      "value": "#F5F2EC"
+    },
+    {
+      "name": "reader_text_day",
+      "value": "#333333"
+    },
+    {
+      "name": "reader_panel_day",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "reader_dim",
+      "value": "#8A8A92"
+    },
+    {
+      "name": "reader_dim_day",
+      "value": "#999999"
     }
   ]
 }

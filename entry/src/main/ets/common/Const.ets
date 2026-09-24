@@ -12,11 +12,16 @@ export const ROUTE_SOURCE_MANAGE: string = 'BookSourceManage';
 export const ROUTE_SEARCH_RESULT: string = 'SearchResult';
 export const ROUTE_BOOK_DETAIL: string = 'BookDetail';
 export const ROUTE_READER: string = 'Reader';
+export const ROUTE_READING_SETTINGS: string = 'ReadingSettings';
+export const ROUTE_GENERAL_SETTINGS: string = 'GeneralSettings';
 
 export const KEY_READER_FONT_SIZE: string = 'reader_font_size';
 export const KEY_READER_LINE_HEIGHT: string = 'reader_line_height';
+export const KEY_READER_NIGHT: string = 'reader_night';
+export const KEY_KEEP_SCREEN_ON: string = 'keep_screen_on';
 export const READER_FONT_SIZE_DEFAULT: number = 18;
 export const READER_LINE_HEIGHT_DEFAULT: number = 1.8;
+export const READER_NIGHT_DEFAULT: boolean = true;
 
 /** Keyword used by the book-source availability detector. */
 export const DEFAULT_DETECT_KEYWORD: string = '重生';

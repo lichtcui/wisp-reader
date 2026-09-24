@@ -2,6 +2,7 @@ import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { applyThemeMode, readThemeMode } from '../common/Theme';
+import { applyKeepScreenOn, readKeepScreenOn, setMainWindow } from '../common/Window';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'SourceReader';
@@ -32,6 +33,8 @@ export default class EntryAbility extends UIAbility {
     try {
       const win: window.Window = windowStage.getMainWindowSync();
       win.setWindowLayoutFullScreen(false);
+      setMainWindow(win);
+      applyKeepScreenOn(readKeepScreenOn(this.context));
     } catch (err) {
       hilog.warn(DOMAIN, TAG, 'window setup failed: %{public}s', JSON.stringify(err));
     }
