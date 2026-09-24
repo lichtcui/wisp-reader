@@ -2,9 +2,12 @@ import { common } from '@kit.AbilityKit';
 import { EmptyView } from '../components/EmptyView';
 import {
   DetailParam,
+  ListenParam,
   PlaceholderParam,
   ROUTE_BOOK_DETAIL,
   ROUTE_GENERAL_SETTINGS,
+  ROUTE_LISTENING,
+  ROUTE_LISTENING_SETTINGS,
   ROUTE_PLACEHOLDER,
   ROUTE_READER,
   ROUTE_READING_SETTINGS,
@@ -20,6 +23,8 @@ import { importLocalTxt } from '../model/LocalBook';
 import { BookDetailPage } from './BookDetail';
 import { BookSourceManagePage } from './BookSourceManage';
 import { GeneralSettingsPage } from './GeneralSettings';
+import { ListeningPage } from './Listening';
+import { ListeningSettingsPage } from './ListeningSettings';
 import { ReaderPage } from './Reader';
 import { ReadingSettingsPage } from './ReadingSettings';
 import { SearchPage } from './Search';
@@ -52,9 +57,15 @@ struct Index {
       this.pathStack.pushPath({ name: ROUTE_READING_SETTINGS });
     } else if (title === '通用设置') {
       this.pathStack.pushPath({ name: ROUTE_GENERAL_SETTINGS });
+    } else if (title === '听书设置') {
+      this.pathStack.pushPath({ name: ROUTE_LISTENING_SETTINGS });
     } else {
       this.pushPlaceholder(title);
     }
+  }
+
+  private openListening(param?: ListenParam): void {
+    this.pathStack.pushPath({ name: ROUTE_LISTENING, param: param });
   }
 
   private openSearchResult(keyword: string): void {
@@ -167,6 +178,21 @@ struct Index {
       }
       .title('通用设置')
       .backgroundColor($r('app.color.bg_page'))
+    } else if (name === ROUTE_LISTENING_SETTINGS) {
+      NavDestination() {
+        ListeningSettingsPage()
+      }
+      .title('听书设置')
+      .backgroundColor($r('app.color.bg_page'))
+    } else if (name === ROUTE_LISTENING) {
+      NavDestination() {
+        ListeningPage({
+          param: param as ListenParam,
+          onBack: () => this.pathStack.pop()
+        })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('app.color.listen_bg'))
     } else if (name === ROUTE_SEARCH_RESULT) {
       NavDestination() {
         SearchResultPage({
@@ -198,7 +224,8 @@ struct Index {
             this.pathStack.pop();
             this.shelfRefresh = this.shelfRefresh + 1;
           },
-          onMore: () => this.openDetail((param as DetailParam).source, undefined, (param as DetailParam).book)
+          onMore: () => this.openDetail((param as DetailParam).source, undefined, (param as DetailParam).book),
+          onListen: (listen: ListenParam) => this.openListening(listen)
         })
       }
       .hideTitleBar(true)
@@ -234,7 +261,8 @@ struct Index {
                 this.activeTab = TAB_SEARCH;
                 this.tabsController.changeIndex(TAB_SEARCH);
               },
-              onOpenBook: (source: BookSource, book: Book) => this.openReader(source, book)
+              onOpenBook: (source: BookSource, book: Book) => this.openReader(source, book),
+              onOpenListening: () => this.openListening()
             })
           }
           .tabBar('')

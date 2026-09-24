@@ -7,6 +7,7 @@ import {
   KEY_READER_FONT_SIZE,
   KEY_READER_LINE_HEIGHT,
   KEY_READER_NIGHT,
+  ListenParam,
   READER_FONT_SIZE_DEFAULT,
   READER_LINE_HEIGHT_DEFAULT,
   READER_NIGHT_DEFAULT
@@ -15,6 +16,7 @@ import { getBoolean, getNumber, putBoolean, putNumber } from '../common/Prefs';
 import { getProgress, saveProgress } from '../model/ShelfRepository';
 import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
 import { isLocalBook, loadLocalChapters, loadLocalContent } from '../model/LocalBook';
+import { TtsController } from '../model/TtsController';
 
 const PANEL_NONE: string = '';
 const PANEL_TOC: string = 'toc';
@@ -26,6 +28,7 @@ export struct ReaderPage {
   @Param book: Book | undefined = undefined;
   @Event onBack: () => void = () => {};
   @Event onMore: () => void = () => {};
+  @Event onListen: (param: ListenParam) => void = () => {};
 
   @Local chapters: Chapter[] = [];
   @Local chapterIndex: number = 0;
@@ -41,10 +44,26 @@ export struct ReaderPage {
   @Local nightMode: boolean = READER_NIGHT_DEFAULT;
   @Local contentWidth: number = 360;
   @Local sliderValue: number = 1;
+  @Local tts: TtsController = TtsController.instance();
 
   private contentScroller: Scroller = new Scroller();
   private tocScroller: Scroller = new Scroller();
   private dataSource: ChapterDataSource = new ChapterDataSource();
+
+  @Monitor('tts.paragraphIndex', 'tts.chapterIndex')
+  onTtsProgress(): void {
+    if (!this.tts.active) {
+      return;
+    }
+    if (this.tts.chapterIndex !== this.chapterIndex) {
+      this.loadChapter(this.tts.chapterIndex);
+      return;
+    }
+    try {
+      this.contentScroller.scrollToIndex(this.tts.paragraphIndex);
+    } catch (err) {
+    }
+  }
 
   aboutToAppear(): void {
     const ctx: common.UIAbilityContext | undefined =
@@ -308,6 +327,30 @@ export struct ReaderPage {
     this.onMore();
   }
 
+  private openListening(): void {
+    const src: BookSource | undefined = this.source;
+    const book: Book | undefined = this.book;
+    if (src === undefined || book === undefined || this.chapters.length === 0) {
+      return;
+    }
+    this.panel = PANEL_NONE;
+    this.menuVisible = false;
+    this.onListen(new ListenParam(
+      this.chapters,
+      this.chapterIndex,
+      this.paragraphs,
+      this.paragraphIndex,
+      src,
+      book
+    ));
+  }
+
+  private isSpeaking(index: number): boolean {
+    return this.tts.active
+      && this.tts.chapterIndex === this.chapterIndex
+      && this.tts.paragraphIndex === index;
+  }
+
   private toggleNight(): void {
     this.nightMode = !this.nightMode;
     const ctx: common.UIAbilityContext | undefined = this.ctx();
@@ -505,6 +548,8 @@ export struct ReaderPage {
       Row() {
         this.funcButton($r('sys.symbol.line_3_horizontal'), '目录', this.panel === PANEL_TOC,
           () => this.openPanel(PANEL_TOC))
+        this.funcButton($r('sys.symbol.headphones'), '听书', this.tts.active,
+          () => this.openListening())
         this.funcButton(this.nightMode ? $r('sys.symbol.sun_max') : $r('sys.symbol.moon'),
           this.nightMode ? '日间模式' : '夜间模式', false, () => this.toggleNight())
         this.funcButton($r('sys.symbol.gearshape'), '设置', this.panel === PANEL_SETTINGS,
@@ -701,7 +746,7 @@ export struct ReaderPage {
             .fontSize(index === 0 ? this.fontSize + 3 : this.fontSize)
             .fontWeight(index === 0 ? FontWeight.Bold : FontWeight.Normal)
             .lineHeight(this.fontSize * this.lineHeight)
-            .fontColor(this.textColor())
+            .fontColor(this.isSpeaking(index) ? $r('app.color.brand') : this.textColor())
             .width('100%')
             .margin({ bottom: index === 0 ? this.fontSize : this.fontSize * 0.6 })
         }

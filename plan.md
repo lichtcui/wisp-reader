@@ -7,7 +7,7 @@
 > - 书源引擎来源：`~/Documents/playground/legado-source-filter`（Rust，已有 Lexer / HTML·JSON 提取 / HTTP / 限速 / 链路校验）
 > - 视觉基准：`~/Documents/playground/harmony-pokerouge`（白 + 红、扁平）
 >
-> **实施进度**：M0–M3 ✅ 已完成真机验证；M4 ⏳ 进行中；M5/M6 未开始。
+> **实施进度**：M0–M5 ✅ 已完成真机验证；M6 未开始。
 > 进度、验证结果与下一步见 [`docs/progress.md`](./docs/progress.md)；接手说明见 [`AGENTS.md`](./AGENTS.md)。
 > 本文件是**唯一权威设计**，只描述目标方案，不随进度改动。
 
@@ -306,7 +306,7 @@ detect(sourcesJson, opts)            -> 流式进度 + 结果              书�
 
 ## 10. 里程碑与验收标准
 
-> 状态（随进度更新）：M0 ✅ / M1 ✅ / M2 ✅ / M3 ✅ / M4 ⏳ 进行中 / M5 ⏳ / M6 ⏳。
+> 状态（随进度更新）：M0 ✅ / M1 ✅ / M2 ✅ / M3 ✅ / M4 ✅ / M5 ✅ / M6 ⏳。
 > 真机验证记录见 [`docs/progress.md`](./docs/progress.md)。
 
 | 阶段 | 内容 | 验收标准（DoD） |

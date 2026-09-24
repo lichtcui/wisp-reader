@@ -17,15 +17,18 @@
 | M2 引擎 NAPI + 门禁 + 书源管理 | ✅ 真机（detect 8/13 可用；URL 导入成功 1/排除 2） |
 | M3 搜索聚合 + 详情 + 书架持久化 | ✅ 真机（加入书架重启仍在） |
 | **M4 阅读页** | ✅ 真机验证（目录/跳转/字号/进度重启恢复；修 bindSheet 错乱 + 正文实体/脚本清洗；**收尾项已补**：目录正倒序/定位/卷、paragraphIndex、正文缓存+预取、更多→详情、返回刷新书架） |
-| M5 听书 / M6 调试器 | ⏳ 未开始 |
+| **M5 听书** | ✅ 真机验证（系统 TTS PCM → `AudioRenderer` → AVSession top session；锁屏媒体卡 + 媒体键可控；切后台不断；定时关闭；段落高亮/跟随 + 进度回写） |
+| M6 调试器 | ⏳ 未开始 |
 
-**M4 状态**：全部完成并在真机验证（含收尾项）。
-- 关键文件：`pages/Reader.ets`（竖向滚动、三点击区、顶/底栏、单 `bindSheet` 目录/设置、目录正倒序+定位+卷）、
-  `common/ChapterDataSource.ets`（LazyForEach）、`model/ChapterCache.ets`（正文文件缓存）、
-  `pages/Shelf.ets`（真实书架 + 进度三态 + 返回刷新）、`pages/SearchResult.ets`、`pages/BookDetail.ets`、
-  `model/ShelfRepository.ets`（books+progress）、`components/BookCover.ets`、路由 `Index.ets`。
-- M4 收尾修复：`bindSheet` 加 `showClose: false`（默认关闭按钮盖住表头控件）；阅读页 `onBack` 触发书架刷新。
-- 详细进度与验证结果：见 [`docs/progress.md`](./docs/progress.md) §「M4 结果 / M4 收尾」。
+**M5 状态**：全部完成并在真机验证。
+- 关键文件：`model/TtsController.ets`（`@ObservedV2` 单例：TTS 引擎 + PCM 队列 + `AudioRenderer` +
+  `AVSession` + `backgroundTaskManager` + 定时/倍速/音色/进度）、`pages/Listening.ets`（全屏听书页）、
+  `pages/ListeningSettings.ets`、`common/ChapterUtil.ets`、`model/BookContent.ets`。
+- 集成：`pages/Reader.ets` 底栏「听书」入口 + 段落高亮/跟随；`pages/Shelf.ets` 听书 FAB；路由 `ROUTE_LISTENING` /
+  `ROUTE_LISTENING_SETTINGS`；`module.json5` 增 `backgroundModes: ["audioPlayback"]`（**缺它会报 9800005**）。
+- 关键点：**TTS「直连播报」路线不可行**（AVSession 非 top session、锁屏无控件，因系统 TTS 自持音频焦点）；
+  必须让 App 自己播 PCM（`STREAM_USAGE_AUDIOBOOK`）才能成为 top session。
+- 详细进度与验证结果：见 [`docs/progress.md`](./docs/progress.md) §「M5 结果」。
 
 ## 2. 关键决策（已定，勿擅改）
 

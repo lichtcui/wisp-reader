@@ -115,6 +115,30 @@
     {
       "name": "reader_dim_day",
       "value": "#999999"
+    },
+    {
+      "name": "listen_bg",
+      "value": "#5A2A33"
+    },
+    {
+      "name": "listen_text",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "listen_text_dim",
+      "value": "#E7D9DC"
+    },
+    {
+      "name": "listen_card",
+      "value": "#26FFFFFF"
+    },
+    {
+      "name": "listen_play_bg",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "listen_play_fg",
+      "value": "#783843"
     }
   ]
 }

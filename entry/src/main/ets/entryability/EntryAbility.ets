@@ -3,6 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { applyThemeMode, readThemeMode } from '../common/Theme';
 import { applyKeepScreenOn, readKeepScreenOn, setMainWindow } from '../common/Window';
+import { TtsController } from '../model/TtsController';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'SourceReader';
@@ -14,6 +15,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    TtsController.instance().stop();
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onDestroy');
   }
 

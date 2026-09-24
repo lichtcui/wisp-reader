@@ -6,6 +6,7 @@ import { getBooks, getProgress, initShelf } from '../model/ShelfRepository';
 import { loadSources } from '../model/SourceRepository';
 import { isLocalBook, localSource } from '../model/LocalBook';
 import { shelfProgressText } from '../common/Format';
+import { TtsController } from '../model/TtsController';
 
 export interface ShelfBookItem {
   book: Book;
@@ -18,8 +19,10 @@ export struct ShelfPage {
   @Param refreshToken: number = 0;
   @Param viewMode: number = 0;
   @Local entries: ShelfBookItem[] = [];
+  @Local tts: TtsController = TtsController.instance();
   @Event onGoSearch: () => void = () => {};
   @Event onOpenBook: (source: BookSource, book: Book) => void = () => {};
+  @Event onOpenListening: () => void = () => {};
 
   aboutToAppear(): void {
     this.reload();
@@ -56,37 +59,64 @@ export struct ShelfPage {
   }
 
   build() {
-    Column() {
-      Row() {
-        Text(`全部书籍 · ${this.entries.length}`)
-          .fontSize(13)
-          .fontColor($r('app.color.text_4'))
-        Blank()
+    Stack({ alignContent: Alignment.BottomEnd }) {
+      Column() {
+        Row() {
+          Text(`全部书籍 · ${this.entries.length}`)
+            .fontSize(13)
+            .fontColor($r('app.color.text_4'))
+          Blank()
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 12, bottom: 8 })
+
+        if (this.entries.length === 0) {
+          Column() {
+            EmptyView({
+              title: '书架空空如也',
+              desc: '去搜索并添加你想读的书吧',
+              actionText: '去搜索',
+              onAction: () => this.onGoSearch()
+            })
+          }
+          .layoutWeight(1)
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+        } else if (this.viewMode === 1) {
+          this.listView()
+        } else {
+          this.gridView()
+        }
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 12, bottom: 8 })
+      .height('100%')
+      .backgroundColor($r('app.color.bg_page'))
 
-      if (this.entries.length === 0) {
-        Column() {
-          EmptyView({
-            title: '书架空空如也',
-            desc: '去搜索并添加你想读的书吧',
-            actionText: '去搜索',
-            onAction: () => this.onGoSearch()
-          })
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .justifyContent(FlexAlign.Center)
-      } else if (this.viewMode === 1) {
-        this.listView()
-      } else {
-        this.gridView()
+      if (this.tts.active) {
+        this.listenFab()
       }
     }
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.bg_page'))
+  }
+
+  @Builder
+  listenFab() {
+    Row() {
+      SymbolGlyph($r('sys.symbol.headphones'))
+        .fontSize(24)
+        .fontColor([$r('app.color.on_brand')])
+    }
+    .width(52)
+    .height(52)
+    .borderRadius(26)
+    .margin({ right: 20, bottom: 20 })
+    .backgroundColor($r('app.color.brand'))
+    .justifyContent(FlexAlign.Center)
+    .shadow({ radius: 12, color: $r('app.color.shadow'), offsetX: 0, offsetY: 4 })
+    .accessibilityText('继续听书')
+    .onClick(() => this.onOpenListening())
   }
 
   @Builder

@@ -11,7 +11,7 @@
 | M2 | 引擎接口（search/bookInfo/toc/content）+ JS/登录门禁 + 书源导入 | ✅ 已完成（真机验证：detect 8/13 可用） |
 | M3 | 搜索聚合 + 详情 + 加入书架 + 持久化 | ✅ 已完成（真机验证：加入书架重启仍在） |
 | M4 | 阅读页（竖向滚动）+ 目录（含分页）+ 进度 + 阅读设置 | ✅ 已完成（真机验证：目录/跳转/字号/进度重启恢复；修 bindSheet + 正文清洗；**收尾项已补**）|
-| M5 | 听书 + 系统 TTS + 后台播放 + AVSession | ⏳ 未开始 |
+| M5 | 听书 + 系统 TTS + 后台播放 + AVSession | ✅ 已完成（真机验证：PCM→AudioRenderer→AVSession 成为 top session，锁屏控件/媒体键可控，切后台不断，定时关闭，段落高亮/进度同步）|
 | M6 | 规则调试器 + 缓存清理 + 备份恢复 | ⏳ 未开始 |
 | v2 | QuickJS/Boa JS 引擎、换源、在线 TTS、真分页 | ⏳ |
 
@@ -250,7 +250,7 @@
   `common/Const.ets`（路由 / `KEY_KEEP_SCREEN_ON`）、`common/Prefs.ets`（`get/putBoolean`）、
   `common/Theme.ets`（`themeModeLabel`）、`entryability/EntryAbility.ets`（`setMainWindow` + 启动应用屏幕常亮）。
 - 说明：`屏幕常亮` 经 `window.setWindowKeepScreenOn` 实现（主窗口在 `EntryAbility` 存于 `common/Window`）；
-  `听书设置 / 清理缓存 / 备份与恢复` 仍为占位（M5 / M6），`应用更新` 暂无远端清单，点击提示「当前已是最新版本」。
+  `听书设置` 已于 M5 实现；`清理缓存 / 备份与恢复` 仍为占位（M6），`应用更新` 暂无远端清单，点击提示「当前已是最新版本」。
 
 ## 阅读页整改（2026-09-25，真机验证）
 
@@ -277,9 +277,46 @@
   面包屑清洗在 ArkTS 侧完成（`Reader.sanitize`，带章节标题上下文），无需改 Rust `.so`。
 - 构建（`hvigorw assembleHap` debug）：✅ BUILD SUCCESSFUL（0 error）。
 
-## 未决 / 风险
+## M5 结果（2026-09-25，真机验证）
 
-- M5 TTS：Core Speech Kit 的 PCM → `AudioRenderer`/`AVPlayer` → `AVSession` 链路需单独 PoC。
+设备 `33Z0224424136564`（HarmonyOS NEXT，API 24）：
+
+| 验证项 | 结果 |
+|---|---|
+| 系统 TTS 引擎（`textToSpeech`，离线 `zh-CN` 聆小珊）创建/播报 | ✅ 引擎创建、逐段 PCM 合成 |
+| **PCM → `AudioRenderer`**（16kHz/16-bit/mono，`STREAM_USAGE_AUDIOBOOK`）播放 | ✅ 时序实测：段落字节/32000 ≈ 实测时长（para1 3.41s vs 理论 3.42s） |
+| **AVSession 成为 top session**（App 持有音频焦点） | ✅ `hidumper AVSessionService -show_session_info` → `is the topsession: true` |
+| **锁屏媒体卡片**（封面位/章节名/书名·作者/进度条） | ✅ 锁屏 dump 显示「第三章 归途 / 测试书 · 测试作者」+ 进度条 |
+| **媒体键控制**（`play/pause/next/prev` 路由到 AVSession） | ✅ keyCode 10→pause/resume、12→下一段、13→上一段 |
+| 切后台不断（Home 后继续播报） | ✅ 后台期间 `play para` 持续推进 |
+| 后台长时任务（`backgroundModes: ["audioPlayback"]`） | ✅ `startBackgroundRunning` 成功（缺该配置时报 9800005） |
+| 定时关闭 | ✅ 定时到点 `timer fired, pausing` 自动暂停 |
+| 段落高亮 + 阅读页跟随滚动 | ✅ `@Monitor('tts.paragraphIndex','tts.chapterIndex')` 驱动；跨章自动加载 |
+| 进度回写（`paragraphIndex`） | ✅ 复用 `ShelfRepository.saveProgress`，书架返回刷新 |
+| 书架 FAB（听书任务进行中显示） | ✅ 代码就绪（`TtsController.active` 驱动） |
+| 编译（`hvigorw assembleHap` debug） | ✅ BUILD SUCCESSFUL |
+
+**路线修正（重要）**：最初按「系统 TTS 直连播报（`playType:1`）+ AVSession」实现，实测 AVSession
+`is the topsession: false`、锁屏无控件——系统 TTS 内部自己持有音频焦点，App 的会话不会被提升为 top。
+改为 `plan.md` 原定链路：TTS `playType:0` 返回 PCM → App `AudioRenderer` 播放 → 持有音频焦点 → AVSession 成为
+top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时逻辑一致，仅替换音频输出层。
+
+**M5 新增/改动文件**：
+- 新增 `model/TtsController.ets`（`@ObservedV2` 单例：TTS 引擎 + PCM 队列 + `AudioRenderer` + `AVSession` +
+  `backgroundTaskManager` + 定时/倍速/音色/进度）。
+- 新增 `pages/Listening.ets`（全屏听书页，附录 7 结构：封面/章节/进度/语速/上下段/播放/定时/音色 + 目录 sheet）、
+  `pages/ListeningSettings.ets`（默认语速/音色），`common/ChapterUtil.ets`、`model/BookContent.ets`（正文加载/清洗复用）。
+- 改动 `pages/Reader.ets`（底栏「听书」入口 + 段落高亮 + 跟随滚动 + 跨章同步）、`pages/Index.ets`（
+  `ROUTE_LISTENING` / `ROUTE_LISTENING_SETTINGS`）、`pages/Shelf.ets`（听书 FAB）、`pages/Settings.ets`（听书设置路由）、
+  `common/Const.ets`、`entryability/EntryAbility.ets`（退出释放）、`module.json5`（`backgroundModes`）、
+  `resources/*/element/color.json`（`listen_*` 令牌）、`entry/obfuscation-rules.txt`（TTS/AVSession/Audio 字段名保留）。
+
+**已知限制（v1 / 可优化）**：
+- 段落间偶有合成延迟（一次性预合成 2 段，`AHEAD=2`）；跨章需先取正文再合成，存在短暂停顿。
+- 播放位置/时长按字数估算（`CHARS_PER_SECOND=5`），非精确音频时间轴；锁屏 `seek` 按估算定位到段。
+- 音色 21（男声）需系统已下载，未下载时 `createEngine` 失败并回退并提示。
+
+## 未决 / 风险
 - 目录分页 `nextTocUrl` / 卷 `isVolume` 已在引擎实现（真机 detect 覆盖当页路径），多页目录待复验。
 - 书源持久化仍用 `preferences` JSON（书籍/进度已用 `relationalStore`）；后续可迁移统一。
 - 规则「静默失败」诊断：`parseWithDiagnostics` 已可返回 regex/CSS/JS 诊断，调试器 UI 待 M6。
