@@ -1,0 +1,11 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "Reader app entry module",
+  "main": "",
+  "author": "",
+  "license": "",
+  "dependencies": {
+    "liblegado_core.so": "file:./src/main/cpp/types/liblegado_core"
+  }
+}

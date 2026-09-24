@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "兼容 Legado 书源的鸿蒙阅读应用"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "阅读应用入口"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "源阅读"
+    }
+  ]
+}

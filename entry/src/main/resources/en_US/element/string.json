@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "HarmonyOS reader app compatible with Legado book sources"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Reader app entry ability"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Source Reader"
+    }
+  ]
+}

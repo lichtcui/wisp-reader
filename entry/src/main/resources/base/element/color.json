@@ -1,0 +1,92 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "brand",
+      "value": "#DA3838"
+    },
+    {
+      "name": "brand_press",
+      "value": "#C22F2F"
+    },
+    {
+      "name": "brand_grad_a",
+      "value": "#E35A5A"
+    },
+    {
+      "name": "brand_grad_b",
+      "value": "#DA3838"
+    },
+    {
+      "name": "on_brand",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "bg_page",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "bg_card",
+      "value": "#F7F7F7"
+    },
+    {
+      "name": "bg_pill",
+      "value": "#F2F2F2"
+    },
+    {
+      "name": "text_1",
+      "value": "#333333"
+    },
+    {
+      "name": "text_2",
+      "value": "#666666"
+    },
+    {
+      "name": "text_3",
+      "value": "#888888"
+    },
+    {
+      "name": "text_4",
+      "value": "#999999"
+    },
+    {
+      "name": "text_5",
+      "value": "#BBBBBB"
+    },
+    {
+      "name": "divider",
+      "value": "#EDEDED"
+    },
+    {
+      "name": "arrow",
+      "value": "#CCCCCC"
+    },
+    {
+      "name": "shadow",
+      "value": "#99000000"
+    },
+    {
+      "name": "warning",
+      "value": "#C77700"
+    },
+    {
+      "name": "info",
+      "value": "#3A6FD8"
+    },
+    {
+      "name": "reader_bg",
+      "value": "#181820"
+    },
+    {
+      "name": "reader_text",
+      "value": "#D1D1D6"
+    },
+    {
+      "name": "reader_panel",
+      "value": "#2C2C38"
+    }
+  ]
+}

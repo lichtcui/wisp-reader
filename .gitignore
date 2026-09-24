@@ -1,0 +1,28 @@
+# HarmonyOS / DevEco Studio
+/node_modules
+/oh_modules
+/local.properties
+/.idea
+**/build
+/.hvigor
+/.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+*.har
+*.hap
+*.hsp
+*.app
+signature/
+
+# Rust
+/rust/**/target
+/rust/**/dist
+
+# macOS
+.DS_Store
+
+# logs
+*.log

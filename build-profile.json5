@@ -1,0 +1,56 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "/Users/lichtcui/.ohos/config/default_source-reader_b4gDFeh5IMjwHYQh-rewJhHPbp4rwHnmI4eOVl259WA=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001B4F54B02F7EC4B79FDFCDC8B2DBCCF1D934A350BEC82626D3C2C416C15B11D532609C1810CBF01D",
+          "profile": "/Users/lichtcui/.ohos/config/default_source-reader_b4gDFeh5IMjwHYQh-rewJhHPbp4rwHnmI4eOVl259WA=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/Users/lichtcui/.ohos/config/default_source-reader_b4gDFeh5IMjwHYQh-rewJhHPbp4rwHnmI4eOVl259WA=.p12",
+          "storePassword": "0000001B236F0ED832B6CAB95D3DE850FCBED2F3B941CB18B08220F847AE72FF3B6731A68B3A85F00FF5D2"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "compatibleSdkVersion": "5.0.0(12)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        },
+        "targetSdkVersion": "6.1.1(24)"
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

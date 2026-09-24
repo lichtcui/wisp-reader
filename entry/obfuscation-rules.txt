@@ -1,0 +1,100 @@
+# Define project specific obfuscation rules here.
+
+-enable-property-obfuscation
+-enable-toplevel-obfuscation
+-enable-export-obfuscation
+-compact
+
+# 静态路由 pages/main_pages.json 不能被文件名混淆
+# -enable-filename-obfuscation 保持关闭
+
+# JSON 键等点语法访问的属性名需保留。
+-keep-property-name
+# BookSource / 规则字段
+bookSourceName
+bookSourceUrl
+bookSourceType
+bookSourceGroup
+bookSourceComment
+bookUrlPattern
+customOrder
+enabled
+enabledCookieJar
+enabledExplore
+enabledReview
+exploreUrl
+header
+loginUrl
+loginUi
+loginCheckJs
+lastUpdateTime
+respondTime
+weight
+concurrentRate
+coverDecodeJs
+exploreScreen
+jsLib
+variableComment
+searchUrl
+ruleSearch
+ruleBookInfo
+ruleContent
+ruleToc
+ruleExplore
+ruleReview
+# RuleSearch
+bookList
+name
+author
+bookUrl
+coverUrl
+intro
+kind
+lastChapter
+wordCount
+checkKeyWord
+# BookInfoRule
+init
+canReName
+tocUrl
+# ContentRule
+content
+nextContentUrl
+replaceRegex
+# TocRule
+chapterList
+chapterName
+chapterUrl
+isVip
+updateTime
+nextTocUrl
+isVolume
+# Runtime outputs
+items
+sources
+total
+eligible
+excluded
+reason
+detail
+recoverable
+sourceUrl
+sourceName
+ok
+count
+error
+elapsedMs
+status
+lastChapterTitle
+index
+title
+url
+nextUrl
+stage
+contentLen
+# ChapterCache (filesDir JSON)
+fetchedAt
+values
+diagnostics
+rule
+message

@@ -1,0 +1,6 @@
+{
+  "name": "liblegado_core.so",
+  "types": "./index.d.ts",
+  "version": "0.1.0",
+  "description": "Legado book-source rule engine (Rust/NAPI)"
+}
