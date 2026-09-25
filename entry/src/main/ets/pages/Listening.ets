@@ -3,6 +3,7 @@ import { BookCover } from '../components/BookCover';
 import { ListenParam, TTS_SPEED_OPTIONS, TTS_TIMER_OPTIONS, TTS_VOICE_OPTIONS } from '../common/Const';
 import { Chapter } from '../engine/types';
 import { TtsController } from '../model/TtsController';
+import { BottomDrawer } from '../ui/common/BottomDrawer';
 
 function voiceName(person: number): string {
   if (person === 21) {
@@ -311,16 +312,8 @@ export struct ListeningPage {
   }
 
   @Builder
-  tocSheet() {
+  tocContent() {
     Column() {
-      Text(this.tts.bookName)
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_1'))
-        .width('100%')
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .padding({ left: 16, right: 16, top: 16, bottom: 8 })
       List({ space: 0 }) {
         ForEach(this.tts.currentChapters(), (chapter: Chapter) => {
           ListItem() {
@@ -330,7 +323,7 @@ export struct ListeningPage {
                 ? $r('app.color.brand')
                 : $r('app.color.text_1'))
               .width('100%')
-              .padding({ left: 16, right: 16, top: 13, bottom: 13 })
+              .padding({ top: 13, bottom: 13 })
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .onClick(() => {
@@ -345,49 +338,61 @@ export struct ListeningPage {
       .scrollBar(BarState.Off)
     }
     .width('100%')
-    .height('70%')
-    .backgroundColor($r('app.color.bg_page'))
+    .height('100%')
   }
 
   build() {
-    Column() {
-      this.topBar()
+    Stack() {
+      Column() {
+        this.topBar()
 
-      Scroll() {
-        Column() {
-          this.header()
-          if (this.tts.loading) {
-            LoadingProgress()
-              .width(36)
-              .height(36)
-              .color($r('app.color.listen_text'))
-              .margin({ top: 32 })
-          } else {
-            this.progressBlock()
-            this.controls()
-            this.voiceRow()
-            if (this.tts.error.length > 0) {
-              Text(this.tts.error)
-                .fontSize(13)
-                .fontColor($r('app.color.listen_text_dim'))
-                .margin({ top: 16 })
+        Scroll() {
+          Column() {
+            this.header()
+            if (this.tts.loading) {
+              LoadingProgress()
+                .width(36)
+                .height(36)
+                .color($r('app.color.listen_text'))
+                .margin({ top: 32 })
+            } else {
+              this.progressBlock()
+              this.controls()
+              this.voiceRow()
+              if (this.tts.error.length > 0) {
+                Text(this.tts.error)
+                  .fontSize(13)
+                  .fontColor($r('app.color.listen_text_dim'))
+                  .margin({ top: 16 })
+              }
             }
           }
+          .width('100%')
+          .padding({ left: 28, right: 28, top: 8, bottom: 40 })
         }
+        .layoutWeight(1)
         .width('100%')
-        .padding({ left: 28, right: 28, top: 8, bottom: 40 })
+        .align(Alignment.Top)
+        .scrollBar(BarState.Off)
       }
-      .layoutWeight(1)
       .width('100%')
-      .align(Alignment.Top)
-      .scrollBar(BarState.Off)
+      .height('100%')
+      .backgroundColor($r('app.color.listen_bg'))
+
+      BottomDrawer({
+        visible: this.sheetVisible,
+        title: '目录',
+        sheetSize: 'large',
+        mode: 'overlay',
+        onClose: () => {
+          this.sheetVisible = false;
+        }
+      }) {
+        this.tocContent()
+      }
     }
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.listen_bg'))
-    .bindSheet($$this.sheetVisible, this.tocSheet(), {
-      height: SheetSize.LARGE,
-      showClose: false
-    })
   }
 }
