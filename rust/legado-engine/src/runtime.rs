@@ -640,6 +640,16 @@ pub async fn download_cover(
     cover_url: &str,
     dest_dir: &str,
 ) -> Result<String, String> {
+    let mut hasher = DefaultHasher::new();
+    cover_url.hash(&mut hasher);
+    let name = format!("cover_{:x}.img", hasher.finish());
+    let safe_dir = dest_dir.trim_end_matches('/');
+    let path = format!("{safe_dir}/{name}");
+
+    if std::path::Path::new(&path).exists() {
+        return Ok(path);
+    }
+
     let client = engine().client_for(source);
     let headers = source_headers(source);
     let result = client
@@ -650,11 +660,6 @@ pub async fn download_cover(
         return Err(FailReason::NoResults.as_str().to_string());
     }
 
-    let mut hasher = DefaultHasher::new();
-    cover_url.hash(&mut hasher);
-    let name = format!("cover_{:x}.img", hasher.finish());
-    let safe_dir = dest_dir.trim_end_matches('/');
-    let path = format!("{safe_dir}/{name}");
     std::fs::write(&path, &result.body_bytes).map_err(|e| e.to_string())?;
     Ok(path)
 }

@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
+import { fileIo } from '@kit.CoreFileKit';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { BookSource } from '../engine/types';
 
@@ -7,7 +8,13 @@ import { BookSource } from '../engine/types';
  * Cover with a red-gradient fallback. The bitmap is downloaded by the Rust
  * engine (carrying the source's headers/cookies) into the sandbox cache and
  * loaded via PixelMap — ArkTS never issues the source request itself.
+ *
+ * Module-level caches keyed by cover URL avoid re-downloading and re-decoding
+ * across panels/components within a session; the Rust side short-circuits a
+ * download when the file is already on disk.
  */
+const pixmapCache: Map<string, image.PixelMap> = new Map();
+const pathCache: Map<string, string> = new Map();
 @ComponentV2
 export struct BookCover {
   @Param source: BookSource | undefined = undefined;
@@ -29,10 +36,21 @@ export struct BookCover {
     if (ctx === undefined || this.source === undefined || this.coverUrl.length === 0) {
       return;
     }
+    const cachedPixmap: image.PixelMap | undefined = pixmapCache.get(this.coverUrl);
+    if (cachedPixmap !== undefined) {
+      this.pixmap = cachedPixmap;
+      return;
+    }
     try {
-      const path: string = await bookEngine.downloadCover(this.source, this.coverUrl, ctx.cacheDir);
+      let path: string | undefined = pathCache.get(this.coverUrl);
+      if (path === undefined || !fileIo.accessSync(path)) {
+        path = await bookEngine.downloadCover(this.source, this.coverUrl, ctx.cacheDir);
+        pathCache.set(this.coverUrl, path);
+      }
       const src: image.ImageSource = image.createImageSource(path);
-      this.pixmap = await src.createPixelMap();
+      const pixmap: image.PixelMap = await src.createPixelMap();
+      pixmapCache.set(this.coverUrl, pixmap);
+      this.pixmap = pixmap;
     } catch (err) {
       this.pixmap = undefined;
     }
