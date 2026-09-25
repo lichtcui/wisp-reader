@@ -139,6 +139,7 @@ export class TtsController {
   private playStartWallMs: number = 0;
 
   private creating: boolean = false;
+  private voiceSwitching: boolean = false;
   private bgRunning: boolean = false;
   private formatLogged: boolean = false;
   private timerId: number = -1;
@@ -524,6 +525,17 @@ export class TtsController {
     this.playStartWallMs = Date.now();
   }
 
+  /**
+   * Drop only the in-flight synthesis requests, keeping already-flushed PCM and
+   * its timeline untouched. Used by pause / speed change so the renderer can
+   * keep draining its buffer instead of restarting from a silent queue.
+   */
+  private clearInflight(): void {
+    this.reqByIndex.clear();
+    this.reqIdIndex.clear();
+    this.issuedIndex = this.flushIndex;
+  }
+
   private beginFrom(index: number): void {
     if (this.paragraphs.length === 0) {
       this.playing = false;
@@ -841,7 +853,10 @@ export class TtsController {
     }
     this.stopFlushTimer();
     this.stopProgressTimer();
-    this.resetQueues();
+    // Keep the flushed PCM queue and its timeline: resuming replays it while the
+    // dropped in-flight paragraphs are re-synthesized, so there is no silent
+    // restart from the top of the paragraph.
+    this.clearInflight();
     if (this.renderer !== undefined) {
       this.renderer.pause().catch((err: BusinessError) => {
       });
@@ -855,7 +870,23 @@ export class TtsController {
     }
     hilog.info(DOMAIN, TAG, 'resume');
     this.error = '';
-    this.beginFrom(this.currentIndex);
+    this.playing = true;
+    this.playStartWallMs = Date.now() - this.elapsedMs;
+    this.startBackground();
+    this.ensureSynthesized();
+    this.startFlushTimer();
+    this.startProgressTimer();
+    this.updatePlaybackState(avSession.PlaybackState.PLAYBACK_STATE_PLAY);
+    const renderer: audio.AudioRenderer | undefined = this.renderer;
+    if (renderer === undefined) {
+      this.beginFrom(this.currentIndex);
+      return;
+    }
+    // Resume the renderer where it stopped; do NOT pause/flush (that would drop
+    // the buffered audio and manufacture an underrun).
+    renderer.start().catch((err: BusinessError) => {
+      hilog.warn(DOMAIN, TAG, 'renderer resume failed code=%{public}d', err.code);
+    });
   }
 
   toggle(): void {
@@ -936,15 +967,23 @@ export class TtsController {
     if (ctx !== undefined) {
       putNumber(ctx, KEY_TTS_SPEED, this.speed);
     }
-    if (this.active && this.playing) {
-      this.beginFrom(this.currentIndex);
-    } else {
-      this.updatePlaybackStateFromPlaying();
+    if (this.active && this.playing && this.engine !== undefined) {
+      // `speed` is a per-`speak()` parameter, so no re-synthesis of the whole
+      // paragraph is needed: drop only the not-yet-flushed requests and re-issue
+      // them at the new speed while the buffered audio keeps playing.
+      try {
+        this.engine.stop();
+      } catch (err) {
+      }
+      this.clearInflight();
+      this.ensureSynthesized();
     }
+    this.updateMetadata();
+    this.updatePlaybackStateFromPlaying();
   }
 
   async setVoice(person: number): Promise<void> {
-    if (person === this.voice) {
+    if (person === this.voice || this.voiceSwitching) {
       return;
     }
     const previous: number = this.voice;
@@ -953,22 +992,27 @@ export class TtsController {
     if (ctx !== undefined) {
       putNumber(ctx, KEY_TTS_VOICE, person);
     }
-    if (this.engine !== undefined) {
+    const old: textToSpeech.TextToSpeechEngine | undefined = this.engine;
+    if (old === undefined) {
+      return;
+    }
+    this.voiceSwitching = true;
+    try {
       const wasPlaying: boolean = this.playing;
-      if (this.playing) {
-        this.pause();
-      }
       try {
-        this.engine.shutdown();
+        old.stop();
       } catch (err) {
       }
+      this.clearInflight();
+      // Build the new engine first so the already-buffered audio keeps playing
+      // while it boots; only then retire the old engine. `person` is fixed at
+      // createEngine time, so a rebuild is unavoidable, but it no longer costs
+      // a fixed pause + 120ms wait + restart-from-paragraph-top.
       this.engine = undefined;
-      await new Promise<void>((resolve) => {
-        setTimeout(() => resolve(), 120);
-      });
       try {
         await this.ensureEngine();
       } catch (err) {
+        this.engine = old;
         this.voice = previous;
         if (ctx !== undefined) {
           putNumber(ctx, KEY_TTS_VOICE, previous);
@@ -976,9 +1020,15 @@ export class TtsController {
         this.error = '该音色尚未下载';
         return;
       }
-      if (wasPlaying) {
-        this.resume();
+      try {
+        old.shutdown();
+      } catch (err) {
       }
+      if (wasPlaying) {
+        this.ensureSynthesized();
+      }
+    } finally {
+      this.voiceSwitching = false;
     }
   }
 
