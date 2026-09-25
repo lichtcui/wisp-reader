@@ -8,10 +8,12 @@ import {
   KEY_READER_FONT_SIZE,
   KEY_READER_LINE_HEIGHT,
   KEY_READER_NIGHT,
+  KEY_READER_ONE_HAND_PAGE,
   ListenParam,
   READER_FONT_SIZE_DEFAULT,
   READER_LINE_HEIGHT_DEFAULT,
-  READER_NIGHT_DEFAULT
+  READER_NIGHT_DEFAULT,
+  READER_ONE_HAND_PAGE_DEFAULT
 } from '../common/Const';
 import { getBoolean, getNumber, putBoolean, putNumber } from '../common/Prefs';
 import {
@@ -48,6 +50,7 @@ export struct ReaderPage {
   @Local fontSize: number = READER_FONT_SIZE_DEFAULT;
   @Local lineHeight: number = READER_LINE_HEIGHT_DEFAULT;
   @Local nightMode: boolean = READER_NIGHT_DEFAULT;
+  @Local oneHandMode: boolean = READER_ONE_HAND_PAGE_DEFAULT;
   @Local contentWidth: number = 360;
   @Local sliderValue: number = 1;
   @Local tts: TtsController = TtsController.instance();
@@ -78,6 +81,7 @@ export struct ReaderPage {
       this.fontSize = getNumber(ctx, KEY_READER_FONT_SIZE, READER_FONT_SIZE_DEFAULT);
       this.lineHeight = getNumber(ctx, KEY_READER_LINE_HEIGHT, READER_LINE_HEIGHT_DEFAULT);
       this.nightMode = getBoolean(ctx, KEY_READER_NIGHT, READER_NIGHT_DEFAULT);
+      this.oneHandMode = getBoolean(ctx, KEY_READER_ONE_HAND_PAGE, READER_ONE_HAND_PAGE_DEFAULT);
     }
     this.applyFullScreen();
     this.load();
@@ -368,6 +372,16 @@ export struct ReaderPage {
 
   private onContentTap(x: number, width: number): void {
     if (this.menuVisible) {
+      return;
+    }
+    if (this.oneHandMode) {
+      if (x < width * 0.45) {
+        this.prevChapter();
+      } else if (x > width * 0.55) {
+        this.nextChapter();
+      } else {
+        this.menuVisible = true;
+      }
       return;
     }
     if (x < width / 3) {

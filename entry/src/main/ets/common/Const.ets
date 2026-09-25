@@ -20,10 +20,12 @@ export const ROUTE_LISTENING_SETTINGS: string = 'ListeningSettings';
 export const KEY_READER_FONT_SIZE: string = 'reader_font_size';
 export const KEY_READER_LINE_HEIGHT: string = 'reader_line_height';
 export const KEY_READER_NIGHT: string = 'reader_night';
+export const KEY_READER_ONE_HAND_PAGE: string = 'reader_one_hand_page';
 export const KEY_KEEP_SCREEN_ON: string = 'keep_screen_on';
 export const READER_FONT_SIZE_DEFAULT: number = 18;
 export const READER_LINE_HEIGHT_DEFAULT: number = 1.8;
 export const READER_NIGHT_DEFAULT: boolean = true;
+export const READER_ONE_HAND_PAGE_DEFAULT: boolean = false;
 
 /** 听书（M5）：语速 / 音色（textToSpeech person）/ 定时关闭。 */
 export const KEY_TTS_SPEED: string = 'tts_speed';

@@ -3,10 +3,12 @@ import { GroupTitle, InsetDivider, SwitchCell } from '../components/ListCells';
 import {
   KEY_READER_FONT_SIZE,
   KEY_READER_LINE_HEIGHT,
+  KEY_READER_ONE_HAND_PAGE,
   READER_FONT_SIZE_DEFAULT,
-  READER_LINE_HEIGHT_DEFAULT
+  READER_LINE_HEIGHT_DEFAULT,
+  READER_ONE_HAND_PAGE_DEFAULT
 } from '../common/Const';
-import { getNumber, putNumber } from '../common/Prefs';
+import { getBoolean, getNumber, putBoolean, putNumber } from '../common/Prefs';
 import { readKeepScreenOn, saveAndApplyKeepScreenOn } from '../common/Window';
 
 @ComponentV2
@@ -14,6 +16,7 @@ export struct ReadingSettingsPage {
   @Local keepScreenOn: boolean = false;
   @Local fontSize: number = READER_FONT_SIZE_DEFAULT;
   @Local lineHeight: number = READER_LINE_HEIGHT_DEFAULT;
+  @Local oneHandPage: boolean = READER_ONE_HAND_PAGE_DEFAULT;
 
   aboutToAppear(): void {
     const ctx: common.UIAbilityContext | undefined = this.ctx();
@@ -21,6 +24,7 @@ export struct ReadingSettingsPage {
       this.keepScreenOn = readKeepScreenOn(ctx);
       this.fontSize = getNumber(ctx, KEY_READER_FONT_SIZE, READER_FONT_SIZE_DEFAULT);
       this.lineHeight = getNumber(ctx, KEY_READER_LINE_HEIGHT, READER_LINE_HEIGHT_DEFAULT);
+      this.oneHandPage = getBoolean(ctx, KEY_READER_ONE_HAND_PAGE, READER_ONE_HAND_PAGE_DEFAULT);
     }
   }
 
@@ -33,6 +37,14 @@ export struct ReadingSettingsPage {
     const ctx: common.UIAbilityContext | undefined = this.ctx();
     if (ctx !== undefined) {
       saveAndApplyKeepScreenOn(ctx, on);
+    }
+  }
+
+  private onOneHandToggle(on: boolean): void {
+    this.oneHandPage = on;
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx !== undefined) {
+      putBoolean(ctx, KEY_READER_ONE_HAND_PAGE, on);
     }
   }
 
@@ -77,6 +89,13 @@ export struct ReadingSettingsPage {
           })
           InsetDivider()
 
+          SwitchCell({
+            label: '单手翻页',
+            isOn: this.oneHandPage,
+            onToggle: (on: boolean) => this.onOneHandToggle(on)
+          })
+          InsetDivider()
+
           Row() {
             Text('字号')
               .fontSize(16)
@@ -110,7 +129,7 @@ export struct ReadingSettingsPage {
           .width('100%')
           .padding({ left: 16, right: 12, top: 8, bottom: 8 })
 
-          Text('字号与行距即时生效并持久化；屏幕常亮仅在本应用内生效。')
+          Text('字号与行距即时生效并持久化；屏幕常亮仅在本应用内生效；单手翻页放大左右翻页热区、保留中间菜单区。')
             .fontSize(12)
             .fontColor($r('app.color.text_4'))
             .width('100%')
