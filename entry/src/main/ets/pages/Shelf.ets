@@ -7,6 +7,7 @@ import { loadSources } from '../model/SourceRepository';
 import { isLocalBook, localSource } from '../model/LocalBook';
 import { shelfProgressText } from '../common/Format';
 import { TtsController } from '../model/TtsController';
+import { FloatingListenButton } from '../ui/common/FloatingListenButton';
 
 export interface ShelfBookItem {
   book: Book;
@@ -93,30 +94,15 @@ export struct ShelfPage {
       .backgroundColor($r('app.color.bg_page'))
 
       if (this.tts.active) {
-        this.listenFab()
+        FloatingListenButton({
+          visible: true,
+          onTap: () => this.onOpenListening()
+        })
       }
     }
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.bg_page'))
-  }
-
-  @Builder
-  listenFab() {
-    Row() {
-      SymbolGlyph($r('sys.symbol.headphones'))
-        .fontSize(24)
-        .fontColor([$r('app.color.on_brand')])
-    }
-    .width(52)
-    .height(52)
-    .borderRadius(26)
-    .margin({ right: 20, bottom: 20 })
-    .backgroundColor($r('app.color.brand'))
-    .justifyContent(FlexAlign.Center)
-    .shadow({ radius: 12, color: $r('app.color.shadow'), offsetX: 0, offsetY: 4 })
-    .accessibilityText('继续听书')
-    .onClick(() => this.onOpenListening())
   }
 
   @Builder

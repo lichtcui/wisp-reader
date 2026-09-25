@@ -226,7 +226,8 @@ struct Index {
             this.shelfRefresh = this.shelfRefresh + 1;
           },
           onMore: () => this.openDetail((param as DetailParam).source, undefined, (param as DetailParam).book),
-          onListen: (listen: ListenParam) => this.openListening(listen)
+          onListen: (listen: ListenParam) => this.openListening(listen),
+          onOpenListening: () => this.openListening()
         })
       }
       .hideTitleBar(true)

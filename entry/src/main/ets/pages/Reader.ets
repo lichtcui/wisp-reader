@@ -26,6 +26,7 @@ import { ReaderTheme } from '../common/ReaderTheme';
 import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
 import { isLocalBook, loadLocalChapters, loadLocalContent } from '../model/LocalBook';
 import { TtsController } from '../model/TtsController';
+import { FloatingListenButton } from '../ui/common/FloatingListenButton';
 
 const PANEL_NONE: string = '';
 const PANEL_TOC: string = 'toc';
@@ -38,6 +39,7 @@ export struct ReaderPage {
   @Event onBack: () => void = () => {};
   @Event onMore: () => void = () => {};
   @Event onListen: (param: ListenParam) => void = () => {};
+  @Event onOpenListening: () => void = () => {};
 
   @Local chapters: Chapter[] = [];
   @Local chapterIndex: number = 0;
@@ -921,6 +923,15 @@ export struct ReaderPage {
         }
         .width('100%')
         .height('100%')
+      }
+
+      // Quick return to the listening page once a session is running. Kept
+      // below the drawers so their mask covers it.
+      if (this.tts.active) {
+        FloatingListenButton({
+          visible: true,
+          onTap: () => this.onOpenListening()
+        })
       }
 
       // @BuilderParam content is not re-evaluated on plain state change under
