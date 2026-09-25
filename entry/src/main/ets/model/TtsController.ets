@@ -886,6 +886,13 @@ export class TtsController {
     // the buffered audio and manufacture an underrun).
     renderer.start().catch((err: BusinessError) => {
       hilog.warn(DOMAIN, TAG, 'renderer resume failed code=%{public}d', err.code);
+      setTimeout(() => {
+        if (this.playing && this.renderer !== undefined) {
+          this.renderer.start().catch((retry: BusinessError) => {
+            hilog.warn(DOMAIN, TAG, 'renderer resume retry failed code=%{public}d', retry.code);
+          });
+        }
+      }, 60);
     });
   }
 
