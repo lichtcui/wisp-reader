@@ -16,6 +16,8 @@ import { ContentResult, IBookEngine, SearchOptions, SearchResult } from './IBook
  * All structured data crosses the NAPI boundary as JSON strings.
  */
 export class BookEngineNapi implements IBookEngine {
+  private inFlight: Map<string, Promise<ContentResult>> = new Map();
+
   async search(sources: BookSource[], keyword: string, opts: SearchOptions): Promise<SearchResult> {
     const sourcesJson: string = JSON.stringify(sources);
     const optsJson: string = JSON.stringify({ timeoutMs: opts.timeoutMs });
@@ -50,8 +52,18 @@ export class BookEngineNapi implements IBookEngine {
   }
 
   async content(source: BookSource, chapterUrl: string): Promise<ContentResult> {
-    const raw: string = await nativeContent(JSON.stringify(source), chapterUrl);
-    return JSON.parse(raw) as ContentResult;
+    const key: string = source.bookSourceUrl + '|' + chapterUrl;
+    const pending: Promise<ContentResult> | undefined = this.inFlight.get(key);
+    if (pending !== undefined) {
+      return pending;
+    }
+    const task: Promise<ContentResult> = nativeContent(JSON.stringify(source), chapterUrl)
+      .then((raw: string): ContentResult => JSON.parse(raw) as ContentResult)
+      .finally((): void => {
+        this.inFlight.delete(key);
+      });
+    this.inFlight.set(key, task);
+    return task;
   }
 
   /** v1 import gate: split eligible / excluded sources (sync). */

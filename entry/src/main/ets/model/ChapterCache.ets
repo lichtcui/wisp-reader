@@ -15,7 +15,7 @@ interface CachedChapter {
   fetchedAt: number;
 }
 
-const memory: Map<string, string> = new Map();
+const memory: Map<string, CachedChapter> = new Map();
 
 function memoryKey(bookId: string, index: number): string {
   return bookId + '#' + index.toString();
@@ -37,9 +37,12 @@ export function getCachedChapter(
   url: string
 ): string | undefined {
   const key: string = memoryKey(bookId, index);
-  const mem: string | undefined = memory.get(key);
+  const mem: CachedChapter | undefined = memory.get(key);
   if (mem !== undefined) {
-    return mem;
+    if (mem.url === url) {
+      return mem.content;
+    }
+    memory.delete(key);
   }
   const path: string = filePath(ctx, bookId, index);
   try {
@@ -51,7 +54,7 @@ export function getCachedChapter(
     if (entry.url !== url) {
       return undefined;
     }
-    memory.set(key, entry.content);
+    memory.set(key, entry);
     return entry.content;
   } catch (err) {
     return undefined;
@@ -66,7 +69,8 @@ export function putCachedChapter(
   url: string,
   content: string
 ): void {
-  memory.set(memoryKey(bookId, index), content);
+  const entry: CachedChapter = { url: url, content: content, fetchedAt: Date.now() };
+  memory.set(memoryKey(bookId, index), entry);
   const dir: string = cacheDir(ctx);
   try {
     if (!fileIo.accessSync(dir)) {
@@ -75,7 +79,6 @@ export function putCachedChapter(
   } catch (err) {
     return;
   }
-  const entry: CachedChapter = { url: url, content: content, fetchedAt: Date.now() };
   const path: string = filePath(ctx, bookId, index);
   try {
     const file = fileIo.openSync(

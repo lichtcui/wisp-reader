@@ -217,6 +217,33 @@ export struct ReaderPage {
   }
 
   /**
+   * Synchronous cache probe (memory/file) used to decide whether a spinner is
+   * needed. Returns undefined on a miss; an already-cached chapter is applied
+   * immediately so opening it never flashes the loading animation.
+   */
+  private cachedContent(chapter: Chapter, index: number): string | undefined {
+    const book: Book | undefined = this.book;
+    if (book === undefined) {
+      return undefined;
+    }
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      return undefined;
+    }
+    let cached: string | undefined = undefined;
+    if (isLocalBook(book)) {
+      try {
+        cached = loadLocalContent(ctx, book, index);
+      } catch (err) {
+        return undefined;
+      }
+    } else {
+      cached = getCachedChapter(ctx, book.bookId, index, chapter.url);
+    }
+    return cached !== undefined && cached.length > 0 ? cached : undefined;
+  }
+
+  /**
    * Some sources render the chapter body inside a container that also carries
    * the site breadcrumb ("当前位置：/作者/书名/章节名") and repeats the title on
    * every paginated sub-page. Keep exactly one title heading, drop the rest.
@@ -252,26 +279,19 @@ export struct ReaderPage {
     if (!this.isReadable(index)) {
       return;
     }
-    this.loading = true;
     this.failed = '';
+    const chapter: Chapter = this.chapters[index];
+    const cached: string | undefined = this.cachedContent(chapter, index);
+    if (cached !== undefined) {
+      this.applyChapter(index, cached, restoreParagraph);
+      await this.persistProgress();
+      this.prefetch(this.nextReadable(index));
+      return;
+    }
+    this.loading = true;
     try {
-      const chapter: Chapter = this.chapters[index];
       const content: string = await this.fetchContent(chapter, index);
-      const paragraphs: string[] = this.sanitize(content, chapter.title);
-      this.chapterIndex = index;
-      this.paragraphs = paragraphs;
-      this.sliderValue = index + 1;
-      this.paragraphIndex = restoreParagraph;
-      this.loading = false;
-      const target: number = restoreParagraph > 0 && paragraphs.length > 0
-        ? Math.min(restoreParagraph, paragraphs.length - 1)
-        : 0;
-      setTimeout(() => {
-        try {
-          this.contentScroller.scrollToIndex(target);
-        } catch (err) {
-        }
-      }, 60);
+      this.applyChapter(index, content, restoreParagraph);
       await this.persistProgress();
       this.prefetch(this.nextReadable(index));
     } catch (err) {
@@ -279,6 +299,26 @@ export struct ReaderPage {
       this.paragraphs = [];
       this.loading = false;
     }
+  }
+
+  /** Commit a loaded chapter body to the reading surface. */
+  private applyChapter(index: number, content: string, restoreParagraph: number): void {
+    const chapter: Chapter = this.chapters[index];
+    const paragraphs: string[] = this.sanitize(content, chapter.title);
+    this.chapterIndex = index;
+    this.paragraphs = paragraphs;
+    this.sliderValue = index + 1;
+    this.paragraphIndex = restoreParagraph;
+    this.loading = false;
+    const target: number = restoreParagraph > 0 && paragraphs.length > 0
+      ? Math.min(restoreParagraph, paragraphs.length - 1)
+      : 0;
+    setTimeout(() => {
+      try {
+        this.contentScroller.scrollToIndex(target);
+      } catch (err) {
+      }
+    }, 60);
   }
 
   /** Warm the file cache for the next chapter in the background. */
