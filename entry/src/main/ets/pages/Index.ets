@@ -19,6 +19,7 @@ import {
   TAB_SETTINGS
 } from '../common/Const';
 import { Book, BookSearchItem, BookSource } from '../engine/types';
+import { ReaderTheme } from '../common/ReaderTheme';
 import { importLocalTxt } from '../model/LocalBook';
 import { BookDetailPage } from './BookDetail';
 import { BookSourceManagePage } from './BookSourceManage';
@@ -229,7 +230,7 @@ struct Index {
         })
       }
       .hideTitleBar(true)
-      .backgroundColor($r('app.color.reader_bg'))
+      .backgroundColor(ReaderTheme.instance().bgHex)
     } else {
       NavDestination() {
         Column() {

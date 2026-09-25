@@ -22,6 +22,7 @@ import {
   setWindowBackgroundColor
 } from '../common/Window';
 import { getProgress, saveProgress } from '../model/ShelfRepository';
+import { ReaderTheme } from '../common/ReaderTheme';
 import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
 import { isLocalBook, loadLocalChapters, loadLocalContent } from '../model/LocalBook';
 import { TtsController } from '../model/TtsController';
@@ -102,18 +103,17 @@ export struct ReaderPage {
   }
 
   /**
-   * Edge-to-edge reader: immersive window so the status-bar strip is
-   * transparent, then paint the window with the reader background and keep the
-   * status-bar icons legible. ArkUI keeps page content inside the safe area.
+   * Full-bleed reader background while keeping the content safe area: the
+   * status-bar strip is a transparent (window-level) box, so painting the window
+   * background with the reader color fills top/bottom edges without switching the
+   * page to immersive layout (which would drop the content's safe inset).
    */
   private applyFullScreen(): void {
-    setLayoutFullScreen(true);
-    setWindowBackgroundColor(this.readerBgHex());
+    const bg: string = this.resolveColorHex(this.bgColor());
+    setLayoutFullScreen(false);
+    setWindowBackgroundColor(bg);
+    ReaderTheme.instance().bgHex = bg;
     setStatusBarContentColor(this.nightMode ? '#FFFFFF' : '#000000');
-  }
-
-  private readerBgHex(): string {
-    return this.nightMode ? '#181820' : '#F5F2EC';
   }
 
   private resolveColorHex(res: Resource): string {
@@ -457,7 +457,9 @@ export struct ReaderPage {
     if (ctx !== undefined) {
       putBoolean(ctx, KEY_READER_NIGHT, this.nightMode);
     }
-    setWindowBackgroundColor(this.readerBgHex());
+    const bg: string = this.resolveColorHex(this.bgColor());
+    setWindowBackgroundColor(bg);
+    ReaderTheme.instance().bgHex = bg;
     setStatusBarContentColor(this.nightMode ? '#FFFFFF' : '#000000');
   }
 
