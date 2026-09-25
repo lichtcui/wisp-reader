@@ -58,7 +58,7 @@ export struct ReaderPage {
 
   private contentScroller: Scroller = new Scroller();
   private tocScroller: Scroller = new Scroller();
-  private dataSource: ChapterDataSource = new ChapterDataSource();
+  @Local dataSource: ChapterDataSource = new ChapterDataSource();
 
   @Monitor('tts.paragraphIndex', 'tts.chapterIndex')
   onTtsProgress(): void {
@@ -475,10 +475,15 @@ export struct ReaderPage {
   // ── TOC ordering / positioning ────────────────────────────────
 
   private buildTocItems(): void {
-    const ordered: Chapter[] = this.tocDescending
-      ? this.chapters.slice().reverse()
-      : this.chapters.slice();
-    this.dataSource.setItems(ordered);
+    const total: number = this.chapters.length;
+    const ordered: Chapter[] = [];
+    for (let i = 0; i < total; i++) {
+      const pos: number = this.tocDescending ? total - 1 - i : i;
+      ordered.push(this.chapters[pos]);
+    }
+    const next: ChapterDataSource = new ChapterDataSource();
+    next.setItems(ordered);
+    this.dataSource = next;
   }
 
   private readableCount(): number {
@@ -918,16 +923,34 @@ export struct ReaderPage {
         .height('100%')
       }
 
-      BottomDrawer({
-        visible: this.panel === PANEL_TOC,
-        title: '目录',
-        sheetSize: 'large',
-        mode: 'overlay',
-        onClose: () => {
-          this.panel = PANEL_NONE;
-        },
-        content: this.tocDrawerContent
-      })
+      // @BuilderParam content is not re-evaluated on plain state change under
+      // V2, so flip between two drawer instances to re-run the LazyForEach with
+      // the freshly ordered data source.
+      if (this.tocDescending) {
+        BottomDrawer({
+          visible: this.panel === PANEL_TOC,
+          title: '目录',
+          sheetSize: 'large',
+          mode: 'overlay',
+          onClose: () => {
+            this.panel = PANEL_NONE;
+          }
+        }) {
+          this.tocDrawerContent()
+        }
+      } else {
+        BottomDrawer({
+          visible: this.panel === PANEL_TOC,
+          title: '目录',
+          sheetSize: 'large',
+          mode: 'overlay',
+          onClose: () => {
+            this.panel = PANEL_NONE;
+          }
+        }) {
+          this.tocDrawerContent()
+        }
+      }
 
       BottomDrawer({
         visible: this.panel === PANEL_SETTINGS,
@@ -936,9 +959,10 @@ export struct ReaderPage {
         mode: 'overlay',
         onClose: () => {
           this.panel = PANEL_NONE;
-        },
-        content: this.settingsDrawerContent
-      })
+        }
+      }) {
+        this.settingsDrawerContent()
+      }
     }
     .width('100%')
     .height('100%')
