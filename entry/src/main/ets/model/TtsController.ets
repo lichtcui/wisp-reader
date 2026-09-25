@@ -28,6 +28,12 @@ const AHEAD: number = 2;
 /** TTS `onComplete` may fire before the last `onData`; wait a moment before flushing. */
 const FLUSH_GRACE_MS: number = 80;
 const FLUSH_TICK_MS: number = 40;
+/** PCM format: 16 kHz mono S16LE → 16000 frames (32000 bytes) per second. */
+const FRAMES_PER_SECOND: number = 16000;
+const BYTES_PER_SECOND: number = 32000;
+/** UI progress refresh cadence, and how often the AVSession/DB state is pushed. */
+const PROGRESS_TICK_MS: number = 200;
+const STATE_PUSH_MS: number = 1000;
 
 /** One piece of audio handed to the renderer; `end` marks a paragraph boundary. */
 class RenderItem {
@@ -51,6 +57,23 @@ class ReqBuffer {
 
   constructor(index: number) {
     this.index = index;
+  }
+}
+
+/**
+ * One paragraph's slot on the playback timeline. Durations come from the
+ * synthesized PCM length (`bytes / 32000`), so the audio clock maps back to a
+ * real paragraph instead of a character-count guess.
+ */
+class ParagraphTiming {
+  index: number;
+  startMs: number;
+  endMs: number;
+
+  constructor(index: number, startMs: number, endMs: number) {
+    this.index = index;
+    this.startMs = startMs;
+    this.endMs = endMs;
   }
 }
 
@@ -87,6 +110,8 @@ export class TtsController {
   @Trace speed: number = TTS_SPEED_DEFAULT;
   @Trace voice: number = TTS_VOICE_DEFAULT;
   @Trace timerRemain: number = 0;
+  /** Elapsed playback time of the current chapter, from the audio clock. */
+  @Trace elapsedMs: number = 0;
 
   private engine: textToSpeech.TextToSpeechEngine | undefined = undefined;
   private session: avSession.AVSession | undefined = undefined;
@@ -108,6 +133,10 @@ export class TtsController {
   private queue: RenderItem[] = [];
   private queueOffset: number = 0;
   private flushTimerId: number = -1;
+  private timeline: ParagraphTiming[] = [];
+  private progressTimerId: number = -1;
+  private lastStatePushAt: number = 0;
+  private playStartWallMs: number = 0;
 
   private creating: boolean = false;
   private bgRunning: boolean = false;
@@ -190,6 +219,7 @@ export class TtsController {
   stop(): void {
     this.clearTimer();
     this.stopFlushTimer();
+    this.stopProgressTimer();
     this.playing = false;
     this.active = false;
     if (this.engine !== undefined) {
@@ -489,6 +519,9 @@ export class TtsController {
     this.queueOffset = 0;
     this.reqByIndex.clear();
     this.reqIdIndex.clear();
+    this.timeline = [];
+    this.elapsedMs = 0;
+    this.playStartWallMs = Date.now();
   }
 
   private beginFrom(index: number): void {
@@ -515,6 +548,7 @@ export class TtsController {
     this.updatePlaybackState(avSession.PlaybackState.PLAYBACK_STATE_PLAY);
     this.ensureSynthesized();
     this.startFlushTimer();
+    this.startProgressTimer();
     this.startRenderer();
   }
 
@@ -605,6 +639,76 @@ export class TtsController {
     }
   }
 
+  private startProgressTimer(): void {
+    if (this.progressTimerId >= 0) {
+      return;
+    }
+    this.progressTimerId = setInterval(() => {
+      this.tickProgress();
+    }, PROGRESS_TICK_MS);
+  }
+
+  private stopProgressTimer(): void {
+    if (this.progressTimerId >= 0) {
+      clearInterval(this.progressTimerId);
+      this.progressTimerId = -1;
+    }
+  }
+
+  /**
+   * Drive progress from the audio clock, not the write head. Writing ahead of
+   * playback (renderer pre-buffer) must never move `paragraphIndex`; only the
+   * frame actually being played does.
+   */
+  private tickProgress(): void {
+    if (!this.playing) {
+      return;
+    }
+    const played: number = this.playedMs();
+    this.elapsedMs = played;
+    const idx: number = this.paragraphAt(played);
+    if (idx >= 0 && idx !== this.paragraphIndex) {
+      this.paragraphIndex = idx;
+      this.currentIndex = idx;
+      hilog.info(DOMAIN, TAG, 'play para=%{public}d', idx);
+    }
+    const now: number = Date.now();
+    if (now - this.lastStatePushAt >= STATE_PUSH_MS) {
+      this.lastStatePushAt = now;
+      this.persistProgress();
+      this.updatePlaybackState(avSession.PlaybackState.PLAYBACK_STATE_PLAY);
+    }
+  }
+
+  /** Frames actually rendered since the last `flush()` → milliseconds. */
+  private playedMs(): number {
+    const renderer: audio.AudioRenderer | undefined = this.renderer;
+    if (renderer !== undefined) {
+      try {
+        const info: audio.AudioTimestampInfo = renderer.getAudioTimestampInfoSync();
+        return info.framePos / FRAMES_PER_SECOND * 1000;
+      } catch (err) {
+      }
+    }
+    return Math.max(Date.now() - this.playStartWallMs, 0);
+  }
+
+  /** Latest timeline slot whose start has been reached. */
+  private paragraphAt(ms: number): number {
+    if (this.timeline.length === 0) {
+      return this.paragraphIndex;
+    }
+    let index: number = this.timeline[0].index;
+    for (const seg of this.timeline) {
+      if (ms >= seg.startMs) {
+        index = seg.index;
+      } else {
+        break;
+      }
+    }
+    return index;
+  }
+
   /** Move finished synthesis buffers into the render queue, in paragraph order. */
   private tryFlush(): void {
     if (!this.playing) {
@@ -647,6 +751,11 @@ export class TtsController {
     }
     this.queue.push(new RenderItem(rb.index, merged.buffer as ArrayBuffer, false));
     this.queue.push(new RenderItem(rb.index, new ArrayBuffer(0), true));
+    const durationMs: number = total / BYTES_PER_SECOND * 1000;
+    const startMs: number = this.timeline.length > 0
+      ? this.timeline[this.timeline.length - 1].endMs
+      : 0;
+    this.timeline.push(new ParagraphTiming(rb.index, startMs, startMs + durationMs));
   }
 
   /** A straggler `onData` arrived after its paragraph was already flushed. */
@@ -674,13 +783,8 @@ export class TtsController {
         this.scheduleParagraphEnd(item.index);
         continue;
       }
-      if (item.index !== this.paragraphIndex) {
-        this.paragraphIndex = item.index;
-        this.currentIndex = item.index;
-        hilog.info(DOMAIN, TAG, 'play para=%{public}d', item.index);
-        this.persistProgress();
-        this.updatePlaybackState(avSession.PlaybackState.PLAYBACK_STATE_PLAY);
-      }
+      // Progress is owned by `tickProgress()` (audio clock); the write callback
+      // only moves PCM bytes so a pre-buffered paragraph can't jump the UI.
       const src: Uint8Array = new Uint8Array(item.data);
       const avail: number = src.length - this.queueOffset;
       const n: number = Math.min(avail, space - pos);
@@ -710,6 +814,7 @@ export class TtsController {
     if (next < 0) {
       this.playing = false;
       this.stopFlushTimer();
+      this.stopProgressTimer();
       if (this.renderer !== undefined) {
         this.renderer.pause().catch((err: BusinessError) => {
         });
@@ -735,6 +840,7 @@ export class TtsController {
       }
     }
     this.stopFlushTimer();
+    this.stopProgressTimer();
     this.resetQueues();
     if (this.renderer !== undefined) {
       this.renderer.pause().catch((err: BusinessError) => {
@@ -937,7 +1043,7 @@ export class TtsController {
       state: state,
       speed: this.speed,
       position: {
-        elapsedTime: this.estimateElapsedMs(),
+        elapsedTime: this.elapsedMs,
         updateTime: Date.now()
       },
       duration: this.estimateDurationMs()
@@ -957,15 +1063,6 @@ export class TtsController {
       return 0;
     }
     return (this.totalChars / (CHARS_PER_SECOND * this.speed)) * 1000;
-  }
-
-  estimateElapsedMs(): number {
-    if (this.paragraphCount <= 0 || this.prefixChars.length === 0) {
-      return 0;
-    }
-    const idx: number = Math.min(Math.max(this.paragraphIndex, 0), this.prefixChars.length - 1);
-    const chars: number = this.prefixChars[idx];
-    return (chars / (CHARS_PER_SECOND * this.speed)) * 1000;
   }
 
   // ── Progress persistence ──────────────────────────────────────

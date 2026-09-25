@@ -225,7 +225,7 @@ export struct ListeningPage {
           }
         })
       Row() {
-        Text(formatTime(this.tts.estimateElapsedMs()))
+        Text(formatTime(this.tts.elapsedMs))
           .fontSize(13)
           .fontColor($r('app.color.listen_text_dim'))
         Blank()
