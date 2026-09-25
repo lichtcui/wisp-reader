@@ -69,6 +69,10 @@
       "value": "#EDEDED"
     },
     {
+      "name": "mask",
+      "value": "#52000000"
+    },
+    {
       "name": "arrow",
       "value": "#CCCCCC"
     },

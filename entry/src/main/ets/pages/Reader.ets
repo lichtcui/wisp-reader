@@ -3,6 +3,7 @@ import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSource, Chapter, ReadProgress } from '../engine/types';
 import { ChapterDataSource } from '../common/ChapterDataSource';
 import { BookCover } from '../components/BookCover';
+import { BottomDrawer } from '../ui/common/BottomDrawer';
 import {
   KEY_READER_FONT_SIZE,
   KEY_READER_LINE_HEIGHT,
@@ -395,9 +396,6 @@ export struct ReaderPage {
     }
     this.panel = mode;
     this.menuVisible = true;
-    if (mode === PANEL_TOC) {
-      setTimeout(() => this.locateCurrentToc(), 80);
-    }
   }
 
   private openDetail(): void {
@@ -646,7 +644,7 @@ export struct ReaderPage {
   }
 
   @Builder
-  tocPanel() {
+  tocDrawerContent() {
     Column() {
       Row() {
         BookCover({
@@ -745,20 +743,13 @@ export struct ReaderPage {
       .scrollBar(BarState.Off)
     }
     .width('100%')
-    .layoutWeight(1)
+    .height('100%')
     .backgroundColor(this.bgColor())
   }
 
   @Builder
-  settingsPanel() {
+  settingsDrawerContent() {
     Column() {
-      Text('阅读设置')
-        .fontSize(17)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.textColor())
-        .width('100%')
-        .padding({ left: 16, top: 16, bottom: 8 })
-
       Row() {
         Text('字号')
           .fontSize(15)
@@ -814,7 +805,6 @@ export struct ReaderPage {
         .padding({ left: 16, right: 16, top: 12 })
     }
     .width('100%')
-    .layoutWeight(1)
     .backgroundColor(this.bgColor())
   }
 
@@ -884,23 +874,39 @@ export struct ReaderPage {
       if (this.menuVisible && !this.loading && this.failed.length === 0) {
         Column() {
           this.topBar()
-          if (this.panel === PANEL_TOC) {
-            this.tocPanel()
-          } else if (this.panel === PANEL_SETTINGS) {
-            this.settingsPanel()
-          } else {
-            Column()
-              .width('100%')
-              .layoutWeight(1)
-              .onClick(() => {
-                this.menuVisible = false;
-              })
-          }
+          Column()
+            .width('100%')
+            .layoutWeight(1)
+            .onClick(() => {
+              this.menuVisible = false;
+            })
           this.bottomBar()
         }
         .width('100%')
         .height('100%')
       }
+
+      BottomDrawer({
+        visible: this.panel === PANEL_TOC,
+        title: '目录',
+        sheetSize: 'large',
+        mode: 'overlay',
+        onClose: () => {
+          this.panel = PANEL_NONE;
+        },
+        content: this.tocDrawerContent
+      })
+
+      BottomDrawer({
+        visible: this.panel === PANEL_SETTINGS,
+        title: '阅读设置',
+        sheetSize: 'fit',
+        mode: 'overlay',
+        onClose: () => {
+          this.panel = PANEL_NONE;
+        },
+        content: this.settingsDrawerContent
+      })
     }
     .width('100%')
     .height('100%')
