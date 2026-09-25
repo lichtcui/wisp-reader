@@ -742,7 +742,7 @@ export struct ReaderPage {
                 })
             }
           }
-        }, (chapter: Chapter) => chapter.index.toString())
+        }, (chapter: Chapter) => (this.tocDescending ? 'd_' : 'a_') + chapter.index.toString())
       }
       .layoutWeight(1)
       .width('100%')
