@@ -897,36 +897,28 @@ export class TtsController {
     }
   }
 
+  /** Previous/next chapter (not paragraph): the transport buttons and the lock
+ *  screen media keys jump a whole chapter, matching the control icons. */
   next(): void {
     if (!this.active) {
-      return;
-    }
-    const target: number = this.currentIndex + 1;
-    if (target < this.paragraphs.length) {
-      this.beginFrom(target);
       return;
     }
     const chapter: number = nextReadable(this.chapters, this.chapterIndex);
     if (chapter < 0) {
       return;
     }
-    this.loadChapter(chapter, false, true);
+    this.loadChapter(chapter, false, this.playing);
   }
 
   prev(): void {
     if (!this.active) {
       return;
     }
-    const target: number = this.currentIndex - 1;
-    if (target >= 0) {
-      this.beginFrom(target);
-      return;
-    }
     const chapter: number = prevReadable(this.chapters, this.chapterIndex);
     if (chapter < 0) {
       return;
     }
-    this.loadChapter(chapter, true, true);
+    this.loadChapter(chapter, false, this.playing);
   }
 
   seekParagraph(index: number): void {
