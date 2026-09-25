@@ -13,6 +13,11 @@ import {
   READER_NIGHT_DEFAULT
 } from '../common/Const';
 import { getBoolean, getNumber, putBoolean, putNumber } from '../common/Prefs';
+import {
+  setLayoutFullScreen,
+  setStatusBarContentColor,
+  setWindowBackgroundColor
+} from '../common/Window';
 import { getProgress, saveProgress } from '../model/ShelfRepository';
 import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
 import { isLocalBook, loadLocalChapters, loadLocalContent } from '../model/LocalBook';
@@ -73,7 +78,41 @@ export struct ReaderPage {
       this.lineHeight = getNumber(ctx, KEY_READER_LINE_HEIGHT, READER_LINE_HEIGHT_DEFAULT);
       this.nightMode = getBoolean(ctx, KEY_READER_NIGHT, READER_NIGHT_DEFAULT);
     }
+    this.applyFullScreen();
     this.load();
+  }
+
+  aboutToDisappear(): void {
+    setLayoutFullScreen(false);
+    setWindowBackgroundColor(this.resolveColorHex($r('app.color.bg_page')));
+  }
+
+  /**
+   * Edge-to-edge reader: immersive window so the status-bar strip is
+   * transparent, then paint the window with the reader background and keep the
+   * status-bar icons legible. ArkUI keeps page content inside the safe area.
+   */
+  private applyFullScreen(): void {
+    setLayoutFullScreen(true);
+    setWindowBackgroundColor(this.readerBgHex());
+    setStatusBarContentColor(this.nightMode ? '#FFFFFF' : '#000000');
+  }
+
+  private readerBgHex(): string {
+    return this.nightMode ? '#181820' : '#F5F2EC';
+  }
+
+  private resolveColorHex(res: Resource): string {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      return '#FFFFFF';
+    }
+    try {
+      const value: number = ctx.resourceManager.getColorSync(res.id);
+      return '#' + (value >>> 0).toString(16).padStart(8, '0').toUpperCase();
+    } catch (err) {
+      return '#FFFFFF';
+    }
   }
 
   private ctx(): common.UIAbilityContext | undefined {
@@ -357,6 +396,8 @@ export struct ReaderPage {
     if (ctx !== undefined) {
       putBoolean(ctx, KEY_READER_NIGHT, this.nightMode);
     }
+    setWindowBackgroundColor(this.readerBgHex());
+    setStatusBarContentColor(this.nightMode ? '#FFFFFF' : '#000000');
   }
 
   private moreMenuItems(): MenuElement[] {
