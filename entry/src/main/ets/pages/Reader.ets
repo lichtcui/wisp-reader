@@ -470,13 +470,20 @@ export struct ReaderPage {
     if (this.chapterIndex < 0) {
       return;
     }
-    const pos: number = this.tocDescending
-      ? this.chapters.length - 1 - this.chapterIndex
-      : this.chapterIndex;
     try {
-      this.tocScroller.scrollToIndex(pos);
+      this.tocScroller.scrollToIndex(this.tocPosition());
     } catch (err) {
     }
+  }
+
+  /** Display-order index of the current chapter (order-aware). */
+  private tocPosition(): number {
+    if (this.chapterIndex < 0 || this.chapterIndex >= this.chapters.length) {
+      return 0;
+    }
+    return this.tocDescending
+      ? this.chapters.length - 1 - this.chapterIndex
+      : this.chapterIndex;
   }
 
   private toggleTocOrder(): void {
@@ -707,7 +714,7 @@ export struct ReaderPage {
       .width('100%')
       .padding({ left: 16, right: 12, top: 10, bottom: 6 })
 
-      List({ space: 0, scroller: this.tocScroller }) {
+      List({ space: 0, scroller: this.tocScroller, initialIndex: this.tocPosition() }) {
         LazyForEach(this.dataSource, (chapter: Chapter) => {
           ListItem() {
             if (chapter.isVolume === true) {
