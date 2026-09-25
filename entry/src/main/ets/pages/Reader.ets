@@ -1,4 +1,4 @@
-import { common } from '@kit.AbilityKit';
+import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSource, Chapter, ReadProgress } from '../engine/types';
 import { ChapterDataSource } from '../common/ChapterDataSource';
@@ -90,6 +90,15 @@ export struct ReaderPage {
   aboutToDisappear(): void {
     setLayoutFullScreen(false);
     setWindowBackgroundColor(this.resolveColorHex($r('app.color.bg_page')));
+    setStatusBarContentColor(this.systemDark() ? '#FFFFFF' : '#000000');
+  }
+
+  private systemDark(): boolean {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      return false;
+    }
+    return ctx.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
   }
 
   /**
