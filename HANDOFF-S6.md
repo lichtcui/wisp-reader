@@ -2,7 +2,7 @@
 
 日期：2026-09-26
 范围：**仅搜索模块**（`pages/Search.ets` / `pages/SearchResult.ets`，含 `pages/Index.ets` 路由接线、`common/Const.ets` 清理）。
-基线：`ad136e7`（S5 收尾）。HEAD：`ad136e7`（**本轮改动未提交，见 §2**）。
+基线：`ad136e7`（S5 收尾）。HEAD：`f5d66a4`（本轮提交，见 §2）。
 约束履行：
 - E/F 均使用 `HANDOFF-S3.md` 的 `ui/common/BottomDrawer.ets`（`mode:'system'`，未自绘 sheet）。
 - D 的自定义动画复用 `UI-SPEC.md` §1.3「overlay 抽屉打开」参数：`260ms / Curve.FastOutSlowIn`。
@@ -84,7 +84,7 @@
 
 ## 2. 每项 commit 对照
 
-> 本轮**未提交**（按约束「不主动 commit」）。改动全在工作区，`git diff --stat`：
+> 本轮提交：`f5d66a4`（单 commit，含 4 个代码文件 + 本文件）。`git show --stat`：
 
 | 项 | 文件 | 说明 |
 |---|---|---|
@@ -158,4 +158,5 @@ export PATH="/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applicatio
 6. **改动了 `Const.ets` 导出**：`ROUTE_SEARCH_RESULT` / `SearchParam` 已删；`plan.md` §「搜索 Tab」与
    `docs/architecture.md` 仍写 `SearchResultPage` 为独立页，属文档滞后（未改文档，遵「只处理搜索模块」）。
 7. **`SearchResult.ets` 文件名/结构名沿用**：组件仍叫 `SearchResultPage`，但已非 `NavDestination` 路由页。
-8. **文档未提交**：`HANDOFF-S3/4/5/6.md`、`AUDIT.md`、`ROOT-CAUSE.md`、`TASKS.md`、`UI-SPEC.md` 均 untracked。
+8. **其余文档未提交**：`HANDOFF-S3/4/5.md`、`AUDIT.md`、`ROOT-CAUSE.md`、`TASKS.md`、`UI-SPEC.md` 仍 untracked
+   （本文件已随 `f5d66a4` 提交）。
