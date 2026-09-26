@@ -1,6 +1,6 @@
 # 进度 / 下一步
 
-> 权威设计见 [`../plan.md`](../plan.md)（含 27 项修订与全部决策）。本文件只记**进度与待办**。
+> 权威设计见 [`plan.md`](./plan.md)（含 27 项修订与全部决策）。本文件只记**进度与待办**。
 
 ## 里程碑状态
 
@@ -328,5 +328,5 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 - 构建/安装/调试命令见 [`../AGENTS.md`](../AGENTS.md) §4。
 - 引擎复用清单与门禁见 [`engine.md`](./engine.md)。
 - 架构与 NAPI 边界见 [`architecture.md`](./architecture.md)。
-- 端侧自建 TTS（本地 GPT-SoVITS 音色）调研与原型计划见 [`../TTS-PLAN.md`](../TTS-PLAN.md)
+- 端侧自建 TTS（本地 GPT-SoVITS 音色）调研与原型计划见 [`research/TTS-PLAN.md`](./research/TTS-PLAN.md)
   （与 M5 系统 TTS 并行、未立项；下一步 = TTS-PLAN §9 P0）。

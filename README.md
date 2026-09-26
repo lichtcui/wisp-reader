@@ -8,7 +8,7 @@ HarmonyOS NEXT 原生阅读 App，兼容 [Legado](https://github.com/gedoor/lega
 - **v1 范围**：搜索 → 详情 → 加入书架 → 阅读（竖向滚动）→ 听书。
 - **v1 不做**：JS 运行时、登录型源、换源、发现(explore)、真分页、在线 TTS。
 
-> 完整设计见 [`plan.md`](./plan.md)；开发/构建说明见 [`AGENTS.md`](./AGENTS.md) 与 [`docs/`](./docs)。
+> 完整设计见 [`docs/plan.md`](./docs/plan.md)；开发/构建说明见 [`AGENTS.md`](./AGENTS.md) 与 [`docs/`](./docs)。
 
 ## 当前进度
 

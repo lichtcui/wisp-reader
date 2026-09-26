@@ -3,7 +3,7 @@
 本仓库是 **HarmonyOS NEXT 原生阅读 App**（ArkTS + ArkUI），兼容 Legado 书源格式。
 书源引擎复用本地 Rust 项目，经 `ohos-rs` 编译为 `.so`，由 ArkTS 通过 NAPI 调用。
 
-> **接手前先读**：本文件 → [`docs/progress.md`](./docs/progress.md)（进度/下一步）→ [`plan.md`](./plan.md)（完整设计，唯一权威方案）。
+> **接手前先读**：本文件 → [`docs/progress.md`](./docs/progress.md)（进度/下一步）→ [`docs/plan.md`](./docs/plan.md)（完整设计，唯一权威方案）。
 > 专题文档：[`docs/architecture.md`](./docs/architecture.md)、[`docs/engine.md`](./docs/engine.md)、[`docs/development.md`](./docs/development.md)。
 
 ---
@@ -31,7 +31,7 @@
 - 详细进度与验证结果：见 [`docs/progress.md`](./docs/progress.md) §「M5 结果」。
 
 > **端侧自建 TTS 调研（未立项）**：想用本地 GPT-SoVITS 音色替代系统 TTS 的尽调与原型计划见
-> [`TTS-PLAN.md`](./TTS-PLAN.md)。它与上面 M5 的**系统 TTS 是并行增量**，**未改动 M5 任何代码**；
+> [`docs/research/TTS-PLAN.md`](./docs/research/TTS-PLAN.md)。它与上面 M5 的**系统 TTS 是并行增量**，**未改动 M5 任何代码**；
 > 当前状态为「调查完成、原型未开始」，下一步是 TTS-PLAN §9 的 P0。
 
 ## 2. 关键决策（已定，勿擅改）
@@ -96,8 +96,15 @@ $HDC shell hilog -x | grep SourceReaderPoC
 ## 5. 目录结构
 
 ```
-plan.md                     完整设计方案（权威）
-AGENTS.md / README.md
+AGENTS.md / README.md        根目录只放这两个文档（其余文档一律进 docs/，见 §7）
+docs/
+  plan.md                   完整设计方案（权威）
+  progress.md               进度/下一步
+  architecture.md / engine.md / development.md
+  specs/                    UI 规范（UI-SPEC；当前为空）
+  research/                 TTS-PLAN.md（端侧自建 TTS 调研）
+  bugfix/                   TASKS / RELEASE-NOTES（bug 修复生命周期）
+  handoff/                  HANDOFF-S9.md + ARCHIVE-S3-S8.md（阶段性交接记录）
 build-profile.json5         含 signingConfigs（**含凭据，勿提交**，见 §7）
 hvigorfile.ts / oh-package.json5 / hvigor/
 .cargo/config.toml          cargo 镜像（rsproxy）
@@ -142,6 +149,12 @@ import {
 
 ## 7. 约定 / 坑
 
+- **文档落位（硬性）**：根目录**只允许** `AGENTS.md` 与 `README.md` 两个 `.md`。
+  任何新产出的文档——bug 修复记录、审计、根因分析、任务清单、UI 规范、发布说明、
+  交接记录（handoff）、调研/方案等——**一律写入 `docs/` 对应子目录**：
+  UI/交互规范 → `docs/specs/`；调研/方案 → `docs/research/`；bug 审计与修复生命周期 →
+  `docs/bugfix/`；阶段性交接 → `docs/handoff/`（命名 `HANDOFF-S<N>.md`）；核心常读文档留在 `docs/` 根。
+  **禁止**再在根目录新建 `.md`。移动或新增文档后，务必同步更新引用它的相对链接。
 - **ArkTS 严格模式**：不用 `any`；JSON 解析字段名等点语法属性要在 `entry/obfuscation-rules.txt` 的
   `-keep-property-name` 保留（release 已开混淆）。
 - **签名凭据**：`build-profile.json5` 含明文/加密凭据，**不要提交**。初始化 git 后建议：
