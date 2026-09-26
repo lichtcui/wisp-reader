@@ -81,39 +81,41 @@ export struct FloatingListenButton {
   }
 
   build() {
-    if (this.visible && this.posX >= 0) {
+    if (this.visible) {
       Stack() {
-        Row() {
-          SymbolGlyph($r('sys.symbol.headphones'))
-            .fontSize(24)
-            .fontColor([$r('app.color.on_brand')])
+        if (this.posX >= 0) {
+          Row() {
+            SymbolGlyph($r('sys.symbol.headphones'))
+              .fontSize(24)
+              .fontColor([$r('app.color.on_brand')])
+          }
+          .width(FAB_SIZE)
+          .height(FAB_SIZE)
+          .borderRadius(FAB_SIZE / 2)
+          .backgroundColor($r('app.color.brand'))
+          .justifyContent(FlexAlign.Center)
+          .shadow({ radius: 12, color: $r('app.color.shadow'), offsetX: 0, offsetY: 4 })
+          .position({ x: this.posX, y: this.posY })
+          .accessibilityText('继续听书')
+          .onClick(() => this.onTap())
+          .gesture(
+            PanGesture({ direction: PanDirection.All })
+              .onActionStart(() => {
+                this.dragging = true;
+                this.startX = this.posX;
+                this.startY = this.posY;
+                this.clearSnap();
+              })
+              .onActionUpdate((event: GestureEvent) => {
+                this.posX = this.clampX(this.startX + event.offsetX);
+                this.posY = this.clampY(this.startY + event.offsetY);
+              })
+              .onActionEnd(() => {
+                this.dragging = false;
+                this.scheduleSnap();
+              })
+          )
         }
-        .width(FAB_SIZE)
-        .height(FAB_SIZE)
-        .borderRadius(FAB_SIZE / 2)
-        .backgroundColor($r('app.color.brand'))
-        .justifyContent(FlexAlign.Center)
-        .shadow({ radius: 12, color: $r('app.color.shadow'), offsetX: 0, offsetY: 4 })
-        .position({ x: this.posX, y: this.posY })
-        .accessibilityText('继续听书')
-        .onClick(() => this.onTap())
-        .gesture(
-          PanGesture({ direction: PanDirection.All })
-            .onActionStart(() => {
-              this.dragging = true;
-              this.startX = this.posX;
-              this.startY = this.posY;
-              this.clearSnap();
-            })
-            .onActionUpdate((event: GestureEvent) => {
-              this.posX = this.clampX(this.startX + event.offsetX);
-              this.posY = this.clampY(this.startY + event.offsetY);
-            })
-            .onActionEnd(() => {
-              this.dragging = false;
-              this.scheduleSnap();
-            })
-        )
       }
       .width('100%')
       .height('100%')
