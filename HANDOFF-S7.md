@@ -2,7 +2,7 @@
 
 日期：2026-09-26
 范围：**仅书架模块**（`pages/Shelf.ets` + 经授权新增的数据层批量接口 `model/ShelfRepository.ets`）。
-基线：`cb6f608`（S6 收尾）。本轮**未提交**（改动见 §2）。
+基线：`cb6f608`（S6 收尾）。HEAD：`cb28032`（本轮提交，见 §2）。
 
 > 构建：`assembleHap` **BUILD SUCCESSFUL**（仅既有 ArkTS 警告）。
 > **真机验证已完成**：设备 `33Z0224424136564`，A/B 全项通过（见 §5），无崩溃。
@@ -63,8 +63,8 @@ entry/src/main/ets/pages/Shelf.ets           | 14 +++-----------
 | B | `model/ShelfRepository.ets` | 新增 `getAllProgress()` 批量进度查询（经授权） |
 | B | `pages/Shelf.ets` | `reload()` 改用批量查询，消除逐书串行 fanout |
 
-> 本轮**未提交**；`build-profile.json5` 等未触碰。`AUDIT.md`/`ROOT-CAUSE.md`/`TASKS.md`/`UI-SPEC.md`/`HANDOFF-S3..6.md`
-> 仍 untracked（沿旧例）。
+> 本轮提交：`cb28032`（含 2 个代码文件 + 本文件）。`build-profile.json5` 等未触碰。`AUDIT.md`/`ROOT-CAUSE.md`/`TASKS.md`/
+> `UI-SPEC.md`/`HANDOFF-S3..6.md` 仍 untracked（沿旧例）；`AGENTS.md`/`docs/progress.md` 的改动来自并行 TTS 工作流，未纳入。
 
 ---
 
