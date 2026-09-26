@@ -11,9 +11,7 @@ import {
   ROUTE_PLACEHOLDER,
   ROUTE_READER,
   ROUTE_READING_SETTINGS,
-  ROUTE_SEARCH_RESULT,
   ROUTE_SOURCE_MANAGE,
-  SearchParam,
   TAB_SHELF,
   TAB_SEARCH,
   TAB_SETTINGS
@@ -29,7 +27,6 @@ import { ListeningSettingsPage } from './ListeningSettings';
 import { ReaderPage } from './Reader';
 import { ReadingSettingsPage } from './ReadingSettings';
 import { SearchPage } from './Search';
-import { SearchResultPage } from './SearchResult';
 import { SettingsPage } from './Settings';
 import { ShelfPage } from './Shelf';
 
@@ -67,10 +64,6 @@ struct Index {
 
   private openListening(param?: ListenParam): void {
     this.pathStack.pushPath({ name: ROUTE_LISTENING, param: param });
-  }
-
-  private openSearchResult(keyword: string): void {
-    this.pathStack.pushPath({ name: ROUTE_SEARCH_RESULT, param: new SearchParam(keyword) });
   }
 
   private openDetail(source: BookSource, item?: BookSearchItem, book?: Book): void {
@@ -194,16 +187,6 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor($r('app.color.listen_bg'))
-    } else if (name === ROUTE_SEARCH_RESULT) {
-      NavDestination() {
-        SearchResultPage({
-          keyword: (param as SearchParam).keyword,
-          onOpenDetail: (source: BookSource, item: BookSearchItem) => this.openDetail(source, item),
-          onBack: () => this.pathStack.pop()
-        })
-      }
-      .hideTitleBar(true)
-      .backgroundColor($r('app.color.bg_page'))
     } else if (name === ROUTE_BOOK_DETAIL) {
       NavDestination() {
         BookDetailPage({
@@ -271,8 +254,7 @@ struct Index {
 
           TabContent() {
             SearchPage({
-              onSearch: (keyword: string) => this.openSearchResult(keyword),
-              onOpenSource: () => this.openSourceManage()
+              onOpenDetail: (source: BookSource, item: BookSearchItem) => this.openDetail(source, item)
             })
           }
           .tabBar('')

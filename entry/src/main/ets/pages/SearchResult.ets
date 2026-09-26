@@ -5,6 +5,7 @@ import { BookCover } from '../components/BookCover';
 import { EmptyView } from '../components/EmptyView';
 import { enabledSources, loadSources } from '../model/SourceRepository';
 import { getBooks } from '../model/ShelfRepository';
+import { BottomDrawer } from '../ui/common/BottomDrawer';
 
 const SEARCH_TIMEOUT_MS: number = 10_000;
 
@@ -26,15 +27,16 @@ interface SearchGroup {
 @ComponentV2
 export struct SearchResultPage {
   @Param keyword: string = '';
+  @Param searchToken: number = 0;
   @Event onOpenDetail: (source: BookSource, item: BookSearchItem) => void = () => {};
-  @Event onBack: () => void = () => {};
 
   @Local searchKey: string = '';
   @Local groups: SearchGroup[] = [];
   @Local statuses: SourceStatus[] = [];
   @Local pending: number = 0;
   @Local total: number = 0;
-  @Local showSources: boolean = false;
+  @Local enriching: boolean = false;
+  @Local statusVisible: boolean = false;
   @Local shelfKeys: Set<string> = new Set<string>();
   @Local pickerVisible: boolean = false;
   @Local pickerGroup: SearchGroup | undefined = undefined;
@@ -61,25 +63,30 @@ export struct SearchResultPage {
     this.startSearch();
   }
 
+  @Monitor('searchToken')
+  onSearchTokenChange(): void {
+    const kw: string = this.keyword.trim();
+    if (kw.length === 0) {
+      return;
+    }
+    this.searchKey = kw;
+    this.startSearch();
+  }
+
   private startSearch(): void {
     this.searchGen = this.searchGen + 1;
     const gen: number = this.searchGen;
     this.rawItems = [];
     this.groups = [];
     this.statuses = [];
+    this.enriching = false;
+    this.statusVisible = false;
+    this.pickerVisible = false;
+    this.pickerGroup = undefined;
     this.pending = this.sources.length;
     for (const s of this.sources) {
       this.searchOne(s, gen);
     }
-  }
-
-  private submit(): void {
-    const kw: string = this.searchKey.trim();
-    if (kw.length === 0) {
-      return;
-    }
-    this.searchKey = kw;
-    this.startSearch();
   }
 
   private async loadShelfKeys(): Promise<void> {
@@ -145,6 +152,10 @@ export struct SearchResultPage {
         targets.push(g);
       }
     }
+    if (targets.length === 0) {
+      return;
+    }
+    this.enriching = true;
     const batchSize: number = 4;
     for (let i = 0; i < targets.length; i += batchSize) {
       if (gen !== this.searchGen) {
@@ -157,6 +168,7 @@ export struct SearchResultPage {
       }
       this.rebuildGroups();
     }
+    this.enriching = false;
   }
 
   private async enrichOne(g: SearchGroup, gen: number): Promise<void> {
@@ -349,54 +361,40 @@ export struct SearchResultPage {
 
   // ── UI ────────────────────────────────────────────────────────
 
-  @Builder
-  topBar() {
-    Row({ space: 4 }) {
-      Text('‹')
-        .fontSize(28)
-        .fontColor($r('app.color.text_1'))
-        .width(40)
-        .height(44)
-        .textAlign(TextAlign.Center)
-        .accessibilityText('返回')
-        .onClick(() => this.onBack())
-      Row() {
-        SymbolGlyph($r('sys.symbol.magnifyingglass'))
-          .fontSize(18)
-          .fontColor([$r('app.color.text_4')])
-        TextInput({ text: this.searchKey, placeholder: '输入小说名称、作者' })
-          .layoutWeight(1)
-          .height(44)
-          .fontSize(15)
-          .fontColor($r('app.color.text_1'))
-          .placeholderColor($r('app.color.text_5'))
-          .backgroundColor(Color.Transparent)
-          .padding({ left: 8, right: 0 })
-          .enterKeyType(EnterKeyType.Search)
-          .onChange((value: string) => {
-            this.searchKey = value;
-          })
-          .onSubmit(() => this.submit())
-        if (this.searchKey.length > 0) {
-          Text('✕')
-            .fontSize(14)
-            .fontColor($r('app.color.text_4'))
-            .padding({ left: 6, right: 4, top: 8, bottom: 8 })
-            .onClick(() => {
-              this.searchKey = '';
-            })
-        }
+  private isSearching(): boolean {
+    return this.pending > 0 || this.enriching;
+  }
+
+  private sourceSummary(): string {
+    let ok: number = 0;
+    for (const s of this.statuses) {
+      if (s.ok) {
+        ok += 1;
       }
-      .layoutWeight(1)
-      .height(44)
-      .padding({ left: 14, right: 8 })
-      .backgroundColor($r('app.color.bg_card'))
-      .borderRadius(22)
+    }
+    return `源 ${ok}/${this.statuses.length} 成功`;
+  }
+
+  @Builder
+  searchBanner() {
+    Row({ space: 8 }) {
+      if (this.isSearching()) {
+        LoadingProgress()
+          .width(14)
+          .height(14)
+          .color($r('app.color.brand'))
+      }
+      Text(this.isSearching() ? '正在搜索…结果仍在更新，排序可能变化' : `共 ${this.groups.length} 条结果`)
+        .fontSize(12)
+        .fontColor(this.isSearching() ? $r('app.color.text_3') : $r('app.color.text_4'))
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
     }
     .width('100%')
-    .height(56)
-    .padding({ left: 8, right: 16 })
-    .alignItems(VerticalAlign.Center)
+    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+    .opacity(this.isSearching() ? 1 : 0.7)
+    .animation({ duration: 260, curve: Curve.FastOutSlowIn })
   }
 
   @Builder
@@ -452,149 +450,160 @@ export struct SearchResultPage {
   }
 
   @Builder
-  pickerSheet() {
-    Column() {
-      Text('选择来源')
-        .fontSize(17)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_1'))
-        .width('100%')
-        .padding({ left: 20, right: 20, top: 8, bottom: 12 })
-      List() {
-        ForEach(this.pickerOrigins(), (o: BookSearchItem) => {
-          ListItem() {
-            Column({ space: 2 }) {
-              Text(o.sourceName.length > 0 ? o.sourceName : o.sourceUrl)
-                .fontSize(15)
-                .fontColor($r('app.color.text_1'))
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-              Text(this.pickerChapter(o))
-                .fontSize(12)
-                .fontColor($r('app.color.text_4'))
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-            }
-            .width('100%')
-            .alignItems(HorizontalAlign.Start)
-            .padding({ left: 20, right: 20, top: 10, bottom: 10 })
+  statusContent() {
+    Scroll() {
+      Column() {
+        ForEach(this.statuses, (status: SourceStatus) => {
+          Row() {
+            Text(status.sourceName.length > 0 ? status.sourceName : status.sourceUrl)
+              .fontSize(13)
+              .fontColor($r('app.color.text_2'))
+              .layoutWeight(1)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(status.ok ? `✓ ${status.count}` : status.error)
+              .fontSize(12)
+              .fontColor(status.ok ? $r('app.color.brand') : $r('app.color.warning'))
           }
-          .onClick(() => {
-            this.pickerVisible = false;
-            this.open(o);
-          })
-        }, (o: BookSearchItem, index: number) => o.sourceUrl + '|' + index.toString())
+          .width('100%')
+          .padding({ top: 6, bottom: 6 })
+        }, (status: SourceStatus) => status.sourceUrl)
       }
-      .layoutWeight(1)
       .width('100%')
-      .scrollBar(BarState.Off)
     }
     .width('100%')
-    .height('100%')
-    .backgroundColor($r('app.color.bg_page'))
+    .constraintSize({ maxHeight: 320 })
+    .scrollBar(BarState.Off)
+  }
+
+  @Builder
+  pickerContent() {
+    List() {
+      ForEach(this.pickerOrigins(), (o: BookSearchItem) => {
+        ListItem() {
+          Column({ space: 2 }) {
+            Text(o.sourceName.length > 0 ? o.sourceName : o.sourceUrl)
+              .fontSize(15)
+              .fontColor($r('app.color.text_1'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(this.pickerChapter(o))
+              .fontSize(12)
+              .fontColor($r('app.color.text_4'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+          .padding({ top: 10, bottom: 10 })
+        }
+        .onClick(() => {
+          this.pickerVisible = false;
+          this.open(o);
+        })
+      }, (o: BookSearchItem, index: number) => o.sourceUrl + '|' + index.toString())
+    }
+    .width('100%')
+    .constraintSize({ maxHeight: 360 })
+    .scrollBar(BarState.Off)
+  }
+
+  @Builder
+  statusFooter() {
+    Row() {
+      Text(this.sourceSummary())
+        .fontSize(12)
+        .fontColor($r('app.color.text_4'))
+      Blank()
+      Text('源状态')
+        .fontSize(12)
+        .fontColor($r('app.color.brand'))
+        .onClick(() => {
+          this.statusVisible = true;
+        })
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
   }
 
   build() {
-    Column() {
-      this.topBar()
-
-      if (this.groups.length === 0) {
-        Column() {
-          if (this.pending > 0) {
-            LoadingProgress()
-              .width(40)
-              .height(40)
-              .color($r('app.color.brand'))
-            Text('正在聚合书源…')
-              .fontSize(14)
-              .fontColor($r('app.color.text_4'))
-              .margin({ top: 12 })
-          } else {
-            EmptyView({ title: '没有找到结果', desc: '换个关键词，或检查书源是否可用' })
-          }
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .justifyContent(FlexAlign.Center)
-      } else {
-        List({ space: 0 }) {
-          ForEach(this.groups, (g: SearchGroup) => {
-            ListItem() {
-              Column() {
-                this.resultItem(g)
-                Divider()
-                  .color($r('app.color.divider'))
-                  .strokeWidth(1)
-                  .margin({ left: 112 })
-              }
+    Stack() {
+      Column() {
+        if (this.groups.length === 0) {
+          Column() {
+            if (this.pending > 0 || this.enriching) {
+              LoadingProgress()
+                .width(40)
+                .height(40)
+                .color($r('app.color.brand'))
+              Text('正在聚合书源…')
+                .fontSize(14)
+                .fontColor($r('app.color.text_4'))
+                .margin({ top: 12 })
+            } else {
+              EmptyView({ title: '没有找到结果', desc: '换个关键词，或检查书源是否可用' })
             }
-          }, (g: SearchGroup) => g.name + '|' + g.author + '|' + g.origins.length.toString() + '|' + g.lastChapter + '|' + g.coverUrl + '|' + g.intro)
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .scrollBar(BarState.Off)
-      }
-
-      if (this.statuses.length > 0) {
-        Row() {
-          Text(this.sourceSummary())
-            .fontSize(12)
-            .fontColor($r('app.color.text_4'))
-          Blank()
-          Text(this.showSources ? '收起' : '源状态')
-            .fontSize(12)
-            .fontColor($r('app.color.brand'))
-            .onClick(() => {
-              this.showSources = !this.showSources;
-            })
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-
-        if (this.showSources) {
-          Scroll() {
-            Column() {
-              ForEach(this.statuses, (status: SourceStatus) => {
-                Row() {
-                  Text(status.sourceName.length > 0 ? status.sourceName : status.sourceUrl)
-                    .fontSize(13)
-                    .fontColor($r('app.color.text_2'))
-                    .layoutWeight(1)
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(status.ok ? `✓ ${status.count}` : status.error)
-                    .fontSize(12)
-                    .fontColor(status.ok ? $r('app.color.brand') : $r('app.color.warning'))
+          }
+          .layoutWeight(1)
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+        } else {
+          this.searchBanner()
+          List({ space: 0 }) {
+            ForEach(this.groups, (g: SearchGroup) => {
+              ListItem() {
+                Column() {
+                  this.resultItem(g)
+                  Divider()
+                    .color($r('app.color.divider'))
+                    .strokeWidth(1)
+                    .margin({ left: 112 })
                 }
-                .width('100%')
-                .padding({ left: 16, right: 16, top: 5, bottom: 5 })
-              }, (status: SourceStatus) => status.sourceUrl)
-            }
-            .width('100%')
+              }
+            }, (g: SearchGroup) => g.name + '|' + g.author + '|' + g.origins.length.toString() + '|' + g.lastChapter + '|' + g.coverUrl + '|' + g.intro)
           }
-          .height(140)
+          .layoutWeight(1)
           .width('100%')
           .scrollBar(BarState.Off)
+        }
+
+        if (this.statuses.length > 0) {
+          this.statusFooter()
+        }
+      }
+      .width('100%')
+      .height('100%')
+
+      if (this.statusVisible) {
+        BottomDrawer({
+          visible: true,
+          title: '源状态',
+          sheetSize: 'fit',
+          mode: 'system',
+          onClose: () => {
+            this.statusVisible = false;
+          }
+        }) {
+          this.statusContent()
+        }
+      }
+
+      if (this.pickerVisible) {
+        BottomDrawer({
+          visible: true,
+          title: '选择来源',
+          sheetSize: 'medium',
+          mode: 'system',
+          onClose: () => {
+            this.pickerVisible = false;
+          }
+        }) {
+          this.pickerContent()
         }
       }
     }
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.bg_page'))
-    .bindSheet($$this.pickerVisible, this.pickerSheet(), {
-      height: SheetSize.MEDIUM,
-      dragBar: true,
-      showClose: true
-    })
-  }
-
-  private sourceSummary(): string {
-    let ok: number = 0;
-    for (const s of this.statuses) {
-      if (s.ok) {
-        ok += 1;
-      }
-    }
-    return `源 ${ok}/${this.statuses.length} 成功`;
   }
 }

@@ -9,7 +9,6 @@ export const TAB_SETTINGS: number = 2;
 
 export const ROUTE_PLACEHOLDER: string = 'Placeholder';
 export const ROUTE_SOURCE_MANAGE: string = 'BookSourceManage';
-export const ROUTE_SEARCH_RESULT: string = 'SearchResult';
 export const ROUTE_BOOK_DETAIL: string = 'BookDetail';
 export const ROUTE_READER: string = 'Reader';
 export const ROUTE_READING_SETTINGS: string = 'ReadingSettings';
@@ -51,14 +50,6 @@ export class PlaceholderParam {
 
   constructor(title: string) {
     this.title = title;
-  }
-}
-
-export class SearchParam {
-  keyword: string;
-
-  constructor(keyword: string) {
-    this.keyword = keyword;
   }
 }
 
