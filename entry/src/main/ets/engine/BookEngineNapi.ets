@@ -20,7 +20,10 @@ export class BookEngineNapi implements IBookEngine {
 
   async search(sources: BookSource[], keyword: string, opts: SearchOptions): Promise<SearchResult> {
     const sourcesJson: string = JSON.stringify(sources);
-    const optsJson: string = JSON.stringify({ timeoutMs: opts.timeoutMs });
+    const optsJson: string = JSON.stringify({
+      timeoutMs: opts.timeoutMs,
+      concurrency: opts.concurrency
+    });
     const raw: string = await nativeSearch(sourcesJson, keyword, optsJson);
     return JSON.parse(raw) as SearchResult;
   }

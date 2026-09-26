@@ -16,9 +16,24 @@ interface CachedChapter {
 }
 
 const memory: Map<string, CachedChapter> = new Map();
+/** Largest number of chapter bodies kept decoded in memory (LRU). */
+const MEMORY_LIMIT: number = 24;
 
 function memoryKey(bookId: string, index: number): string {
   return bookId + '#' + index.toString();
+}
+
+/** Move `key` to the most-recent position and evict the oldest beyond the cap. */
+function touchMemory(key: string, entry: CachedChapter): void {
+  memory.delete(key);
+  memory.set(key, entry);
+  while (memory.size > MEMORY_LIMIT) {
+    const oldest: string | undefined = memory.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    memory.delete(oldest);
+  }
 }
 
 function cacheDir(ctx: common.UIAbilityContext): string {
@@ -40,6 +55,7 @@ export function getCachedChapter(
   const mem: CachedChapter | undefined = memory.get(key);
   if (mem !== undefined) {
     if (mem.url === url) {
+      touchMemory(key, mem);
       return mem.content;
     }
     memory.delete(key);
@@ -54,7 +70,7 @@ export function getCachedChapter(
     if (entry.url !== url) {
       return undefined;
     }
-    memory.set(key, entry);
+    touchMemory(key, entry);
     return entry.content;
   } catch (err) {
     return undefined;
@@ -70,7 +86,7 @@ export function putCachedChapter(
   content: string
 ): void {
   const entry: CachedChapter = { url: url, content: content, fetchedAt: Date.now() };
-  memory.set(memoryKey(bookId, index), entry);
+  touchMemory(memoryKey(bookId, index), entry);
   const dir: string = cacheDir(ctx);
   try {
     if (!fileIo.accessSync(dir)) {
@@ -90,8 +106,4 @@ export function putCachedChapter(
   } catch (err) {
     return;
   }
-}
-
-export function hasCachedChapter(bookId: string, index: number): boolean {
-  return memory.has(memoryKey(bookId, index));
 }

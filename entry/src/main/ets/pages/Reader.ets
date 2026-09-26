@@ -27,6 +27,8 @@ import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
 import { isLocalBook, loadLocalChapters, loadLocalContent } from '../model/LocalBook';
 import { TtsController } from '../model/TtsController';
 import { FloatingListenButton } from '../ui/common/FloatingListenButton';
+import { AppBackButton } from '../ui/common/AppBackButton';
+import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 
 const PANEL_NONE: string = '';
 const PANEL_TOC: string = 'toc';
@@ -61,10 +63,13 @@ export struct ReaderPage {
   private contentScroller: Scroller = new Scroller();
   private tocScroller: Scroller = new Scroller();
   @Local dataSource: ChapterDataSource = new ChapterDataSource();
+  /** Monotonic token so a slow chapter fetch cannot overwrite a newer one. */
+  private loadGen: number = 0;
 
   @Monitor('tts.paragraphIndex', 'tts.chapterIndex')
   onTtsProgress(): void {
-    if (!this.tts.active) {
+    const book: Book | undefined = this.book;
+    if (book === undefined || !this.tts.isActiveFor(book.bookId)) {
       return;
     }
     if (this.tts.chapterIndex !== this.chapterIndex) {
@@ -295,25 +300,37 @@ export struct ReaderPage {
     if (!this.isReadable(index)) {
       return;
     }
+    const gen: number = ++this.loadGen;
     this.failed = '';
     const chapter: Chapter = this.chapters[index];
     const cached: string | undefined = this.cachedContent(chapter, index);
     if (cached !== undefined) {
       this.applyChapter(index, cached, restoreParagraph);
       await this.persistProgress();
+      if (gen !== this.loadGen) {
+        return;
+      }
       this.prefetch(this.nextReadable(index));
       return;
     }
     this.loading = true;
     try {
       const content: string = await this.fetchContent(chapter, index);
+      if (gen !== this.loadGen) {
+        return;
+      }
       this.applyChapter(index, content, restoreParagraph);
       await this.persistProgress();
+      if (gen !== this.loadGen) {
+        return;
+      }
       this.prefetch(this.nextReadable(index));
     } catch (err) {
-      this.failed = '正文加载失败，点击重试';
-      this.paragraphs = [];
-      this.loading = false;
+      if (gen === this.loadGen) {
+        this.failed = '正文加载失败，点击重试';
+        this.paragraphs = [];
+        this.loading = false;
+      }
     }
   }
 
@@ -324,11 +341,11 @@ export struct ReaderPage {
     this.chapterIndex = index;
     this.paragraphs = paragraphs;
     this.sliderValue = index + 1;
-    this.paragraphIndex = restoreParagraph;
-    this.loading = false;
-    const target: number = restoreParagraph > 0 && paragraphs.length > 0
-      ? Math.min(restoreParagraph, paragraphs.length - 1)
+    this.paragraphIndex = paragraphs.length > 0
+      ? Math.min(Math.max(restoreParagraph, 0), paragraphs.length - 1)
       : 0;
+    this.loading = false;
+    const target: number = this.paragraphIndex;
     setTimeout(() => {
       try {
         this.contentScroller.scrollToIndex(target);
@@ -448,8 +465,11 @@ export struct ReaderPage {
   }
 
   private isSpeaking(index: number): boolean {
-    return this.tts.active
-      && this.tts.chapterIndex === this.chapterIndex
+    const book: Book | undefined = this.book;
+    if (book === undefined || !this.tts.isActiveFor(book.bookId)) {
+      return false;
+    }
+    return this.tts.chapterIndex === this.chapterIndex
       && this.tts.paragraphIndex === index;
   }
 
@@ -521,9 +541,10 @@ export struct ReaderPage {
   private toggleTocOrder(): void {
     this.tocDescending = !this.tocDescending;
     this.buildTocItems();
+    // Keep the current chapter in view after the list flips order.
     setTimeout(() => {
       try {
-        this.tocScroller.scrollToIndex(0);
+        this.tocScroller.scrollToIndex(this.tocPosition());
       } catch (err) {
       }
     }, 60);
@@ -585,22 +606,21 @@ export struct ReaderPage {
 
   @Builder
   moreButton() {
-    Row({ space: 3 }) {
-      Row().width(4).height(4).borderRadius(2).backgroundColor(this.dimColor())
-      Row().width(4).height(4).borderRadius(2).backgroundColor(this.dimColor())
-      Row().width(4).height(4).borderRadius(2).backgroundColor(this.dimColor())
-    }
-    .width(44)
-    .height(44)
-    .justifyContent(FlexAlign.Center)
-    .accessibilityText('更多')
-    .bindMenu(this.moreMenuItems())
+    MoreMenuButton({
+      items: this.moreMenuItems(),
+      color: this.dimColor(),
+      label: '更多'
+    })
   }
 
   @Builder
   topBar() {
     Row() {
-      this.iconButton($r('sys.symbol.arrow_left'), '返回', () => this.onTopBack())
+      AppBackButton({
+        label: '返回',
+        color: this.textColor(),
+        onTap: () => this.onTopBack()
+      })
       Text(this.chapters.length > 0 && this.chapterIndex < this.chapters.length
         ? this.chapters[this.chapterIndex].title
         : '')
@@ -610,7 +630,11 @@ export struct ReaderPage {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .padding({ left: 4 })
-      this.moreButton()
+      MoreMenuButton({
+        items: this.moreMenuItems(),
+        color: this.dimColor(),
+        label: '更多'
+      })
     }
     .width('100%')
     .height(52)
@@ -782,7 +806,7 @@ export struct ReaderPage {
       .scrollBar(BarState.Off)
     }
     .width('100%')
-    .height('100%')
+    .layoutWeight(1)
     .backgroundColor(this.bgColor())
   }
 

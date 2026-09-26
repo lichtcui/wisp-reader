@@ -16,6 +16,8 @@ const CREATE_PROGRESS: string =
   'paragraph_index INTEGER, char_offset INTEGER, percent REAL, updated_at INTEGER)';
 
 let store: relationalStore.RdbStore | undefined = undefined;
+/** Last progress write timestamp per book, to reject an older late write. */
+const lastWriteAt: Map<string, number> = new Map<string, number>();
 
 export async function initShelf(ctx: common.UIAbilityContext): Promise<void> {
   if (store !== undefined) {
@@ -77,6 +79,11 @@ export async function upsertBook(book: Book): Promise<void> {
   await s.insert('books', values, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
 }
 
+/**
+ * Remove a book and its progress.
+ * Reserved for the shelf "delete book" action (T-SHELF-1), which is not wired
+ * yet; when it is, also purge `filesDir/chapters/{bookId}_*` and local-book dirs.
+ */
 export async function removeBook(bookId: string): Promise<void> {
   const s: relationalStore.RdbStore | undefined = db();
   if (s === undefined) {
@@ -100,20 +107,6 @@ export async function getBooks(): Promise<Book[]> {
   return out;
 }
 
-export async function getBook(bookId: string): Promise<Book | undefined> {
-  const s: relationalStore.RdbStore | undefined = db();
-  if (s === undefined) {
-    return undefined;
-  }
-  const rs: relationalStore.ResultSet = await s.querySql('SELECT * FROM books WHERE book_id = ?', [bookId]);
-  let book: Book | undefined = undefined;
-  if (rs.goToNextRow()) {
-    book = rowToBook(rs);
-  }
-  rs.close();
-  return book;
-}
-
 /** Dedupe by name + author (no cross-source identity mapping in v1). */
 export async function isInShelf(name: string, author: string): Promise<boolean> {
   const s: relationalStore.RdbStore | undefined = db();
@@ -132,6 +125,12 @@ export async function saveProgress(p: ReadProgress): Promise<void> {
   if (s === undefined) {
     return;
   }
+  const incoming: number = p.updatedAt > 0 ? p.updatedAt : Date.now();
+  const last: number | undefined = lastWriteAt.get(p.bookId);
+  if (last !== undefined && last > incoming) {
+    return;
+  }
+  lastWriteAt.set(p.bookId, incoming);
   const values: relationalStore.ValuesBucket = {
     'book_id': p.bookId,
     'chapter_index': p.chapterIndex,
@@ -139,7 +138,7 @@ export async function saveProgress(p: ReadProgress): Promise<void> {
     'paragraph_index': p.paragraphIndex,
     'char_offset': p.charOffset,
     'percent': p.percent,
-    'updated_at': p.updatedAt > 0 ? p.updatedAt : Date.now()
+    'updated_at': incoming
   };
   await s.insert('progress', values, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
 }

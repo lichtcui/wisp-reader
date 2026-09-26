@@ -3,6 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { applyThemeMode, readThemeMode } from '../common/Theme';
 import { applyKeepScreenOn, readKeepScreenOn, setMainWindow } from '../common/Window';
+import { initShelf } from '../model/ShelfRepository';
 import { TtsController } from '../model/TtsController';
 
 const DOMAIN: number = 0x0000;
@@ -11,6 +12,11 @@ const TAG: string = 'SourceReader';
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     applyThemeMode(this.context, readThemeMode(this.context));
+    // Open the shelf DB eagerly so progress survives even when the user opens a
+    // book from Search before ever visiting the Shelf tab.
+    initShelf(this.context).catch((err: Error) => {
+      hilog.warn(DOMAIN, TAG, 'shelf db init failed: %{public}s', err.message);
+    });
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onCreate');
   }
 

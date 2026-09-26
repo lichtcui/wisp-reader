@@ -338,7 +338,7 @@ export struct ListeningPage {
       .scrollBar(BarState.Off)
     }
     .width('100%')
-    .height('100%')
+    .layoutWeight(1)
   }
 
   build() {
@@ -383,7 +383,7 @@ export struct ListeningPage {
         visible: this.sheetVisible,
         title: '目录',
         sheetSize: 'large',
-        mode: 'overlay',
+        mode: 'system',
         onClose: () => {
           this.sheetVisible = false;
         }

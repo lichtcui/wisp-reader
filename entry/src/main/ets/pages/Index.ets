@@ -20,6 +20,7 @@ import {
 import { Book, BookSearchItem, BookSource } from '../engine/types';
 import { ReaderTheme } from '../common/ReaderTheme';
 import { importLocalTxt } from '../model/LocalBook';
+import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 import { BookDetailPage } from './BookDetail';
 import { BookSourceManagePage } from './BookSourceManage';
 import { CacheManagePage } from './CacheManage';
@@ -128,13 +129,7 @@ struct Index {
 
   @Builder
   menuTrigger() {
-    Row({ space: 3 }) {
-      Row().width(4).height(4).borderRadius(2).backgroundColor($r('app.color.text_2'))
-      Row().width(4).height(4).borderRadius(2).backgroundColor($r('app.color.text_2'))
-      Row().width(4).height(4).borderRadius(2).backgroundColor($r('app.color.text_2'))
-    }
-    .padding({ left: 10, right: 10, top: 10, bottom: 10 })
-    .bindMenu(this.shelfMenuItems())
+    MoreMenuButton({ items: this.shelfMenuItems() })
   }
 
   @Builder

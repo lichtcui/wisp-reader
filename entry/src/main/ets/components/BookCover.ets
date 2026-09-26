@@ -15,6 +15,22 @@ import { BookSource } from '../engine/types';
  */
 const pixmapCache: Map<string, image.PixelMap> = new Map();
 const pathCache: Map<string, string> = new Map();
+/** Cap the decoded-bitmap cache so long browsing sessions cannot grow forever. */
+const PIXMAP_LIMIT: number = 64;
+
+function cachePixmap(url: string, pixmap: image.PixelMap): void {
+  if (pixmapCache.has(url)) {
+    pixmapCache.delete(url);
+  }
+  pixmapCache.set(url, pixmap);
+  while (pixmapCache.size > PIXMAP_LIMIT) {
+    const oldest: string | undefined = pixmapCache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    pixmapCache.delete(oldest);
+  }
+}
 @ComponentV2
 export struct BookCover {
   @Param source: BookSource | undefined = undefined;
@@ -38,6 +54,7 @@ export struct BookCover {
     }
     const cachedPixmap: image.PixelMap | undefined = pixmapCache.get(this.coverUrl);
     if (cachedPixmap !== undefined) {
+      cachePixmap(this.coverUrl, cachedPixmap);
       this.pixmap = cachedPixmap;
       return;
     }
@@ -49,7 +66,7 @@ export struct BookCover {
       }
       const src: image.ImageSource = image.createImageSource(path);
       const pixmap: image.PixelMap = await src.createPixelMap();
-      pixmapCache.set(this.coverUrl, pixmap);
+      cachePixmap(this.coverUrl, pixmap);
       this.pixmap = pixmap;
     } catch (err) {
       this.pixmap = undefined;

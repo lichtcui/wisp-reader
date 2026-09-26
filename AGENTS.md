@@ -30,6 +30,10 @@
   必须让 App 自己播 PCM（`STREAM_USAGE_AUDIOBOOK`）才能成为 top session。
 - 详细进度与验证结果：见 [`docs/progress.md`](./docs/progress.md) §「M5 结果」。
 
+> **端侧自建 TTS 调研（未立项）**：想用本地 GPT-SoVITS 音色替代系统 TTS 的尽调与原型计划见
+> [`TTS-PLAN.md`](./TTS-PLAN.md)。它与上面 M5 的**系统 TTS 是并行增量**，**未改动 M5 任何代码**；
+> 当前状态为「调查完成、原型未开始」，下一步是 TTS-PLAN §9 的 P0。
+
 ## 2. 关键决策（已定，勿擅改）
 
 | 项 | 决策 |

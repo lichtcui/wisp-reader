@@ -228,6 +228,12 @@ export class TtsController {
         this.engine.stop();
       } catch (err) {
       }
+      try {
+        this.engine.shutdown();
+      } catch (err) {
+      }
+      this.engine = undefined;
+      this.formatLogged = false;
     }
     this.resetQueues();
     this.releaseRenderer();
@@ -598,6 +604,13 @@ export class TtsController {
     }
   }
 
+  /** True when every paragraph was issued and the render queue has drained. */
+  private queueExhausted(): boolean {
+    return this.paragraphs.length > 0
+      && this.issuedIndex >= this.paragraphs.length
+      && this.queue.length === 0;
+  }
+
   private onData(requestId: string, data: ArrayBuffer, response: textToSpeech.SynthesisResponse): void {
     const idx: number | undefined = this.reqIdIndex.get(requestId);
     if (idx === undefined) {
@@ -632,6 +645,12 @@ export class TtsController {
     hilog.error(DOMAIN, TAG, 'tts error code=%{public}d msg=%{public}s', errorCode, errorMessage);
     this.error = '播报失败（' + errorCode.toString() + '）';
     this.playing = false;
+    // Drop in-flight requests and stop the timers so a later resume() can
+    // re-issue the failed paragraph instead of waiting on a stuck buffer.
+    this.clearInflight();
+    this.stopFlushTimer();
+    this.stopProgressTimer();
+    this.stopBackground();
     this.updatePlaybackState(avSession.PlaybackState.PLAYBACK_STATE_ERROR);
   }
 
@@ -825,8 +844,10 @@ export class TtsController {
     const next: number = nextReadable(this.chapters, this.chapterIndex);
     if (next < 0) {
       this.playing = false;
+      this.clearTimer();
       this.stopFlushTimer();
       this.stopProgressTimer();
+      this.stopBackground();
       if (this.renderer !== undefined) {
         this.renderer.pause().catch((err: BusinessError) => {
         });
@@ -861,11 +882,18 @@ export class TtsController {
       this.renderer.pause().catch((err: BusinessError) => {
       });
     }
+    this.stopBackground();
     this.updatePlaybackState(avSession.PlaybackState.PLAYBACK_STATE_PAUSE);
   }
 
   resume(): void {
     if (!this.active || this.playing) {
+      return;
+    }
+    // Natural completion drained every paragraph; restart the chapter so the
+    // play button is not a silent no-op after the book ends.
+    if (this.queueExhausted()) {
+      this.beginFrom(0);
       return;
     }
     hilog.info(DOMAIN, TAG, 'resume');

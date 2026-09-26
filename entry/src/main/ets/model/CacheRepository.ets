@@ -28,6 +28,7 @@ export interface CacheStats {
 const CHAPTER_DIR_NAME: string = 'chapters';
 const TTS_DIR_NAME: string = 'tts';
 const COVER_PREFIX: string = 'cover_';
+const COVER_SUFFIX: string = '.img';
 
 function chapterDir(ctx: common.UIAbilityContext): string {
   return ctx.filesDir + '/' + CHAPTER_DIR_NAME;
@@ -71,7 +72,7 @@ function sumDir(dir: string, match: (name: string) => boolean): CacheCategory {
 }
 
 function isCoverFile(name: string): boolean {
-  return name.startsWith(COVER_PREFIX);
+  return name.startsWith(COVER_PREFIX) && name.endsWith(COVER_SUFFIX);
 }
 
 function isChapterFile(name: string): boolean {

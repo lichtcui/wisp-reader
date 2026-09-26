@@ -3,6 +3,7 @@ import { Book, BookSearchItem, BookSource } from '../engine/types';
 import { BookCover } from '../components/BookCover';
 import { computeBookId } from '../common/Format';
 import { isInShelf, upsertBook } from '../model/ShelfRepository';
+import { AppBackButton } from '../ui/common/AppBackButton';
 
 @ComponentV2
 export struct BookDetailPage {
@@ -88,14 +89,11 @@ export struct BookDetailPage {
   @Builder
   topBar(light: boolean) {
     Row() {
-      Text('‹')
-        .fontSize(28)
-        .fontColor(light ? $r('app.color.on_brand') : $r('app.color.text_1'))
-        .width(44)
-        .height(44)
-        .textAlign(TextAlign.Center)
-        .accessibilityText('返回')
-        .onClick(() => this.onBack())
+      AppBackButton({
+        label: '返回',
+        tone: light ? 'onBrand' : 'normal',
+        onTap: () => this.onBack()
+      })
     }
     .width('100%')
     .height(52)
@@ -201,7 +199,7 @@ export struct BookDetailPage {
     .width('100%')
     .padding({ left: 20, right: 20, top: 20, bottom: 24 })
     .backgroundColor($r('app.color.bg_page'))
-    .borderRadius({ topLeft: 16, topRight: 16 })
+    .borderRadius({ topLeft: 20, topRight: 20 })
     .margin({ top: -16 })
     .alignItems(HorizontalAlign.Start)
   }

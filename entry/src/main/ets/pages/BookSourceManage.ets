@@ -290,6 +290,9 @@ export struct BookSourceManagePage {
   }
 
   private async runDetect(): Promise<void> {
+    if (this.busy) {
+      return;
+    }
     const enabled: BookSource[] = enabledSources(this.sources);
     if (enabled.length === 0) {
       this.summary = '没有启用的书源';
@@ -297,6 +300,7 @@ export struct BookSourceManagePage {
     }
     this.busy = true;
     this.detectResults = [];
+    this.statusVisible = false;
     try {
       this.detectResults = await bookEngine.detect(enabled, DEFAULT_DETECT_KEYWORD);
       this.summary = this.detectSummary();
@@ -641,7 +645,7 @@ export struct BookSourceManagePage {
                     InsetDivider()
                   }
                 }
-              }, (source: BookSource, index: number) => source.bookSourceUrl + '_' + index.toString())
+              }, (source: BookSource) => source.bookSourceUrl + '#' + (source.enabled !== false ? '1' : '0'))
             }
             .width('100%')
 

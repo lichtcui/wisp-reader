@@ -11,17 +11,6 @@ export function shelfProgressText(chapterIndex: number, totalChapters: number, h
   return '第' + (chapterIndex + 1).toString() + '章';
 }
 
-export function formatWordCount(value: string): string {
-  const n: number = Number(value);
-  if (!isFinite(n) || n <= 0) {
-    return '';
-  }
-  if (n >= 10000) {
-    return (Math.round(n / 1000) / 10).toString() + '万字';
-  }
-  return n.toString() + '字';
-}
-
 function normalizeUrl(url: string): string {
   return url.trim().replace(/\/+$/, '').toLowerCase();
 }
