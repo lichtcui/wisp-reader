@@ -29,3 +29,6 @@ signature/
 
 # local tooling
 .opencode/
+# Python
+__pycache__/
+*.pyc
