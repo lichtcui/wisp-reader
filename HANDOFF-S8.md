@@ -2,7 +2,7 @@
 
 日期：2026-09-26
 范围：**仅书源管理模块** —— `pages/BookSourceManage.ets` + 其检测链路所需的 Rust `detect`/`verify_chain`。
-基线：`0a1a4d9`（S7 收尾）。本轮改动**未提交**（见 §7）。
+基线：`0a1a4d9`（S7 收尾）。HEAD：`a075076`（本轮提交，见 §7）。
 
 > 构建：`cargo test` **54 passed / 0 failed**；`ohrs build --arch arm64 --release` **成功**（无警告）；
 > `assembleHap` **BUILD SUCCESSFUL**（仅既有 ArkTS 警告：`audio` syscap、函数可能抛异常）。
@@ -217,7 +217,7 @@ export PATH="/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applicatio
 
 ## 7. 提交状态
 
-本轮改动**未提交**。预期纳入提交的文件：
+本轮提交：`a075076`（5 个文件 + 本文件）。纳入提交的文件：
 
 ```
 entry/src/main/ets/pages/BookSourceManage.ets
