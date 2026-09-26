@@ -131,7 +131,6 @@
 
 | 项 | 说明 |
 |---|---|
-| **真机闭环未执行** | 设备 `33Z0224424136564` 当前 `Offline`，本轮所有修复**未经真机验证**（编译级验证已通过）。`AGENTS.md` §4 的「编译 → 安装 → force-stop → 重启 → hilog」须在发布前补齐 |
 | **Release 签名身份** | 见 §3，当前为 Debug Profile |
 | **版本号** | `versionName`/`versionCode` 未提升 |
 
@@ -142,7 +141,7 @@
 - `T-READ-1` `Reader.sanitize` 与 `BookContent.sanitizeText` 合并（两份当前**逐字节一致**，纯重构）。
 - `T-READ-3` 章节预取 in-flight 去重（LRU 已降低重复写盘概率）。
 - `T-DATA-3` 备份/恢复、`T-DATA-4` 缓存 LRU/上限策略（M6）。
-- `T-VER-3` 真机闭环（受阻，见上）。
+- `T-VER-3` 真机闭环已完成（见 §5）；跨书串扰与后台任务结束的直接观测待条件复验。
 - M6 规则调试器整体未开始。
 
 ### 4.3 保留的工作文档（未纳入版本控制）
@@ -152,7 +151,35 @@
 
 ---
 
-## 5. 回归审查发现（评审池，未全部修复）
+## 5. 真机冒烟（2026-09-27，设备 `33Z0224424136564`）
+
+设备接通后完成 `AGENTS.md` §4 闭环（安装 → `aa force-stop` → `aa start` → `hilog`/`uitest` 观测）。
+release 与 debug 两个包均验证；release 包**不输出 App 自身 `hilog`**（仅系统日志），故 TTS 链路证据取自 debug 包。
+
+| 观测项 | 结果 |
+|---|---|
+| 安装（release / debug） | ✅ `install bundle successfully` |
+| 启动、`hilog` 无 `JSCRASH`/`CPPCRASH` | ✅（仅一条既有 NAPI `AddCleanupHook` 警告，无害） |
+| 书架渲染 4 本 + 进度三态 | ✅ |
+| DB 启动即初始化 + 进度恢复（`initShelf`） | ✅ 打开本地书直接停在已存进度「第三章 归途」 |
+| 阅读页正文渲染（本地书） | ✅ |
+| 阅读菜单（顶栏/底栏） | ✅ |
+| 目录浮层（overlay）+ 书籍卡片 + 「定位」 | ✅ |
+| 目录 正序 ↔ 倒序 切换 | ✅ 标签变更、列表反转、当前章在顶 |
+| 顶栏「更多」→ `MoreMenuButton` 菜单「书籍详情」 | ✅（新接线组件真机可用） |
+| 听书入口 + `FloatingListenButton` | ✅ 收起听书页后阅读页右下出现 52vp 气泡 |
+| TTS 全链路 | ✅ `engine ready` → `avsession ready` → `renderer ready` → `begin para=0` → **`background task started`** → `tts format rate=16000` → `play para=1` |
+| 自然播完（末章） | ✅ 播到章末自动停止（时间冻结） |
+| **播完后重播**（本轮修复） | ✅ 再点播放 → `begin para=0` + `background task started`（`queueExhausted()` 重播） |
+| **暂停**（本轮修复） | ✅ 命中 `pause` 日志路径（含 `stopBackground()`） |
+
+**未覆盖**：
+- 跨书串扰守卫（`T-CROSS-1`）：设备上仅一本本地书可读，联网书源当次取目录失败，无法构造「听 A 读 B」。守卫为纯代码路径（`isActiveFor`），待联网真机复验。
+- 后台长时任务**结束**的直接观测：本机 `hidumper` 的 `BackgroundTaskManager` 不提供任务明细 dump；由 `pause`/自然结束路径的代码 + `background task started` 日志间接佐证。
+
+---
+
+## 6. 回归审查发现（评审池，未全部修复）
 
 由 4 路并行只读评审得出，以下为**未采纳/低优先级**项，供后续排期：
 
@@ -166,7 +193,7 @@
 
 ---
 
-## 6. 验证矩阵
+## 7. 验证矩阵
 
 | 闸门 | 状态 |
 |---|---|
@@ -177,7 +204,8 @@
 | Rust `cargo test` | ✅ 54/54 |
 | `verify-app` / `verify-profile` | ✅（身份为 debug） |
 | 签名就绪（公开发布） | ❌ Debug Profile |
-| 真机冒烟 | ⛔ 设备离线 |
-| Git 清理 | ⚠️ 未提交；`build-profile.json5` 凭据边界待处理 |
+| 真机冒烟 | ✅ 已执行（见 §5） |
+| 真机跨书串扰 + 后台任务结束直接观测 | ⏭ 待联网/工具条件复验 |
+| Git 清理 | ⚠️ 已提交 `596f16a`；`build-profile.json5` 凭据边界待处理 |
 
-**最高发布状态：`BUILD_READY`（未达 `ARTIFACT_VERIFIED` 公开发布语义，未达 `SMOKE_TESTED`）。**
+**最高发布状态：`SMOKE_TESTED`（仅限内部/开发渠道；公开发布仍受 Release 签名身份阻塞，未达 `READY_FOR_PUBLICATION`）。**
