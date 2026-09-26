@@ -1,22 +1,27 @@
 import { bundleManager, common } from '@kit.AbilityKit';
 import { GroupTitle, InsetDivider, NavCell } from '../components/ListCells';
 import { readThemeMode, themeModeLabel } from '../common/Theme';
+import { formatBytes } from '../common/Format';
+import { getCacheStats } from '../model/CacheRepository';
 
 @ComponentV2
 export struct SettingsPage {
   @Param refreshToken: number = 0;
   @Local themeMode: number = 0;
   @Local version: string = '';
+  @Local cacheText: string = '0 B';
   @Event onNavigate: (title: string) => void = () => {};
 
   aboutToAppear(): void {
     this.version = this.readVersion();
     this.reloadTheme();
+    this.reloadCache();
   }
 
   @Monitor('refreshToken')
   onRefreshToken(): void {
     this.reloadTheme();
+    this.reloadCache();
   }
 
   private ctx(): common.UIAbilityContext | undefined {
@@ -27,6 +32,13 @@ export struct SettingsPage {
     const ctx: common.UIAbilityContext | undefined = this.ctx();
     if (ctx !== undefined) {
       this.themeMode = readThemeMode(ctx);
+    }
+  }
+
+  private reloadCache(): void {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx !== undefined) {
+      this.cacheText = formatBytes(getCacheStats(ctx).totalBytes);
     }
   }
 
@@ -80,7 +92,7 @@ export struct SettingsPage {
           GroupTitle({ text: '数据' })
           NavCell({
             label: '清理缓存',
-            value: '0 B',
+            value: this.cacheText,
             showArrow: true,
             onTap: () => this.onNavigate('清理缓存')
           })

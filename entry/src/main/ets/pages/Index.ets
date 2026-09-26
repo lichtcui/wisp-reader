@@ -5,6 +5,7 @@ import {
   ListenParam,
   PlaceholderParam,
   ROUTE_BOOK_DETAIL,
+  ROUTE_CACHE_MANAGE,
   ROUTE_GENERAL_SETTINGS,
   ROUTE_LISTENING,
   ROUTE_LISTENING_SETTINGS,
@@ -21,6 +22,7 @@ import { ReaderTheme } from '../common/ReaderTheme';
 import { importLocalTxt } from '../model/LocalBook';
 import { BookDetailPage } from './BookDetail';
 import { BookSourceManagePage } from './BookSourceManage';
+import { CacheManagePage } from './CacheManage';
 import { GeneralSettingsPage } from './GeneralSettings';
 import { ListeningPage } from './Listening';
 import { ListeningSettingsPage } from './ListeningSettings';
@@ -57,6 +59,8 @@ struct Index {
       this.pathStack.pushPath({ name: ROUTE_GENERAL_SETTINGS });
     } else if (title === '听书设置') {
       this.pathStack.pushPath({ name: ROUTE_LISTENING_SETTINGS });
+    } else if (title === '清理缓存') {
+      this.pathStack.pushPath({ name: ROUTE_CACHE_MANAGE });
     } else {
       this.pushPlaceholder(title);
     }
@@ -177,6 +181,12 @@ struct Index {
         ListeningSettingsPage()
       }
       .title('听书设置')
+      .backgroundColor($r('app.color.bg_page'))
+    } else if (name === ROUTE_CACHE_MANAGE) {
+      NavDestination() {
+        CacheManagePage()
+      }
+      .title('清理缓存')
       .backgroundColor($r('app.color.bg_page'))
     } else if (name === ROUTE_LISTENING) {
       NavDestination() {

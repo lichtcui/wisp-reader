@@ -15,6 +15,7 @@ export const ROUTE_READING_SETTINGS: string = 'ReadingSettings';
 export const ROUTE_GENERAL_SETTINGS: string = 'GeneralSettings';
 export const ROUTE_LISTENING: string = 'Listening';
 export const ROUTE_LISTENING_SETTINGS: string = 'ListeningSettings';
+export const ROUTE_CACHE_MANAGE: string = 'CacheManage';
 
 export const KEY_READER_FONT_SIZE: string = 'reader_font_size';
 export const KEY_READER_LINE_HEIGHT: string = 'reader_line_height';
