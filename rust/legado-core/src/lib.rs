@@ -107,22 +107,28 @@ pub async fn content(source_json: String, chapter_url: String) -> Result<String>
 }
 
 /// Detect whether sources can complete a reading chain; returns JSON
-/// `DetectResult[]`. `opts_json` may carry `{ keyword, concurrency }`.
+/// `DetectResult[]`. `opts_json` may carry
+/// `{ keyword, concurrency, timeoutMs }`.
 #[napi]
 pub async fn detect(sources_json: String, opts_json: String) -> Result<String> {
     let sources = sources_from_json(&sources_json)?;
     #[derive(Deserialize, Default)]
+    #[allow(non_snake_case)]
     struct DetectOpts {
         #[serde(default)]
         keyword: Option<String>,
         #[serde(default)]
         concurrency: Option<usize>,
+        #[serde(default)]
+        timeoutMs: Option<u64>,
     }
     let opts: DetectOpts = serde_json::from_str(&opts_json).unwrap_or_default();
     let results = engine::runtime::detect(
         &sources,
         opts.keyword.as_deref().unwrap_or("重生"),
         opts.concurrency.unwrap_or(4),
+        opts.timeoutMs
+            .unwrap_or(engine::runtime::DEFAULT_DETECT_TIMEOUT_MS),
     )
     .await;
     serde_json::to_string(&results).map_err(err)

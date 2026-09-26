@@ -418,20 +418,53 @@ fn eval_rule_concat(content: &str, content_type: &str, rule: &str) -> String {
 
 // ── Detect ────────────────────────────────────────────────────
 
-pub async fn detect(sources: &[BookSource], keyword: &str, concurrency: usize) -> Vec<DetectResult> {
+/// Default per-source budget for a full detect chain (search → detail → toc →
+/// chapter → content). Individual requests are already capped at 15s
+/// (`http_client`), but the chain had no aggregate bound; a source could stall
+/// for minutes. Mirrors the JS bridge's 45s overall cap upstream.
+pub const DEFAULT_DETECT_TIMEOUT_MS: u64 = 45_000;
+
+pub async fn detect(
+    sources: &[BookSource],
+    keyword: &str,
+    concurrency: usize,
+    timeout_ms: u64,
+) -> Vec<DetectResult> {
     let owned: Vec<BookSource> = sources.to_vec();
     let keyword = keyword.to_string();
+    let per_source = Duration::from_millis(timeout_ms.clamp(10_000, 120_000));
     stream::iter(owned.into_iter().map(|s| {
         let keyword = keyword.clone();
-        async move { detect_one(&s, &keyword).await }
+        async move { detect_one(&s, &keyword, per_source).await }
     }))
     .buffer_unordered(concurrency.clamp(1, 8))
     .collect()
     .await
 }
 
-async fn detect_one(source: &BookSource, keyword: &str) -> DetectResult {
+/// Run one source's detection with an aggregate timeout. A timeout is reported
+/// as `stage = "timeout"` and must be treated as *retryable* by the caller, not
+/// as proof the source is broken.
+async fn detect_one(source: &BookSource, keyword: &str, budget: Duration) -> DetectResult {
     let started = std::time::Instant::now();
+    match tokio::time::timeout(budget, detect_chain(source, keyword)).await {
+        Ok(mut out) => {
+            out.elapsedMs = started.elapsed().as_millis() as u64;
+            out
+        }
+        Err(_) => DetectResult {
+            sourceUrl: source.bookSourceUrl.clone(),
+            sourceName: source.bookSourceName.clone(),
+            ok: false,
+            stage: FailReason::Timeout.as_str().to_string(),
+            detail: "检测超时".into(),
+            contentLen: 0,
+            elapsedMs: started.elapsed().as_millis() as u64,
+        },
+    }
+}
+
+async fn detect_chain(source: &BookSource, keyword: &str) -> DetectResult {
     let mut out = DetectResult {
         sourceUrl: source.bookSourceUrl.clone(),
         sourceName: source.bookSourceName.clone(),
@@ -451,16 +484,19 @@ async fn detect_one(source: &BookSource, keyword: &str) -> DetectResult {
             found.status.error
         };
         out.detail = "搜索未命中".into();
-        out.elapsedMs = started.elapsed().as_millis() as u64;
         return out;
     }
     let item = &found.items[0];
+    if item.bookUrl.trim().is_empty() {
+        out.stage = FailReason::NoBookUrl.as_str().to_string();
+        out.detail = "搜索结果缺少书籍地址".into();
+        return out;
+    }
     let chain = verify_chain(source, &item.bookUrl, Some(&item.name)).await;
     out.ok = chain.0;
     out.stage = chain.1;
     out.detail = chain.2;
     out.contentLen = chain.3;
-    out.elapsedMs = started.elapsed().as_millis() as u64;
     out
 }
 
@@ -571,7 +607,8 @@ pub async fn verify_chain(
             );
         }
     };
-    let chapter_ct = ct_of(&chapter);
+    let mut current_ct: &'static str = ct_of(&chapter);
+    let mut current_body: String = chapter.body_text;
     let Some(content_rule) = source
         .ruleContent
         .as_ref()
@@ -586,8 +623,47 @@ pub async fn verify_chain(
             0,
         );
     };
-    let raw = clean_text(&eval_rule_concat(&chapter.body_text, chapter_ct, content_rule));
-    let len = raw.chars().count();
+    let next_rule = source
+        .ruleContent
+        .as_ref()
+        .and_then(|c| c.nextContentUrl.as_deref())
+        .map(str::trim)
+        .filter(|r| !r.is_empty() && *r != "-" && *r != "#");
+
+    // Follow `nextContentUrl` until the assembled text clears the threshold,
+    // matching `content()` / upstream `content_check`: a paginated chapter whose
+    // first page is short must not be misread as `content_short`.
+    const MAX_PAGES: usize = 30;
+    let mut len = 0usize;
+    let mut pages = 0usize;
+    let mut current_url = chapter_url.clone();
+    loop {
+        len += clean_text(&eval_rule_concat(&current_body, current_ct, content_rule))
+            .chars()
+            .count();
+        pages += 1;
+        if len >= 50 || pages >= MAX_PAGES {
+            break;
+        }
+        let Some(nr) = next_rule else { break };
+        let next = rule_dsl::extract_single(&current_body, current_ct, nr)
+            .into_iter()
+            .map(|s| s.trim().to_string())
+            .find(|s| !s.is_empty());
+        let Some(next) = next else { break };
+        let next = resolve_url(&next, &current_url);
+        if next.is_empty() || next == current_url {
+            break;
+        }
+        let next_headers = page_headers(&src_headers, &current_url);
+        let page = match client.fetch(&spec_for(&next, &next_headers)).await {
+            Ok(r) if !r.body_text.trim().is_empty() => r,
+            _ => break,
+        };
+        current_ct = ct_of(&page);
+        current_body = page.body_text;
+        current_url = next;
+    }
     if len < 50 {
         return (
             false,
@@ -817,7 +893,7 @@ mod tests {
         let content = content(&source, &chapters[1].url).await.unwrap();
         assert!(content.content.chars().count() > 50);
 
-        let detected = detect(&[source], "书", 2).await;
+        let detected = detect(&[source], "书", 2, DEFAULT_DETECT_TIMEOUT_MS).await;
         assert!(detected[0].ok, "detect failed: {:?}", detected[0]);
     }
 }
