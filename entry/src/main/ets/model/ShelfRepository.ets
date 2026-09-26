@@ -144,6 +144,30 @@ export async function saveProgress(p: ReadProgress): Promise<void> {
   await s.insert('progress', values, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
 }
 
+/** Batch-read every progress row, keyed by bookId (avoids the per-book fanout). */
+export async function getAllProgress(): Promise<Map<string, ReadProgress>> {
+  const out: Map<string, ReadProgress> = new Map<string, ReadProgress>();
+  const s: relationalStore.RdbStore | undefined = db();
+  if (s === undefined) {
+    return out;
+  }
+  const rs: relationalStore.ResultSet = await s.querySql('SELECT * FROM progress');
+  while (rs.goToNextRow()) {
+    const p: ReadProgress = {
+      bookId: rs.getString(rs.getColumnIndex('book_id')),
+      chapterIndex: rs.getLong(rs.getColumnIndex('chapter_index')),
+      chapterTitle: rs.getString(rs.getColumnIndex('chapter_title')),
+      paragraphIndex: rs.getLong(rs.getColumnIndex('paragraph_index')),
+      charOffset: rs.getLong(rs.getColumnIndex('char_offset')),
+      percent: rs.getDouble(rs.getColumnIndex('percent')),
+      updatedAt: rs.getLong(rs.getColumnIndex('updated_at'))
+    };
+    out.set(p.bookId, p);
+  }
+  rs.close();
+  return out;
+}
+
 export async function getProgress(bookId: string): Promise<ReadProgress | undefined> {
   const s: relationalStore.RdbStore | undefined = db();
   if (s === undefined) {

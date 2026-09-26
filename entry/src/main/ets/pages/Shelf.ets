@@ -2,7 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { BookCover } from '../components/BookCover';
 import { EmptyView } from '../components/EmptyView';
 import { Book, BookSource, ReadProgress } from '../engine/types';
-import { getBooks, getProgress, initShelf } from '../model/ShelfRepository';
+import { getAllProgress, getBooks, initShelf } from '../model/ShelfRepository';
 import { loadSources } from '../model/SourceRepository';
 import { isLocalBook, localSource } from '../model/LocalBook';
 import { shelfProgressText } from '../common/Format';
@@ -47,9 +47,10 @@ export struct ShelfPage {
     for (const s of sources) {
       byUrl.set(s.bookSourceUrl, s);
     }
+    const progressMap: Map<string, ReadProgress> = await getAllProgress();
     const entries: ShelfBookItem[] = [];
     for (const book of books) {
-      const progress: ReadProgress | undefined = await getProgress(book.bookId);
+      const progress: ReadProgress | undefined = progressMap.get(book.bookId);
       let source: BookSource | undefined = byUrl.get(book.sourceUrl);
       if (source === undefined && isLocalBook(book)) {
         source = localSource();
@@ -62,15 +63,6 @@ export struct ShelfPage {
   build() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
-        Row() {
-          Text(`全部书籍 · ${this.entries.length}`)
-            .fontSize(13)
-            .fontColor($r('app.color.text_4'))
-          Blank()
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 12, bottom: 8 })
-
         if (this.entries.length === 0) {
           Column() {
             EmptyView({
