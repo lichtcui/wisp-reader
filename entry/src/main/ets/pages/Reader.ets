@@ -412,9 +412,10 @@ export struct ReaderPage {
       }
       return;
     }
-    if (x < width / 3) {
+    // 竖向滚动下左右热区是「翻章」，误触成本远高于翻页，故中间菜单区放宽到 1/2（番茄/起点默认三分法适合分页阅读）。
+    if (x < width * 0.25) {
       this.prevChapter();
-    } else if (x < width * 2 / 3) {
+    } else if (x < width * 0.75) {
       this.menuVisible = true;
     } else {
       this.nextChapter();
