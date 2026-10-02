@@ -156,26 +156,23 @@ export struct ShelfPage {
               coverHeight: 76,
               radius: 6
             })
-            Column({ space: 4 }) {
+            Column({ space: 6 }) {
               Text(entry.book.name)
-                .fontSize(15)
+                .fontSize(16)
                 .fontColor($r('app.color.text_1'))
-                .lineHeight(21)
-                .maxLines(2)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .constraintSize({ minHeight: 42 })
-                .width('100%')
-              Text(entry.book.author.length > 0 ? entry.book.author : '佚名')
-                .fontSize(12)
-                .fontColor($r('app.color.text_4'))
+                .lineHeight(22)
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
                 .width('100%')
               Text(this.progressText(entry))
                 .fontSize(12)
                 .fontColor($r('app.color.text_4'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .width('100%')
             }
             .layoutWeight(1)
+            .justifyContent(FlexAlign.Start)
             .alignItems(HorizontalAlign.Start)
             .margin({ left: 12 })
           }
