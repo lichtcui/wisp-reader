@@ -5,10 +5,12 @@ import {
   downloadCover as nativeDownloadCover,
   fetchText as nativeFetchText,
   gateSources as nativeGate,
+  parse as nativeParse,
+  parseWithDiagnostics as nativeParseWithDiagnostics,
   search as nativeSearch,
   toc as nativeToc
 } from 'liblegado_core.so';
-import { Book, BookInfo, BookSource, Chapter, DetectResult, GateResult } from './types';
+import { Book, BookInfo, BookSource, Chapter, DetectResult, GateResult, ParseOutput } from './types';
 import { ContentResult, IBookEngine, SearchOptions, SearchResult } from './IBookEngine';
 
 /**
@@ -89,6 +91,15 @@ export class BookEngineNapi implements IBookEngine {
   /** Fetch a URL as text (used for importing a source list from a link). */
   async fetchText(url: string): Promise<string> {
     return nativeFetchText(url);
+  }
+
+  parse(content: string, contentType: string, rule: string): string[] {
+    return nativeParse(content, contentType, rule);
+  }
+
+  async parseWithDiagnostics(content: string, contentType: string, rule: string): Promise<ParseOutput> {
+    const raw: string = nativeParseWithDiagnostics(content, contentType, rule);
+    return JSON.parse(raw) as ParseOutput;
   }
 }
 

@@ -4,6 +4,7 @@ import {
   DetailParam,
   ListenParam,
   PlaceholderParam,
+  ROUTE_BACKUP_MANAGE,
   ROUTE_BOOK_DETAIL,
   ROUTE_CACHE_MANAGE,
   ROUTE_GENERAL_SETTINGS,
@@ -12,6 +13,7 @@ import {
   ROUTE_PLACEHOLDER,
   ROUTE_READER,
   ROUTE_READING_SETTINGS,
+  ROUTE_RULE_DEBUGGER,
   ROUTE_SOURCE_MANAGE,
   TAB_SHELF,
   TAB_SEARCH,
@@ -23,12 +25,14 @@ import { importLocalTxt } from '../model/LocalBook';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 import { BookDetailPage } from './BookDetail';
 import { BookSourceManagePage } from './BookSourceManage';
+import { BackupManagePage } from './BackupManage';
 import { CacheManagePage } from './CacheManage';
 import { GeneralSettingsPage } from './GeneralSettings';
 import { ListeningPage } from './Listening';
 import { ListeningSettingsPage } from './ListeningSettings';
 import { ReaderPage } from './Reader';
 import { ReadingSettingsPage } from './ReadingSettings';
+import { RuleDebuggerPage } from './RuleDebugger';
 import { SearchPage } from './Search';
 import { SettingsPage } from './Settings';
 import { ShelfPage } from './Shelf';
@@ -62,6 +66,8 @@ struct Index {
       this.pathStack.pushPath({ name: ROUTE_LISTENING_SETTINGS });
     } else if (title === '清理缓存') {
       this.pathStack.pushPath({ name: ROUTE_CACHE_MANAGE });
+    } else if (title === '备份与恢复') {
+      this.pathStack.pushPath({ name: ROUTE_BACKUP_MANAGE });
     } else {
       this.pushPlaceholder(title);
     }
@@ -113,37 +119,17 @@ struct Index {
     ];
   }
 
-  // ── Top navigation bar ────────────────────────────────────────
+  // ── Shelf header (title + 更多 menu) ───────────────────────────
 
   @Builder
-  topTab(label: string, index: number) {
-    Text(label)
-      .fontSize(18)
-      .fontWeight(this.activeTab === index ? FontWeight.Bold : FontWeight.Normal)
-      .fontColor(this.activeTab === index ? $r('app.color.text_1') : $r('app.color.text_2'))
-      .onClick(() => {
-        this.activeTab = index;
-        this.tabsController.changeIndex(index);
-      })
-  }
-
-  @Builder
-  menuTrigger() {
-    MoreMenuButton({ items: this.shelfMenuItems() })
-  }
-
-  @Builder
-  topBar() {
+  shelfHeader() {
     Row() {
-      Row({ space: 20 }) {
-        this.topTab('书架', TAB_SHELF)
-        this.topTab('搜索', TAB_SEARCH)
-        this.topTab('设置', TAB_SETTINGS)
-      }
+      Text('书架')
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_1'))
       Blank()
-      if (this.activeTab === TAB_SHELF) {
-        this.menuTrigger()
-      }
+      MoreMenuButton({ items: this.shelfMenuItems() })
     }
     .width('100%')
     .height(52)
@@ -151,13 +137,62 @@ struct Index {
     .alignItems(VerticalAlign.Center)
   }
 
+  // ── Bottom navigation bar ─────────────────────────────────────
+
+  @Builder
+  bottomTab(icon: Resource, label: string, index: number) {
+    Column({ space: 2 }) {
+      SymbolGlyph(icon)
+        .fontSize(24)
+        .fontColor([this.activeTab === index ? $r('app.color.brand') : $r('app.color.text_3')])
+      Text(label)
+        .fontSize(11)
+        .fontColor(this.activeTab === index ? $r('app.color.brand') : $r('app.color.text_3'))
+    }
+    .layoutWeight(1)
+    .height(60)
+    .justifyContent(FlexAlign.Center)
+    .accessibilityText(label)
+    .onClick(() => {
+      this.activeTab = index;
+      this.tabsController.changeIndex(index);
+    })
+  }
+
+  @Builder
+  bottomBar() {
+    Row() {
+      this.bottomTab($r('sys.symbol.bookshelf'), '书架', TAB_SHELF)
+      this.bottomTab($r('sys.symbol.magnifyingglass'), '搜索', TAB_SEARCH)
+      this.bottomTab($r('sys.symbol.gearshape'), '设置', TAB_SETTINGS)
+    }
+    .width('100%')
+    .height(60)
+    .backgroundColor($r('app.color.bg_page'))
+    .border({ width: { top: 1 }, color: $r('app.color.divider') })
+  }
+
   @Builder
   pageMap(name: string, param: object) {
     if (name === ROUTE_SOURCE_MANAGE) {
       NavDestination() {
-        BookSourceManagePage()
+        BookSourceManagePage({
+          onOpenDebugger: () => this.pathStack.pushPath({ name: ROUTE_RULE_DEBUGGER })
+        })
       }
       .title('书源管理')
+      .backgroundColor($r('app.color.bg_page'))
+    } else if (name === ROUTE_RULE_DEBUGGER) {
+      NavDestination() {
+        RuleDebuggerPage()
+      }
+      .title('规则调试器')
+      .backgroundColor($r('app.color.bg_page'))
+    } else if (name === ROUTE_BACKUP_MANAGE) {
+      NavDestination() {
+        BackupManagePage()
+      }
+      .title('备份与恢复')
       .backgroundColor($r('app.color.bg_page'))
     } else if (name === ROUTE_READING_SETTINGS) {
       NavDestination() {
@@ -240,7 +275,9 @@ struct Index {
   build() {
     Navigation(this.pathStack) {
       Column() {
-        this.topBar()
+        if (this.activeTab === TAB_SHELF) {
+          this.shelfHeader()
+        }
 
         Tabs({ barPosition: BarPosition.Start, index: this.activeTab, controller: this.tabsController }) {
           TabContent() {
@@ -286,6 +323,8 @@ struct Index {
         .layoutWeight(1)
         .width('100%')
         .backgroundColor($r('app.color.bg_page'))
+
+        this.bottomBar()
       }
       .width('100%')
       .height('100%')

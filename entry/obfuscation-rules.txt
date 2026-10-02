@@ -136,3 +136,21 @@ rendererFlags
 usage
 eventType
 hintType
+# Backup payload (BackupManage)
+schemaVersion
+exportedAt
+sources
+books
+progress
+# Native NAPI import names (liblegado_core.so) — must match the .so exports
+-keep-global-name
+bookInfo
+content
+detect
+downloadCover
+fetchText
+gateSources
+parse
+parseWithDiagnostics
+search
+toc

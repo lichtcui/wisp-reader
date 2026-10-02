@@ -1,4 +1,4 @@
-import { Book, BookSource, BookSearchItem, Chapter, SourceStatus } from './types';
+import { Book, BookSource, BookSearchItem, Chapter, ParseOutput, SourceStatus } from './types';
 
 export interface SearchOptions {
   timeoutMs: number;
@@ -23,4 +23,10 @@ export interface IBookEngine {
   toc(source: BookSource, tocUrl: string): Promise<Chapter[]>;
 
   content(source: BookSource, chapterUrl: string): Promise<ContentResult>;
+
+  /** Extract values from HTML/JSON applying a Legado DSL rule (sync). */
+  parse(content: string, contentType: string, rule: string): string[];
+
+  /** Like `parse`, but also returns rule diagnostics for the debugger. */
+  parseWithDiagnostics(content: string, contentType: string, rule: string): Promise<ParseOutput>;
 }

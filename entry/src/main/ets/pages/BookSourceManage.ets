@@ -4,7 +4,7 @@ import { util } from '@kit.ArkTS';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { BookSource, DetectResult, ExcludedSource, GateResult } from '../engine/types';
 import { enabledSources, loadSources, resetToBundled, saveSources } from '../model/SourceRepository';
-import { GroupTitle, InsetDivider } from '../components/ListCells';
+import { GroupTitle, InsetDivider, NavCell } from '../components/ListCells';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 import { DEFAULT_DETECT_KEYWORD } from '../common/Const';
 
@@ -146,6 +146,7 @@ export struct BookSourceManagePage {
   @Local busy: boolean = false;
   @Local detectResults: DetectResult[] = [];
   @Local statusVisible: boolean = false;
+  @Event onOpenDebugger: () => void = () => {};
 
   aboutToAppear(): void {
     const ctx: common.UIAbilityContext | undefined =
@@ -599,6 +600,14 @@ export struct BookSourceManagePage {
               .borderRadius(12)
               .margin({ left: 16, right: 16, top: 12 })
             }
+
+            GroupTitle({ text: '工具' })
+            NavCell({
+              label: '规则调试器',
+              value: '',
+              showArrow: true,
+              onTap: () => this.onOpenDebugger()
+            })
 
             GroupTitle({ text: `书源（${enabledSources(this.sources).length}/${this.sources.length} 启用）` })
             Column() {
