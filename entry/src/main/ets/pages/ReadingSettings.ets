@@ -129,7 +129,7 @@ export struct ReadingSettingsPage {
           .width('100%')
           .padding({ left: 16, right: 12, top: 8, bottom: 8 })
 
-          Text('字号与行距即时生效并持久化；屏幕常亮仅在本应用内生效；单手翻页放大左右翻页热区、保留中间菜单区。')
+          Text('字号与行距即时生效并持久化；屏幕常亮仅在本应用内生效；单手翻页：左右点按均翻下一页、中间窄条呼出菜单。')
             .fontSize(12)
             .fontColor($r('app.color.text_4'))
             .width('100%')

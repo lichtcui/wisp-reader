@@ -316,6 +316,21 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 - 播放位置/时长按字数估算（`CHARS_PER_SECOND=5`），非精确音频时间轴；锁屏 `seek` 按估算定位到段。
 - 音色 21（男声）需系统已下载，未下载时 `createEngine` 失败并回退并提示。
 
+## 阅读页横向分页翻页 + 跨章连续滑动（2026-10-04，真机验证）
+
+阅读页从「竖向滚动」改为「横向分页翻页」（Swiper + `measureTextSize` 测字精确分页），并实现
+「上一章+本章+下一章」跨章连续滑动。完整踩坑与代码状态见 [`handoff/HANDOFF-S10.md`](./handoff/HANDOFF-S10.md)。
+
+| 验证项 | 结果 |
+|---|---|
+| 横向 Swiper 分页（测字精确分页，段可跨页拆字符） | ✅ |
+| 跨章连续滑动（上一章+本章+下一章扁平页流，上一章/下一章暖载） | ✅ |
+| 单手/非单手翻页模式 + 左右滑手势 | ✅ |
+| 字号/行距/昼夜即时重排 | ✅ |
+| 目录缓存（`model/TocCache.ets`，内存 LRU + 落盘） | ✅ |
+| **末页/首页闪烁一帧「满页」** | ✅ 已修（声明式 `.index(this.pageIndex)` 原子跳位，弃用 postFrameCallback 命令式 changeIndex） |
+| 编译 + 真机装机闭环（只改 ArkTS，不动 Rust/.so） | ✅ |
+
 ## 未决 / 风险
 - 目录分页 `nextTocUrl` / 卷 `isVolume` 已在引擎实现（真机 detect 覆盖当页路径），多页目录待复验。
 - 书源持久化仍用 `preferences` JSON（书籍/进度已用 `relationalStore`）；后续可迁移统一。

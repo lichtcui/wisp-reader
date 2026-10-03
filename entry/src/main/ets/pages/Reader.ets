@@ -24,15 +24,35 @@ import {
 import { getProgress, saveProgress } from '../model/ShelfRepository';
 import { ReaderTheme } from '../common/ReaderTheme';
 import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
+import { getCachedToc, putCachedToc } from '../model/TocCache';
 import { isLocalBook, loadLocalChapters, loadLocalContent } from '../model/LocalBook';
 import { TtsController } from '../model/TtsController';
 import { FloatingListenButton } from '../ui/common/FloatingListenButton';
 import { AppBackButton } from '../ui/common/AppBackButton';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
+import { MeasureOptions } from '@ohos.measure';
 
 const PANEL_NONE: string = '';
 const PANEL_TOC: string = 'toc';
 const PANEL_SETTINGS: string = 'settings';
+
+/** 一页中的一个段落片段：指向某章某段落的一段字符区间（段落可跨页拆分）。 */
+class PageSeg {
+  /** 所属章节在 this.chapters 里的下标（跨章连续页流需要据此取对应章的段落文本）。 */
+  chapterIndex: number;
+  para: number;
+  start: number;
+  end: number;
+
+  constructor(chapterIndex: number, para: number, start: number, end: number) {
+    this.chapterIndex = chapterIndex;
+    this.para = para;
+    this.start = start;
+    this.end = end;
+  }
+}
+
+
 
 @ComponentV2
 export struct ReaderPage {
@@ -57,14 +77,26 @@ export struct ReaderPage {
   @Local nightMode: boolean = READER_NIGHT_DEFAULT;
   @Local oneHandMode: boolean = READER_ONE_HAND_PAGE_DEFAULT;
   @Local contentWidth: number = 360;
+  @Local contentHeight: number = 640;
+  /** 是否已由 onAreaChange 测量到真实可用尺寸（首次分页前防用默认值）。 */
+  @Local sized: boolean = false;
+  @Local pages: PageSeg[][] = [];
+  @Local pageIndex: number = 0;
   @Local sliderValue: number = 1;
   @Local tts: TtsController = TtsController.instance();
 
-  private contentScroller: Scroller = new Scroller();
+  private swiperController: SwiperController = new SwiperController();
   private tocScroller: Scroller = new Scroller();
+  /** 滑动手势开始时所在页，用于判定边界翻章（区分正常翻页与末页/首页回弹）。 */
+  private swipeStartPage: number = 0;
   @Local dataSource: ChapterDataSource = new ChapterDataSource();
   /** Monotonic token so a slow chapter fetch cannot overwrite a newer one. */
   private loadGen: number = 0;
+  /** 各章已 sanitize 的段落缓存（key=章节下标）。跨章连续页流需要同时分页上一章/本章/下一章。 */
+  private paraCache: Map<number, string[]> = new Map();
+  /** 当前可视页的身份（首段 chapterIndex@para@start）。重排窗口后用它对回同一页，
+      长段落跨页拆分时 start 能区分“同一段落的最后一页”与“倒数第二页”。 */
+  private currentPageId: string = '';
 
   @Monitor('tts.paragraphIndex', 'tts.chapterIndex')
   onTtsProgress(): void {
@@ -76,9 +108,11 @@ export struct ReaderPage {
       this.loadChapter(this.tts.chapterIndex);
       return;
     }
-    try {
-      this.contentScroller.scrollToIndex(this.tts.paragraphIndex);
-    } catch (err) {
+    const page: number = this.flatIndexOf(this.chapterIndex, this.tts.paragraphIndex);
+    if (page >= 0 && page < this.pages.length && page !== this.pageIndex) {
+      this.pageIndex = page;
+      this.paragraphIndex = this.pages[page][0].para;
+      this.swiperController.changeIndex(page, true);
     }
   }
 
@@ -140,6 +174,26 @@ export struct ReaderPage {
     return this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
   }
 
+  /**
+   * Fetch the chapter list, serving a previously cached TOC when the book's
+   * `tocUrl` is unchanged so re-opening a long book doesn't re-crawl every TOC
+   * page over the network.
+   */
+  private async loadToc(src: BookSource, book: Book): Promise<Chapter[]> {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx !== undefined) {
+      const cached: Chapter[] | undefined = getCachedToc(ctx, book.bookId, book.tocUrl);
+      if (cached !== undefined && cached.length > 0) {
+        return cached;
+      }
+    }
+    const chapters: Chapter[] = await bookEngine.toc(src, book.tocUrl);
+    if (ctx !== undefined) {
+      putCachedToc(ctx, book.bookId, book.tocUrl, chapters);
+    }
+    return chapters;
+  }
+
   private async load(): Promise<void> {
     const src: BookSource | undefined = this.source;
     const book: Book | undefined = this.book;
@@ -154,7 +208,7 @@ export struct ReaderPage {
         const c: common.UIAbilityContext | undefined = this.ctx();
         chapters = c !== undefined ? loadLocalChapters(c, book) : [];
       } else {
-        chapters = await bookEngine.toc(src, book.tocUrl);
+        chapters = await this.loadToc(src, book);
       }
       this.chapters = chapters;
       this.buildTocItems();
@@ -296,7 +350,7 @@ export struct ReaderPage {
     return out;
   }
 
-  private async loadChapter(index: number, restoreParagraph: number = 0): Promise<void> {
+  private async loadChapter(index: number, restoreParagraph: number = 0, restoreAtEnd: boolean = false): Promise<void> {
     if (!this.isReadable(index)) {
       return;
     }
@@ -305,12 +359,12 @@ export struct ReaderPage {
     const chapter: Chapter = this.chapters[index];
     const cached: string | undefined = this.cachedContent(chapter, index);
     if (cached !== undefined) {
-      this.applyChapter(index, cached, restoreParagraph);
+      this.applyChapter(index, cached, restoreParagraph, restoreAtEnd);
       await this.persistProgress();
       if (gen !== this.loadGen) {
         return;
       }
-      this.prefetch(this.nextReadable(index));
+      this.warmNeighbors();
       return;
     }
     this.loading = true;
@@ -319,12 +373,12 @@ export struct ReaderPage {
       if (gen !== this.loadGen) {
         return;
       }
-      this.applyChapter(index, content, restoreParagraph);
+      this.applyChapter(index, content, restoreParagraph, restoreAtEnd);
       await this.persistProgress();
       if (gen !== this.loadGen) {
         return;
       }
-      this.prefetch(this.nextReadable(index));
+      this.warmNeighbors();
     } catch (err) {
       if (gen === this.loadGen) {
         this.failed = '正文加载失败，点击重试';
@@ -335,23 +389,56 @@ export struct ReaderPage {
   }
 
   /** Commit a loaded chapter body to the reading surface. */
-  private applyChapter(index: number, content: string, restoreParagraph: number): void {
+  private applyChapter(index: number, content: string, restoreParagraph: number, restoreAtEnd: boolean = false): void {
     const chapter: Chapter = this.chapters[index];
     const paragraphs: string[] = this.sanitize(content, chapter.title);
     this.chapterIndex = index;
     this.paragraphs = paragraphs;
+    this.paraCache.set(index, paragraphs);
     this.sliderValue = index + 1;
-    this.paragraphIndex = paragraphs.length > 0
-      ? Math.min(Math.max(restoreParagraph, 0), paragraphs.length - 1)
-      : 0;
+    this.paragraphIndex = restoreAtEnd
+      ? (paragraphs.length > 0 ? paragraphs.length - 1 : 0)
+      : (paragraphs.length > 0 ? Math.min(Math.max(restoreParagraph, 0), paragraphs.length - 1) : 0);
     this.loading = false;
-    const target: number = this.paragraphIndex;
-    setTimeout(() => {
-      try {
-        this.contentScroller.scrollToIndex(target);
-      } catch (err) {
+    // 首次进入时尺寸尚未测出（contentWidth/Height 还是默认值），若立即 rebuildWindow
+    // 会用错误的默认尺寸排版，onAreaChange 再重排一次，就会先闪一帧“未铺满”页面。
+    // 所以：尺寸未测出时先清空 pages，由 onAreaChange 用真实尺寸完成首次分页。
+    if (this.sized) {
+      this.rebuildWindow(restoreAtEnd);
+    } else {
+      this.pages = [];
+    }
+  }
+
+  /** 提前把相邻章（上一章/下一章）的段落文本暖载进 paraCache，供跨章连续页流拼接。 */
+  private async warmNeighbors(): Promise<void> {
+    const book: Book | undefined = this.book;
+    if (book === undefined) {
+      return;
+    }
+    const gen: number = this.loadGen;
+    const targets: number[] = [this.prevReadable(this.chapterIndex), this.nextReadable(this.chapterIndex)];
+    for (const n of targets) {
+      if (n < 0 || this.paraCache.has(n)) {
+        continue;
       }
-    }, 60);
+      const chapter: Chapter = this.chapters[n];
+      const cached: string | undefined = this.cachedContent(chapter, n);
+      let content: string | undefined = cached;
+      if (content === undefined) {
+        try {
+          content = await this.fetchContent(chapter, n);
+        } catch (err) {
+          continue;
+        }
+      }
+      if (content !== undefined) {
+        this.paraCache.set(n, this.sanitize(content, chapter.title));
+      }
+    }
+    if (gen === this.loadGen && this.sized) {
+      this.rebuildWindow(false);
+    }
   }
 
   /** Warm the file cache for the next chapter in the background. */
@@ -383,19 +470,279 @@ export struct ReaderPage {
   }
 
   private prevChapter(): void {
-    this.loadChapter(this.prevReadable(this.chapterIndex));
+    // 翻到上一章的最后一页：restoreAtEnd=true，applyChapter/rebuildWindow 会直接定位到末页。
+    this.loadChapter(this.prevReadable(this.chapterIndex), 0, true);
   }
 
   private nextChapter(): void {
     this.loadChapter(this.nextReadable(this.chapterIndex));
   }
 
-  private onScrollIndex(start: number): void {
-    if (this.paragraphs.length === 0) {
-      this.paragraphIndex = 0;
+  private nextPage(): void {
+    if (this.pageIndex < this.pages.length - 1) {
+      this.swiperController.changeIndex(this.pageIndex + 1, true);
+    } else {
+      // 本章最后一页：翻到下一章开头。
+      this.nextChapter();
+    }
+  }
+
+  private prevPage(): void {
+    if (this.pageIndex > 0) {
+      this.swiperController.changeIndex(this.pageIndex - 1, true);
+    } else {
+      // 本章第一页：翻到上一章最后一页。
+      this.prevChapter();
+    }
+  }
+
+  private onPageChanged(index: number): void {
+    this.pageIndex = index;
+    if (index < 0 || index >= this.pages.length || this.pages[index].length === 0) {
+      this.persistProgress();
       return;
     }
-    this.paragraphIndex = Math.min(Math.max(start, 0), this.paragraphs.length - 1);
+    const seg: PageSeg = this.pages[index][0];
+    if (seg.chapterIndex !== this.chapterIndex) {
+      // 滑进了相邻章：以当前可视页（首段身份）为锚，把视觉页不变地“重锚”到该章。
+      this.chapterIndex = seg.chapterIndex;
+      this.sliderValue = seg.chapterIndex + 1;
+      const paras: string[] | undefined = this.paraCache.get(seg.chapterIndex);
+      if (paras !== undefined) {
+        this.paragraphs = paras;
+      }
+      this.currentPageId = this.pageIdFor(seg);
+      this.paragraphIndex = seg.para;
+      this.rebuildWindow(false);
+      this.warmNeighbors();
+    } else {
+      this.currentPageId = this.pageIdFor(seg);
+      this.paragraphIndex = seg.para;
+    }
+    this.persistProgress();
+  }
+
+  /** 可用内容宽度（去左右 padding 各 20），单位 vp，与 measure 约束宽度、渲染宽度对齐。 */
+  private availWidthPx(): number {
+    const w: number = this.contentWidth > 0 ? this.contentWidth : 360;
+    return Math.max(120, w - 40);
+  }
+
+  /** 可用内容高度（去上下 padding 各 20），单位 vp。 */
+  private availHeightPx(): number {
+    const h: number = this.contentHeight > 0 ? this.contentHeight : 640;
+    return Math.max(120, h - 40);
+  }
+
+  /** 段落下边距（渲染里标题用 fontSize、正文用 fontSize*0.6；margin 数值单位为 vp）。 */
+  private paraMargin(para: number): number {
+    return para === 0 ? this.fontSize : this.fontSize * 0.6;
+  }
+
+  /** 构造度量选项，与渲染 Text 属性严格对齐（字号/字重/行高/约束宽度/对齐）。 */
+  private measureOptions(para: number): MeasureOptions {
+    const isTitle: boolean = para === 0;
+    const options: MeasureOptions = {
+      textContent: '',
+      constraintWidth: this.availWidthPx(),
+      // 显式 fp 单位，与渲染 Text 的 .fontSize/.lineHeight（number 均为 fp）严格对齐。
+      fontSize: `${isTitle ? this.fontSize + 3 : this.fontSize}fp`,
+      fontWeight: isTitle ? FontWeight.Bold : FontWeight.Normal,
+      lineHeight: `${this.fontSize * this.lineHeight}fp`,
+      textAlign: TextAlign.Start
+    };
+    return options;
+  }
+
+  /** 实测段落在 [start, end) 文本的渲染高度（px）。 */
+  private measureHeight(para: number, text: string, start: number, end: number): number {
+    const options: MeasureOptions = this.measureOptions(para);
+    options.textContent = text.substring(start, end);
+    const size: SizeOptions = this.getUIContext().getMeasureUtils().measureTextSize(options);
+    return Number(size.height);
+  }
+
+  /** 二分查找：段落从 pos 起、实测高度不超过 budgetPx 的最大字符截断位置（高度随长度单调不减）。 */
+  private maxCharsFit(para: number, text: string, pos: number, budgetPx: number): number {
+    let lo: number = pos;
+    let hi: number = text.length;
+    while (lo < hi) {
+      const mid: number = Math.floor((lo + hi + 1) / 2);
+      if (this.measureHeight(para, text, pos, mid) <= budgetPx) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return lo;
+  }
+
+  /**
+   * 用 measureTextSize 实测每段/每片段渲染高度（px）并贪心打包成页。
+   * 容量用 vp2px(可用高度)、段下边距同样 vp2px 换算，保持与渲染完全一致：
+   * 既不会页面排不满，也不会末行被裁。
+   */
+  private paginateChapter(paras: string[], chapterIndex: number): PageSeg[][] {
+    const capacity: number = this.getUIContext().vp2px(this.availHeightPx());
+    const pages: PageSeg[][] = [];
+    let cur: PageSeg[] = [];
+    let curH: number = 0;
+    const n: number = paras.length;
+
+    for (let para = 0; para < n; para++) {
+      const text: string = paras[para];
+      if (text.length === 0) {
+        continue;
+      }
+      const margin: number = this.getUIContext().vp2px(this.paraMargin(para));
+      let pos: number = 0;
+      while (pos < text.length) {
+        const budget: number = capacity - curH - margin;
+        if (budget <= 0) {
+          // 本页放不下本段（连同边距）：翻页重试；空页时至少塞 1 字符避免死循环。
+          if (cur.length > 0) {
+            pages.push(cur);
+            cur = [];
+            curH = 0;
+            continue;
+          }
+          const one: number = Math.min(text.length, pos + 1);
+          cur.push(new PageSeg(chapterIndex, para, pos, one));
+          curH = capacity;
+          pos = one;
+          continue;
+        }
+        // 先测剩余整段高度：绝大多数段落整段可放入当前页，只需 1 次测量；
+        // 只有真的超出一页的超长段才退化为二分逐字符找截断点（避免每段都二分拖慢翻章）。
+        const fullH: number = this.measureHeight(para, text, pos, text.length);
+        let end: number = text.length;
+        let segH: number = fullH;
+        if (fullH > budget) {
+          end = this.maxCharsFit(para, text, pos, budget);
+          segH = this.measureHeight(para, text, pos, end);
+        }
+        if (end <= pos) {
+          // 连一个字符都超预算（罕见）：翻页，或空页时塞 1 字符。
+          if (cur.length > 0) {
+            pages.push(cur);
+            cur = [];
+            curH = 0;
+            continue;
+          }
+          const one: number = Math.min(text.length, pos + 1);
+          cur.push(new PageSeg(chapterIndex, para, pos, one));
+          curH = capacity;
+          pos = one;
+          continue;
+        }
+        cur.push(new PageSeg(chapterIndex, para, pos, end));
+        curH += segH + margin;
+        pos = end;
+        if (curH >= capacity - 1 && (pos < text.length || para < n - 1)) {
+          pages.push(cur);
+          cur = [];
+          curH = 0;
+        }
+      }
+    }
+    if (cur.length > 0) {
+      pages.push(cur);
+    }
+    return pages;
+  }
+
+  /** 扁平页流里，查找“首个末段 para>=目标、且属于章节 ch”的页的下标（在 ch 章内定位段落）。 */
+  private flatIndexOf(ch: number, para: number): number {
+    let first: number = -1;
+    for (let p = 0; p < this.pages.length; p++) {
+      const arr: PageSeg[] = this.pages[p];
+      if (arr.length === 0 || arr[0].chapterIndex !== ch) {
+        continue;
+      }
+      if (first < 0) {
+        first = p;
+      }
+      if (para <= arr[arr.length - 1].para) {
+        return p;
+      }
+    }
+    return first >= 0 ? first : 0;
+  }
+
+  /** 扁平页流里，章节 ch 的最后一页下标。 */
+  private lastIndexOf(ch: number): number {
+    let last: number = -1;
+    for (let p = 0; p < this.pages.length; p++) {
+      if (this.pages[p].length > 0 && this.pages[p][0].chapterIndex === ch) {
+        last = p;
+      }
+    }
+    return last >= 0 ? last : 0;
+  }
+
+  /** 页身份：首段 chapterIndex@para@start（唯一标识一页，含长段落跨页拆分场景）。 */
+  private pageIdFor(seg: PageSeg): string {
+    return `${seg.chapterIndex}@${seg.para}@${seg.start}`;
+  }
+
+  private indexOfPageId(id: string): number {
+    for (let p = 0; p < this.pages.length; p++) {
+      const arr: PageSeg[] = this.pages[p];
+      if (arr.length > 0 && this.pageIdFor(arr[0]) === id) {
+        return p;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * 重建「上一章 + 本章 + 下一章」的连续页流（跨章页流）。
+   * 只有本地/缓存里已有段落文本的邻居章才会并入（否则以待后续异步暖载后再重建）。
+   * 以当前段落为锚点定位本章页面；atEnd 时定位到本章最后一页。
+   */
+  private rebuildWindow(atEnd: boolean = false): void {
+    const prev: number = this.prevReadable(this.chapterIndex);
+    const next: number = this.nextReadable(this.chapterIndex);
+    let flat: PageSeg[][] = [];
+    if (prev >= 0) {
+      const p: string[] | undefined = this.paraCache.get(prev);
+      if (p !== undefined && p.length > 0) {
+        flat = flat.concat(this.paginateChapter(p, prev));
+      }
+    }
+    flat = flat.concat(this.paginateChapter(this.paragraphs, this.chapterIndex));
+    if (next >= 0) {
+      const n: string[] | undefined = this.paraCache.get(next);
+      if (n !== undefined && n.length > 0) {
+        flat = flat.concat(this.paginateChapter(n, next));
+      }
+    }
+    this.pages = flat;
+    if (atEnd) {
+      this.pageIndex = this.lastIndexOf(this.chapterIndex);
+      const segs: PageSeg[] | undefined = this.pages[this.pageIndex];
+      if (segs !== undefined && segs.length > 0) {
+        const tail: PageSeg = segs[segs.length - 1];
+        this.currentPageId = this.pageIdFor(segs[0]);
+        this.paragraphIndex = tail.para;
+      }
+    } else {
+      // 优先用当前可视页身份精确回找（避免长段落跨页拆分时用 para 定位漂到倒数第二页），
+      // 找不到（如首次进入）再退回段落锚点。
+      let page: number = this.currentPageId !== '' ? this.indexOfPageId(this.currentPageId) : -1;
+      if (page < 0) {
+        page = this.flatIndexOf(this.chapterIndex, this.paragraphIndex);
+      }
+      this.pageIndex = page;
+      const segs: PageSeg[] | undefined = this.pages[this.pageIndex];
+      if (segs !== undefined && segs.length > 0) {
+        this.currentPageId = this.pageIdFor(segs[0]);
+        this.paragraphIndex = segs[0].para;
+      }
+    }
+    // index 用声明式 .index(this.pageIndex) 绑定（见 contentPager），与 this.pages 同为 @Local，
+    // 在同一同步块内更新、同一渲染帧原子生效，避免命令式 changeIndex 作用在旧树/下一帧才生效
+    // 的竞态导致的“闪一帧满页”。
   }
 
   private onContentTap(x: number, width: number): void {
@@ -403,22 +750,21 @@ export struct ReaderPage {
       return;
     }
     if (this.oneHandMode) {
-      if (x < width * 0.45) {
-        this.prevChapter();
-      } else if (x > width * 0.55) {
-        this.nextChapter();
+      // 单手：左右都是下一页，中间窄条呼出菜单。
+      if (x < width * 0.45 || x > width * 0.55) {
+        this.nextPage();
       } else {
         this.menuVisible = true;
       }
       return;
     }
-    // 竖向滚动下左右热区是「翻章」，误触成本远高于翻页，故中间菜单区放宽到 1/2（番茄/起点默认三分法适合分页阅读）。
-    if (x < width * 0.25) {
-      this.prevChapter();
-    } else if (x < width * 0.75) {
+    // 非单手：左 1/3 上一页、中 1/3 呼出菜单、右 1/3 下一页。
+    if (x < width * 0.33) {
+      this.prevPage();
+    } else if (x < width * 0.66) {
       this.menuVisible = true;
     } else {
-      this.nextChapter();
+      this.nextPage();
     }
   }
 
@@ -465,13 +811,22 @@ export struct ReaderPage {
     ));
   }
 
-  private isSpeaking(index: number): boolean {
+  private isSpeaking(seg: PageSeg): boolean {
     const book: Book | undefined = this.book;
     if (book === undefined || !this.tts.isActiveFor(book.bookId)) {
       return false;
     }
-    return this.tts.chapterIndex === this.chapterIndex
-      && this.tts.paragraphIndex === index;
+    return this.tts.chapterIndex === seg.chapterIndex
+      && this.tts.paragraphIndex === seg.para;
+  }
+
+  /** 取章节 ch 的段落文本（当前章用 this.paragraphs，邻居章用 paraCache）。 */
+  private paragraphsOf(ch: number): string[] {
+    if (ch === this.chapterIndex) {
+      return this.paragraphs;
+    }
+    const p: string[] | undefined = this.paraCache.get(ch);
+    return p !== undefined ? p : [];
   }
 
   private toggleNight(): void {
@@ -560,6 +915,7 @@ export struct ReaderPage {
     if (ctx !== undefined) {
       putNumber(ctx, KEY_READER_FONT_SIZE, next);
     }
+    this.rebuildWindow();
   }
 
   private changeLineHeight(delta: number): void {
@@ -569,6 +925,7 @@ export struct ReaderPage {
     if (ctx !== undefined) {
       putNumber(ctx, KEY_READER_LINE_HEIGHT, next);
     }
+    this.rebuildWindow();
   }
 
   // ── Colors (reader keeps its own day/night, independent of global theme) ──
@@ -862,7 +1219,25 @@ export struct ReaderPage {
       .width('100%')
       .padding({ left: 16, right: 16, top: 8, bottom: 8 })
 
-      Text('阅读页独立于全局主题；设置即时生效并持久化。')
+      Row() {
+        Text('单手翻页')
+          .fontSize(15)
+          .fontColor(this.textColor())
+        Blank()
+        Toggle({ type: ToggleType.Switch, isOn: this.oneHandMode })
+          .selectedColor($r('app.color.brand'))
+          .onChange((isOn: boolean) => {
+            this.oneHandMode = isOn;
+            const ctx: common.UIAbilityContext | undefined = this.ctx();
+            if (ctx !== undefined) {
+              putBoolean(ctx, KEY_READER_ONE_HAND_PAGE, isOn);
+            }
+          })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+
+      Text('设置即时生效并持久化；单手翻页：左右点按均翻下一页、中间窄条呼出菜单。')
         .fontSize(12)
         .fontColor(this.dimColor())
         .width('100%')
@@ -873,36 +1248,69 @@ export struct ReaderPage {
   }
 
   @Builder
-  contentList() {
-    List({ space: 0, scroller: this.contentScroller }) {
-      ForEach(this.paragraphs, (p: string, index: number) => {
-        ListItem() {
-          Text(p)
-            .fontSize(index === 0 ? this.fontSize + 3 : this.fontSize)
-            .fontWeight(index === 0 ? FontWeight.Bold : FontWeight.Normal)
-            .lineHeight(this.fontSize * this.lineHeight)
-            .fontColor(this.isSpeaking(index) ? $r('app.color.brand') : this.textColor())
-            .width('100%')
-            .margin({ bottom: index === 0 ? this.fontSize : this.fontSize * 0.6 })
+  contentPager() {
+    Swiper(this.swiperController) {
+      ForEach(this.pages, (page: PageSeg[], pageIdx: number) => {
+        Column() {
+          ForEach(page, (seg: PageSeg) => {
+            Text(this.paragraphsOf(seg.chapterIndex)[seg.para].substring(seg.start, seg.end))
+              .fontSize(seg.para === 0 ? this.fontSize + 3 : this.fontSize)
+              .fontWeight(seg.para === 0 ? FontWeight.Bold : FontWeight.Normal)
+              .lineHeight(this.fontSize * this.lineHeight)
+              .fontColor(this.isSpeaking(seg) ? $r('app.color.brand') : this.textColor())
+              .width('100%')
+              .margin({ bottom: seg.para === 0 ? this.fontSize : this.fontSize * 0.6 })
+          }, (seg: PageSeg) => seg.chapterIndex.toString() + '_' + seg.para.toString() + '_' + seg.start.toString() + '_' + seg.end.toString())
         }
-      }, (p: string, index: number) => this.chapterIndex.toString() + '_' + index.toString())
+        .width('100%')
+        .height('100%')
+        .alignItems(HorizontalAlign.Start)
+      }, (page: PageSeg[], pageIdx: number) => page.length > 0
+        ? page[0].chapterIndex.toString() + '_' + page[0].para.toString() + '_' + page[0].start.toString()
+        : ('empty_' + pageIdx.toString()))
     }
     .width('100%')
     .height('100%')
-    .padding({ left: 20, right: 20, top: 20, bottom: 40 })
-    .scrollBar(BarState.Off)
-    .onScrollIndex((start: number) => {
-      this.onScrollIndex(start);
-    })
-    .onScrollStop(() => {
-      this.persistProgress();
+    .padding({ left: 20, right: 20, top: 20, bottom: 20 })
+    .loop(false)
+    .index(this.pageIndex)
+    .indicator(false)
+    .onChange((index: number) => {
+      this.onPageChanged(index);
     })
     .onAreaChange((oldValue: Area, newValue: Area) => {
-      this.contentWidth = Number(newValue.width);
+      const w: number = Number(newValue.width);
+      const h: number = Number(newValue.height);
+      if (w !== this.contentWidth || h !== this.contentHeight || !this.sized) {
+        this.contentWidth = w;
+        this.contentHeight = h;
+        this.sized = true;
+        this.rebuildWindow();
+      }
     })
     .onClick((event: ClickEvent) => {
       this.onContentTap(event.x, this.contentWidth);
     })
+    .parallelGesture(
+      PanGesture({ direction: PanDirection.Horizontal, distance: 20 })
+        .onActionStart(() => {
+          this.swipeStartPage = this.pageIndex;
+        })
+        .onActionEnd((event: GestureEvent) => {
+          if (this.menuVisible || this.panel !== PANEL_NONE || this.loading || this.failed.length > 0) {
+            return;
+          }
+          const fromPage: number = this.swipeStartPage;
+          const dx: number = event.offsetX;
+          if (dx < -60 && fromPage >= this.pages.length - 1) {
+            // 本章最后一页向左滑：翻到下一章开头。
+            this.nextChapter();
+          } else if (dx > 60 && fromPage <= 0) {
+            // 本章第一页向右滑：翻到上一章开头。
+            this.prevChapter();
+          }
+        })
+    )
   }
 
   build() {
@@ -932,7 +1340,7 @@ export struct ReaderPage {
         .height('100%')
         .justifyContent(FlexAlign.Center)
       } else {
-        this.contentList()
+        this.contentPager()
       }
 
       if (this.menuVisible && !this.loading && this.failed.length === 0) {
