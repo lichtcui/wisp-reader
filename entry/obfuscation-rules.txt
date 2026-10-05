@@ -30,6 +30,7 @@ loginCheckJs
 lastUpdateTime
 respondTime
 weight
+confidence
 concurrentRate
 coverDecodeJs
 exploreScreen

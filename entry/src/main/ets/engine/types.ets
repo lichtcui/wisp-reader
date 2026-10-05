@@ -7,6 +7,8 @@ export interface BookSource {
   enabled?: boolean;
   enabledExplore?: boolean;
   weight?: number;
+  /** 置信度 0–100，由搜索结果动态维护（失败扣分、成功回分）。缺省视为 100。 */
+  confidence?: number;
   searchUrl?: string;
   exploreUrl?: string;
   header?: string;

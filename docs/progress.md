@@ -10,7 +10,7 @@
 | M1 | 项目骨架 + Design Token（红白）+ 路由 + 三 Tab | ✅ 已完成（真机验证，浅色切换待复验） |
 | M2 | 引擎接口（search/bookInfo/toc/content）+ JS/登录门禁 + 书源导入 | ✅ 已完成（真机验证：detect 8/13 可用） |
 | M3 | 搜索聚合 + 详情 + 加入书架 + 持久化 | ✅ 已完成（真机验证：加入书架重启仍在） |
-| M4 | 阅读页（竖向滚动）+ 目录（含分页）+ 进度 + 阅读设置 | ✅ 已完成（真机验证：目录/跳转/字号/进度重启恢复；修 bindSheet + 正文清洗；**收尾项已补**）|
+| M4 | 阅读页（横向分页翻页）+ 目录（含分页）+ 进度 + 阅读设置 | ✅ 已完成（真机验证：目录/跳转/字号/进度重启恢复；修 bindSheet + 正文清洗；**收尾项已补**）|
 | M5 | 听书 + 系统 TTS + 后台播放 + AVSession | ✅ 已完成（真机验证：PCM→AudioRenderer→AVSession 成为 top session，锁屏控件/媒体键可控，切后台不断，定时关闭，段落高亮/进度同步）|
 | M6 | 规则调试器 + 缓存清理 + 备份恢复 | ⏳ 未开始 |
 | v2 | QuickJS/Boa JS 引擎、换源、在线 TTS、真分页 | ⏳ |
@@ -331,12 +331,34 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 | **末页/首页闪烁一帧「满页」** | ✅ 已修（声明式 `.index(this.pageIndex)` 原子跳位，弃用 postFrameCallback 命令式 changeIndex） |
 | 编译 + 真机装机闭环（只改 ArkTS，不动 Rust/.so） | ✅ |
 
+## 书源置信度 + 搜索滑动窗口调度（2026-10-06，真机验证）
+
+为应对「搜索时源大量报错」及后续 300–4000 个源，给书源加了**置信度系统**，并把搜索调度重写为
+**滑动窗口 + 按置信度排序**。全部在 ArkTS 搜索层完成，未改 Rust / `.so`。
+
+| 验证项 | 结果 |
+|---|---|
+| 置信度扣分（`blocked` -30 / `server_error` -25 / `network_error` -20 / `timeout` -15；`no_results` 等不计分） | ✅ 真机：server_error 连续两轮 100→75→50 |
+| 成功回分（+5，封顶 100 下限 0；无时间回弹） | ✅ 真机：network_error 80 → 成功 85 |
+| 持久化（`confidence` 字段随 `book_sources_v1` 存 preferences，重启不丢） | ✅ 直接读 preferences XML 确认落盘 |
+| 每次搜索前按置信度降序排序源 | ✅ |
+| 滑动窗口并发（`SEARCH_CONCURRENCY=8`，完成一个补下一个，非严格分批） | ✅ 3000 源不会一次性打爆连接/内存 |
+| 逐源渐进渲染（高置信源先出结果先上屏） | ✅ t+2s 见「正在搜索…更新中」+ 部分结果，t+4s「共 194 条」 |
+| 编译 + 真机装机闭环 | ✅ BUILD SUCCESSFUL（0 error） |
+
+- 新增：`model/SourceConfidence.ets`（`confidenceOf` / `sortByConfidence` / `applyOutcomes`）。
+- 改动：`pages/SearchResult.ets`（滑动窗口 `drain`/`searchOne` + `persistConfidence`）、
+  `engine/types.ets`（`BookSource.confidence?`）、`obfuscation-rules.txt`（`-keep-property-name confidence`）。
+- 规模扩展提醒（300–4000 源时再处理）：总耗时 ≈ 源数/并发 × 平均耗时，Rust `concurrency.clamp(1,16)` 是硬上限；
+  `book_sources_v1` 单条 JSON 存 preferences 届时可能过大，或需迁 RDB。
+
 ## 未决 / 风险
 - 目录分页 `nextTocUrl` / 卷 `isVolume` 已在引擎实现（真机 detect 覆盖当页路径），多页目录待复验。
 - 书源持久化仍用 `preferences` JSON（书籍/进度已用 `relationalStore`）；后续可迁移统一。
 - 规则「静默失败」诊断：`parseWithDiagnostics` 已可返回 regex/CSS/JS 诊断，调试器 UI 待 M6。
 - 文件导入/剪贴板导入：URL 导入已真机复验（成功 1 / 排除 2：需 JS 1、需登录 1）；文件/剪贴板走同一门禁函数。
-- 搜索排序已改为 Legado 分桶 + 同名同作者跨源合并 + 源 `weight`（见「搜索结果页整改」）。
+- 搜索排序已改为 Legado 分桶 + 同名同作者跨源合并 + 源 `weight`（见「搜索结果页整改」）；
+  另加**书源置信度**（失败扣分/成功回分/持久化）决定**搜索调度顺序**（见「书源置信度 + 搜索滑动窗口调度」）。
 
 ## 交接备忘
 

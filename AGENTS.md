@@ -8,7 +8,7 @@
 
 ---
 
-## 1. 现状（M0–M4 完成，M5 待开始）
+## 1. 现状（M0–M5 完成，M6 待开始）
 
 | 里程碑 | 状态 |
 |---|---|
@@ -41,9 +41,10 @@
 | 引擎 | 复用 Rust：`rust/legado-engine`（纯核心）+ `rust/legado-core`（NAPI 壳）+ `ohos-rs`；**不降级** |
 | 网络 | **Rust 持有 HTTP**（`reqwest` + rustls）；每源独立 `Client`（Cookie 隔离）+ 限速；**禁用证书放行** |
 | 书源持久化 | v1 用 `preferences` JSON（`SourceRepository`）；书籍/进度用 `relationalStore`（`ShelfRepository`，表 `books`/`progress`） |
+| 搜索调度 | ArkTS 滑动窗口（并发 8）+ **书源置信度**排序（`server_error`/`timeout`/`network_error`/`blocked` 扣分、成功回分，持久化到 `confidence` 字段） |
 | v1 不做 | JS 运行时、登录型源、换源、发现(explore)、真分页、在线 TTS |
 | JS 例外 | `@js:` 的 **L1 字符串模式**仍解析（非 L1 才排除） |
-| 阅读排版 | v1 **竖向滚动** |
+| 阅读排版 | v1 **横向分页翻页**（Swiper + `measureTextSize` 精确分页，跨章连续滑动） |
 | 封面 | 由 Rust 代下（带 header/Cookie），落盘后 ArkTS 加载 |
 | 状态管理 | **V2**（`@ComponentV2` / `@Local` / `@Param`） |
 | 视觉 | 白 + 红（`#DA3838`，红系轻渐变）；参考 `~/Documents/playground/harmony-pokerouge` |

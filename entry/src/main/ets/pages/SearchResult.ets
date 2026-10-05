@@ -3,11 +3,14 @@ import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSearchItem, BookSource, SourceStatus } from '../engine/types';
 import { BookCover } from '../components/BookCover';
 import { EmptyView } from '../components/EmptyView';
-import { enabledSources, loadSources } from '../model/SourceRepository';
+import { enabledSources, loadSources, saveSources } from '../model/SourceRepository';
+import { applyOutcomes, confidenceOf, sortByConfidence } from '../model/SourceConfidence';
 import { getBooks } from '../model/ShelfRepository';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 
 const SEARCH_TIMEOUT_MS: number = 10_000;
+/** 搜索并发上限：由 Rust `buffer_unordered` 按输入顺序调度（高置信先执行）。 */
+const SEARCH_CONCURRENCY: number = 8;
 
 /** Same name + author from several sources merged into one list entry. */
 interface SearchGroup {
@@ -33,7 +36,7 @@ export struct SearchResultPage {
   @Local searchKey: string = '';
   @Local groups: SearchGroup[] = [];
   @Local statuses: SourceStatus[] = [];
-  @Local pending: number = 0;
+  @Local searching: boolean = false;
   @Local total: number = 0;
   @Local enriching: boolean = false;
   @Local statusVisible: boolean = false;
@@ -41,10 +44,13 @@ export struct SearchResultPage {
   @Local pickerVisible: boolean = false;
   @Local pickerGroup: SearchGroup | undefined = undefined;
 
+  private ctx: common.UIAbilityContext | undefined = undefined;
   private sources: BookSource[] = [];
+  private allSources: BookSource[] = [];
   private sourceMap: Map<string, BookSource> = new Map<string, BookSource>();
   private rawItems: BookSearchItem[] = [];
   private searchGen: number = 0;
+  private nextIndex: number = 0;
   private infoCache: Map<string, Book> = new Map<string, Book>();
 
   aboutToAppear(): void {
@@ -53,7 +59,10 @@ export struct SearchResultPage {
     if (ctx === undefined) {
       return;
     }
-    this.sources = enabledSources(loadSources(ctx));
+    this.ctx = ctx;
+    // 保留全量列表（含 disabled）用于持久化；搜索按置信度从高到低排序启用源。
+    this.allSources = loadSources(ctx);
+    this.sources = sortByConfidence(enabledSources(this.allSources));
     for (const s of this.sources) {
       this.sourceMap.set(s.bookSourceUrl, s);
     }
@@ -73,7 +82,7 @@ export struct SearchResultPage {
     this.startSearch();
   }
 
-  private startSearch(): void {
+  private async startSearch(): Promise<void> {
     this.searchGen = this.searchGen + 1;
     const gen: number = this.searchGen;
     this.rawItems = [];
@@ -83,23 +92,32 @@ export struct SearchResultPage {
     this.statusVisible = false;
     this.pickerVisible = false;
     this.pickerGroup = undefined;
-    this.pending = this.sources.length;
-    for (const s of this.sources) {
-      this.searchOne(s, gen);
+    this.searching = true;
+    this.nextIndex = 0;
+    // 每次搜索前按最新置信度排序，保证高置信源排在前面先被调度。
+    this.sources = sortByConfidence(this.sources);
+    if (this.sources.length === 0) {
+      this.searching = false;
+      return;
+    }
+    // 滑动窗口：最多 SEARCH_CONCURRENCY 个源并行，完成一个补下一个。
+    // 每个源结果回来立即渲染（rebuildGroups），高置信源先出、先上屏。
+    const window: number = Math.min(SEARCH_CONCURRENCY, this.sources.length);
+    for (let w = 0; w < window; w++) {
+      this.drain(gen);
     }
   }
 
-  private async loadShelfKeys(): Promise<void> {
-    const books: Book[] = await getBooks();
-    const keys: Set<string> = new Set<string>();
-    for (const b of books) {
-      keys.add(this.shelfKey(b.name, b.author));
+  /** 窗口协程：循环从滑动指针取下一个源搜索，直到全部派发完或被新搜索替换。 */
+  private async drain(gen: number): Promise<void> {
+    while (gen === this.searchGen) {
+      const i: number = this.nextIndex;
+      if (i >= this.sources.length) {
+        return;
+      }
+      this.nextIndex = i + 1;
+      await this.searchOne(this.sources[i], gen);
     }
-    this.shelfKeys = keys;
-  }
-
-  private shelfKey(name: string, author: string): string {
-    return name.trim() + '|' + author.trim();
   }
 
   private async searchOne(source: BookSource, gen: number): Promise<void> {
@@ -135,9 +153,38 @@ export struct SearchResultPage {
     const next: SourceStatus[] = this.statuses.slice();
     next.push(status);
     this.statuses = next;
-    this.pending = this.pending - 1;
-    if (this.pending === 0) {
+    if (this.statuses.length === this.sources.length) {
+      this.searching = false;
+      this.persistConfidence();
       this.enrichMerged(gen);
+    }
+  }
+
+  private async loadShelfKeys(): Promise<void> {
+    const books: Book[] = await getBooks();
+    const keys: Set<string> = new Set<string>();
+    for (const b of books) {
+      keys.add(this.shelfKey(b.name, b.author));
+    }
+    this.shelfKeys = keys;
+  }
+
+  private shelfKey(name: string, author: string): string {
+    return name.trim() + '|' + author.trim();
+  }
+
+  /** 一轮搜索结束：把结果套用到置信度并持久化，供下一轮按新置信度排序。 */
+  private persistConfidence(): void {
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    if (ctx === undefined || this.allSources.length === 0) {
+      return;
+    }
+    applyOutcomes(this.allSources, this.statuses);
+    saveSources(ctx, this.allSources);
+    this.sources = sortByConfidence(enabledSources(this.allSources));
+    this.sourceMap.clear();
+    for (const s of this.sources) {
+      this.sourceMap.set(s.bookSourceUrl, s);
     }
   }
 
@@ -362,7 +409,7 @@ export struct SearchResultPage {
   // ── UI ────────────────────────────────────────────────────────
 
   private isSearching(): boolean {
-    return this.pending > 0 || this.enriching;
+    return this.searching || this.enriching;
   }
 
   private sourceSummary(): string {
@@ -373,6 +420,11 @@ export struct SearchResultPage {
       }
     }
     return `源 ${ok}/${this.statuses.length} 成功`;
+  }
+
+  private confidenceLabel(status: SourceStatus): string {
+    const s: BookSource | undefined = this.sourceMap.get(status.sourceUrl);
+    return s === undefined ? '—' : confidenceOf(s).toString();
   }
 
   @Builder
@@ -464,6 +516,10 @@ export struct SearchResultPage {
             Text(status.ok ? `✓ ${status.count}` : status.error)
               .fontSize(12)
               .fontColor(status.ok ? $r('app.color.brand') : $r('app.color.warning'))
+            Text('置信 ' + this.confidenceLabel(status))
+              .fontSize(11)
+              .fontColor($r('app.color.text_5'))
+              .margin({ left: 8 })
           }
           .width('100%')
           .padding({ top: 6, bottom: 6 })
@@ -531,7 +587,7 @@ export struct SearchResultPage {
       Column() {
         if (this.groups.length === 0) {
           Column() {
-            if (this.pending > 0 || this.enriching) {
+            if (this.searching || this.enriching) {
               LoadingProgress()
                 .width(40)
                 .height(40)
