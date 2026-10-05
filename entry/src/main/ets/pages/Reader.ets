@@ -399,6 +399,10 @@ export struct ReaderPage {
     this.paragraphIndex = restoreAtEnd
       ? (paragraphs.length > 0 ? paragraphs.length - 1 : 0)
       : (paragraphs.length > 0 ? Math.min(Math.max(restoreParagraph, 0), paragraphs.length - 1) : 0);
+    // 显式载入新章时清空“当前可视页身份”，否则 rebuildWindow 会用旧章的页身份
+    // 在跨章页流里重新命中旧页（旧章常作为 prev 邻居仍保留在窗口内），导致
+    // 「下一章」/目录点击相邻章时视觉上停在原地不跳转。
+    this.currentPageId = '';
     this.loading = false;
     // 首次进入时尺寸尚未测出（contentWidth/Height 还是默认值），若立即 rebuildWindow
     // 会用错误的默认尺寸排版，onAreaChange 再重排一次，就会先闪一帧“未铺满”页面。
@@ -470,7 +474,12 @@ export struct ReaderPage {
   }
 
   private prevChapter(): void {
-    // 翻到上一章的最后一页：restoreAtEnd=true，applyChapter/rebuildWindow 会直接定位到末页。
+    // 「上一章」按钮：跳到上一章开头（第一页），与 nextChapter 对称。
+    this.loadChapter(this.prevReadable(this.chapterIndex));
+  }
+
+  private prevChapterEnd(): void {
+    // 连续往回翻页（点按左区/右滑越过本章首页）：进入上一章最后一页，继续向后读。
     this.loadChapter(this.prevReadable(this.chapterIndex), 0, true);
   }
 
@@ -491,8 +500,8 @@ export struct ReaderPage {
     if (this.pageIndex > 0) {
       this.swiperController.changeIndex(this.pageIndex - 1, true);
     } else {
-      // 本章第一页：翻到上一章最后一页。
-      this.prevChapter();
+      // 越过本章首页继续往回：进入上一章最后一页，保持向后连续阅读。
+      this.prevChapterEnd();
     }
   }
 
@@ -1299,8 +1308,8 @@ export struct ReaderPage {
             // 本章最后一页向左滑：翻到下一章开头。
             this.nextChapter();
           } else if (dx > 60 && fromPage <= 0) {
-            // 本章第一页向右滑：翻到上一章开头。
-            this.prevChapter();
+            // 越过本章首页向右滑：进入上一章最后一页，继续向后读。
+            this.prevChapterEnd();
           }
         })
     )
