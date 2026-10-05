@@ -9,6 +9,8 @@ export struct BottomDrawer {
   @Param title: string = '';
   @Param sheetSize: AppSheetSize = 'medium';
   @Param mode: AppSheetMode = 'system';
+  @Param showHeader: boolean = true;
+  @Param panelBackground: Resource = $r('app.color.bg_page');
   @Event onClose: () => void = () => {};
   @BuilderParam content: () => void = this.emptyContent;
 
@@ -36,9 +38,17 @@ export struct BottomDrawer {
     if (this.visible) {
       this.dragOffset = 0;
       this.overlayMounted = true;
-      this.getUIContext().animateTo({ duration: 260, curve: Curve.FastOutSlowIn }, () => {
-        this.overlayShown = true;
-      });
+      // Render the panel off-screen first (overlayShown is still false, so the
+      // panel sits at translate = panelSlideOut). Defer the show by one tick so
+      // animateTo has a real "from" state to slide up from; doing both in the
+      // same batch mounts the panel already at translate 0 with no animation.
+      setTimeout(() => {
+        if (this.visible) {
+          this.getUIContext().animateTo({ duration: 260, curve: Curve.FastOutSlowIn }, () => {
+            this.overlayShown = true;
+          });
+        }
+      }, 50);
     } else {
       this.getUIContext().animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
         this.overlayShown = false;
@@ -66,6 +76,12 @@ export struct BottomDrawer {
     return this.sheetSize === 'large' ? '90%' : '70%';
   }
 
+  // Off-screen translate used while the panel is hidden; equal to the panel's own
+  // height so it starts fully below the viewport and slides up into place.
+  private panelSlideOut(): number {
+    return this.panelHeight > 0 ? this.panelHeight : 3000;
+  }
+
   private endDrag(velocityY: number): void {
     const threshold: number = this.panelHeight * 0.3;
     if (this.dragOffset > threshold || velocityY > 1000) {
@@ -73,7 +89,6 @@ export struct BottomDrawer {
         duration: 200,
         curve: Curve.FastOutSlowIn,
         onFinish: () => {
-          this.dragOffset = 0;
           this.onClose();
         }
       }, () => {
@@ -147,10 +162,12 @@ export struct BottomDrawer {
   panelBody() {
     Column() {
       this.dragBar()
-      this.titleBar()
-      Divider()
-        .color($r('app.color.divider'))
-        .strokeWidth(1)
+      if (this.showHeader) {
+        this.titleBar()
+        Divider()
+          .color($r('app.color.divider'))
+          .strokeWidth(1)
+      }
       this.contentArea()
     }
     .width('100%')
@@ -159,14 +176,16 @@ export struct BottomDrawer {
   @Builder
   sheetBody() {
     Column() {
-      this.titleBar()
-      Divider()
-        .color($r('app.color.divider'))
-        .strokeWidth(1)
+      if (this.showHeader) {
+        this.titleBar()
+        Divider()
+          .color($r('app.color.divider'))
+          .strokeWidth(1)
+      }
       this.contentArea()
     }
     .width('100%')
-    .backgroundColor($r('app.color.bg_page'))
+    .backgroundColor(this.panelBackground)
     .borderRadius({ topLeft: SHEET_TOP_RADIUS, topRight: SHEET_TOP_RADIUS })
     .clip(true)
   }
@@ -183,7 +202,7 @@ export struct BottomDrawer {
       showClose: false,
       blurStyle: BlurStyle.NONE,
       maskColor: $r('app.color.mask'),
-      backgroundColor: $r('app.color.bg_page'),
+      backgroundColor: this.panelBackground,
       preferType: SheetType.BOTTOM,
       enableOutsideInteractive: false,
       onWillDismiss: (action: DismissSheetAction) => {
@@ -201,7 +220,7 @@ export struct BottomDrawer {
       }
       .width('100%')
       .constraintSize({ maxHeight: '90%' })
-      .backgroundColor($r('app.color.bg_page'))
+      .backgroundColor(this.panelBackground)
       .borderRadius({ topLeft: SHEET_TOP_RADIUS, topRight: SHEET_TOP_RADIUS })
       .clip(true)
     } else {
@@ -210,7 +229,7 @@ export struct BottomDrawer {
       }
       .width('100%')
       .height(this.overlayHeight())
-      .backgroundColor($r('app.color.bg_page'))
+      .backgroundColor(this.panelBackground)
       .borderRadius({ topLeft: SHEET_TOP_RADIUS, topRight: SHEET_TOP_RADIUS })
       .clip(true)
     }
@@ -222,17 +241,14 @@ export struct BottomDrawer {
       Column()
         .width('100%')
         .height('100%')
-        .backgroundColor($r('app.color.mask'))
-        .opacity(this.overlayShown ? 1 : 0)
-        .animation({ duration: this.overlayShown ? 200 : 160, curve: Curve.Linear })
+        .backgroundColor(Color.Transparent)
         .onClick(() => this.onClose())
 
       Column() {
         this.overlayPanel()
       }
       .width('100%')
-      .translate({ y: this.overlayShown ? this.dragOffset : 24 })
-      .opacity(this.overlayShown ? 1 : 0)
+      .translate({ y: this.overlayShown ? this.dragOffset : this.panelSlideOut() })
       .onAreaChange((_old: Area, next: Area) => {
         this.panelHeight = Number(next.height);
       })
@@ -249,6 +265,7 @@ export struct BottomDrawer {
     .width('100%')
     .height('100%')
     .alignContent(Alignment.Bottom)
+    .clip(true)
   }
 
   build() {

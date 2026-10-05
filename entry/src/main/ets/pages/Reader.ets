@@ -938,10 +938,6 @@ export struct ReaderPage {
     return this.nightMode ? $r('app.color.reader_text') : $r('app.color.reader_text_day');
   }
 
-  private panelColor(): Resource {
-    return this.nightMode ? $r('app.color.reader_panel') : $r('app.color.reader_panel_day');
-  }
-
   private dimColor(): Resource {
     return this.nightMode ? $r('app.color.reader_dim') : $r('app.color.reader_dim_day');
   }
@@ -1030,7 +1026,7 @@ export struct ReaderPage {
           .trackThickness(3)
           .blockColor($r('app.color.brand'))
           .selectedColor($r('app.color.brand'))
-          .trackColor(this.panelColor())
+          .trackColor(this.dimColor())
           .onChange((value: number, mode: SliderChangeMode) => {
             this.sliderValue = value;
             if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
@@ -1102,7 +1098,6 @@ export struct ReaderPage {
       .width('100%')
       .padding(12)
       .alignItems(VerticalAlign.Center)
-      .backgroundColor(this.panelColor())
       .onClick(() => this.openDetail())
 
       Row() {
@@ -1165,7 +1160,6 @@ export struct ReaderPage {
     }
     .width('100%')
     .layoutWeight(1)
-    .backgroundColor(this.bgColor())
   }
 
   @Builder
@@ -1244,7 +1238,6 @@ export struct ReaderPage {
         .padding({ left: 16, right: 16, top: 12 })
     }
     .width('100%')
-    .backgroundColor(this.bgColor())
   }
 
   @Builder
@@ -1345,7 +1338,13 @@ export struct ReaderPage {
 
       if (this.menuVisible && !this.loading && this.failed.length === 0) {
         Column() {
-          this.topBar()
+          Column() {
+            this.topBar()
+          }
+          .width('100%')
+          .translate({ y: this.panel !== PANEL_NONE ? -60 : 0 })
+          .animation({ duration: 260, curve: Curve.FastOutSlowIn })
+
           Column()
             .width('100%')
             .layoutWeight(1)
@@ -1356,6 +1355,7 @@ export struct ReaderPage {
         }
         .width('100%')
         .height('100%')
+        .clip(true)
       }
 
       // Quick return to the listening page once a session is running. Kept
@@ -1373,9 +1373,10 @@ export struct ReaderPage {
       if (this.tocDescending) {
         BottomDrawer({
           visible: this.panel === PANEL_TOC,
-          title: '目录',
           sheetSize: 'large',
           mode: 'overlay',
+          showHeader: false,
+          panelBackground: this.bgColor(),
           onClose: () => {
             this.panel = PANEL_NONE;
           }
@@ -1385,9 +1386,10 @@ export struct ReaderPage {
       } else {
         BottomDrawer({
           visible: this.panel === PANEL_TOC,
-          title: '目录',
           sheetSize: 'large',
           mode: 'overlay',
+          showHeader: false,
+          panelBackground: this.bgColor(),
           onClose: () => {
             this.panel = PANEL_NONE;
           }
@@ -1398,9 +1400,10 @@ export struct ReaderPage {
 
       BottomDrawer({
         visible: this.panel === PANEL_SETTINGS,
-        title: '阅读设置',
         sheetSize: 'fit',
         mode: 'overlay',
+        showHeader: false,
+        panelBackground: this.bgColor(),
         onClose: () => {
           this.panel = PANEL_NONE;
         }
