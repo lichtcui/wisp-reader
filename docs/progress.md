@@ -436,6 +436,28 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   已实测**与本改动无关**（把复位写入删掉后该日志反而更多），属 `bindContentCover` + 大量页面 `@Local` 写入的既有现象；
   复位展开态必须在 `onClose`（内容仍挂载）里做，别放进 `@Monitor('statusVisible')`（那时模态层可能尚未挂载）。
 
+### 选择来源抽屉整改（2026-10-06，用户真机反馈）
+
+| 反馈 | 处理 |
+|---|---|
+| 「选择来源」抽屉不需要搜索 | 删除 `pickerSearchBar()`、`@Local pickerQuery`、`pickerMatch()`、`applyPickerFilter()` 的过滤分支、`pickerMatchedCount()` 的「匹配 N / M 个来源」；抽屉内已无 `TextInput` |
+| 不需要分组 | 删除 `PickerGroup` / `ListItemGroup` / sticky 组头 / 折叠（`pickerCollapsed`、`togglePickerGroup`、`pickerGroupHeader`、`primaryGroup`）与 `PickerRow.group`；改为**平铺** `List` + `LazyForEach`（`@Local pickerDs`，行定高 60vp，`cachedCount(6)`），行内只留「源名 + 最新章节/域名」。排序不变：章节号 ↓ → 置信度 ↓ → 源名 |
+| 「分成很多个组」 | 除真实分组外，直接来源是 `preparePicker` 里的 `TEMP-SCALE-HARNESS`（每次打开合成 3000 条假源 + 「压测组0~11」）——已按注释要求整块删除 |
+| 同 URL 重复源（`bbiquge8` / `笔趣阁8`） | 新增 `SourceRepository.dedupeByUrl()`；`aboutToAppear` 改为 `dedupeByUrl(sortByConfidence(enabledSources(...)))` → 同一 `bookSourceUrl` 只搜一次，选源抽屉里每个站点只剩一行 |
+
+**为什么两条源会挤进同一个分组（`笔趣阁0905`）**（用户提问）：
+内置 `bundled-sources.json` 里有两条 `bookSourceUrl` 都是 `http://m.bbiquge8.net` 的记录——
+`bbiquge8`（组 `校验可用`）与 `笔趣阁8`（组 `笔趣阁0905`，是同一站点的两条规则，导入时未去重）。
+搜索是逐源执行的，两条都命中；选源行的**名字**取自各自的 `sourceName`（引擎逐源填充，所以能看出是两个源），
+而**分组/置信度**需要回查 `Map<bookSourceUrl, BookSource>` —— 同 URL 的两条在 `Map.set` 时**后写入者覆盖先写入者**，
+于是两行都拿到 `笔趣阁8` 的组与置信度，表现为「`笔趣阁0905` 组里有两个源，都指向 m.bbiquge8.net」。
+分组已随本次整改移除；根治点在「URL 当主键」的一族写法（源状态抽屉 key、书源管理列表 key），见「未决 / 风险」。
+
+- `SourceListDataSource` 的注释同步（不再提分组/折叠）；抽屉样式未动，`specs/UI-SPEC.md` 仅补变更历史。
+- 顺带修同族缺陷：`BookSourceManage.ets:657` 的书源列表 ForEach key 改 `bookSourceUrl#index#enabled`
+  （原来只用 `url#enabled`，同 URL 的两条会撞 key → 少显示一行、启停/删除误伤），见 `bugfix/TASKS.md` T-SRC-1。
+- 状态：编译 ✅ BUILD SUCCESSFUL；**真机闭环待补**（`33Z0224424136564` 当时 `Offline`）。
+
 ## 未决 / 风险
 - 目录分页 `nextTocUrl` / 卷 `isVolume` 已在引擎实现（真机 detect 覆盖当页路径），多页目录待复验。
 - 书源持久化仍用 `preferences` JSON（书籍/进度已用 `relationalStore`）；后续可迁移统一。
@@ -443,8 +465,9 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 - 文件导入/剪贴板导入：URL 导入已真机复验（成功 1 / 排除 2：需 JS 1、需登录 1）；文件/剪贴板走同一门禁函数。
 - 搜索排序已改为 Legado 分桶 + 同名同作者跨源合并 + 源 `weight`（见「搜索结果页整改」）；
   另加**书源置信度**（失败扣分/成功回分/持久化）决定**搜索调度顺序**（见「书源置信度 + 搜索滑动窗口调度」）。
-- **同 URL 重复书源**（用户库内确有两例：`bbiquge8` / `笔趣阁8` → `http://m.bbiquge8.net`）是「ForEach key 用 URL」
-  这一类缺陷的共同诱因。搜索侧已修（见「源状态抽屉内容整改」）；**书源管理列表仍是待办**（见 `bugfix/TASKS.md` T-SRC-1）。
+- **同 URL 重复书源**（用户库内确有两例：`bbiquge8` / `笔趣阁8` → `http://m.bbiquge8.net`）是「URL 当主键」
+  这一类缺陷的共同诱因。搜索侧已修两处：源状态抽屉 key 改序号（见「源状态抽屉内容整改」）+ 搜索前 `dedupeByUrl`（见
+  「选择来源抽屉整改」）；书源管理列表 key 也已改为 `url#index#enabled`（见 `bugfix/TASKS.md` T-SRC-1，真机复验待补）。
 
 ## 交接备忘
 

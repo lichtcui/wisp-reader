@@ -216,6 +216,7 @@ sips -s format bmp /tmp/u1.jpeg --out /tmp/u1.bmp       # 纯 Python 解析 BMP�
 | 2026-10-06 | 真机反馈修复：① §1.2.1 面板必须锚定**屏幕物理底边**（宿主 `expandSafeArea` + `Index` 打开期间隐藏底部 tab 栏，新增 `model/DrawerOverlay.ets` 计数单例）——修复「书源状态/书源选择从底部 menu 上方弹出」「书源校验从安全区上方弹出」；② §1.2.2 关闭后 `visibility(Hidden)` ——修复「未打开时底部残留阴影带（两端缺角）」 |
 | 2026-10-06 | 真机反馈二次修复：tab 页内抽屉改用新的 **`mode: 'cover'`**（`bindContentCover` 窗口模态层）——面板锚定屏幕底边并**盖住底部 tab 栏**，tab 栏**原位不动**；**废弃**「隐藏 tab 栏腾空间」方案（`model/DrawerOverlay.ets` 已删除、`Index.ets` 恢复无条件底部栏）。搜索页「源状态 / 选择来源」两个抽屉迁移到 `cover` |
 | 2026-10-06 | 修复「源状态/选择来源/书源状态」打开态底部安全区上方残留灰影带：`expandSafeArea` 只外扩绘制不扩布局，面板仍停在安全区上沿、底边阴影漏成一条灰影。补 `ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM],[LayoutSafeAreaEdge.BOTTOM])`（API 20）真正外扩布局，面板锚到物理底边、盖住安全区。`BottomDrawer.ets` 的 `overlayHost` / `coverBody` 两处同步修改 |
+| 2026-10-06 | 「选择来源」抽屉内容整改（去搜索 + 去分组）：删抽屉内搜索框（`pickerSearchBar` / `pickerQuery` / 过滤与「匹配 N / M」）与全部分组机制（`ListItemGroup` sticky 组头、折叠、`primaryGroup`）；“选择来源”改为**平铺 `LazyForEach` 列表**（行定高 60vp），排序仍为 章节号 ↓ → 置信度 ↓ → 源名。另修「同 URL 重复书源」：新增 `SourceRepository.dedupeByUrl()`，搜索前按 `bookSourceUrl` 去重（消除「`笔趣阁0905` 组里两个源同名站」现象）。§1.6 / §2 的 `sheetSize`/`showHeader` 不变，**样式与动效未动**（§1.1–§1.4 检查清单均未受影响） |
 | （更早） | 抽屉统一白色背景 + 去遮罩变暗 + 番茄式上拉动画（`176a5d7`） |
 
 ## 6. 相关规范（仍有效，组件已更名）

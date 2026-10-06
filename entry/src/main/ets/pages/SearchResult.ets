@@ -3,10 +3,11 @@ import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSearchItem, BookSource, SourceStatus } from '../engine/types';
 import { BookCover } from '../components/BookCover';
 import { EmptyView } from '../components/EmptyView';
-import { enabledSources, loadSources, saveSources } from '../model/SourceRepository';
+import { dedupeByUrl, enabledSources, loadSources, saveSources } from '../model/SourceRepository';
 import { applyOutcomes, confidenceOf, penaltyFor, sortByConfidence } from '../model/SourceConfidence';
 import { getBooks } from '../model/ShelfRepository';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
+import { PickerRow, SourceListDataSource } from '../common/SourceListDataSource';
 
 const SEARCH_TIMEOUT_MS: number = 10_000;
 /** 搜索并发上限：由 Rust `buffer_unordered` 按输入顺序调度（高置信先执行）。 */
@@ -58,7 +59,9 @@ export struct SearchResultPage {
   @Local statusVisible: boolean = false;
   @Local shelfKeys: Set<string> = new Set<string>();
   @Local pickerVisible: boolean = false;
-  @Local pickerGroup: SearchGroup | undefined = undefined;
+  // 选择来源抽屉：行数据在打开时物化一次（见 preparePicker）；列表**平铺**，无分组、无折叠、无搜索。
+  @Local pickerDs: SourceListDataSource = new SourceListDataSource();
+  @Local pickerTotal: number = 0;
   // 源状态抽屉：按置信度影响排序的「成功 / 失败原因」分组下钻，默认（及每次打开）全部收起。
   @Local expandedReason: string = '';
   @Local expandedOk: boolean = false;
@@ -80,8 +83,11 @@ export struct SearchResultPage {
     }
     this.ctx = ctx;
     // 保留全量列表（含 disabled）用于持久化；搜索按置信度从高到低排序启用源。
+    // 同一 `bookSourceUrl` 只保留一条：Legado 书源集合里存在同一站点的重复导入
+    // （内置集就有 bbiquge8 / 笔趣阁8 同指 m.bbiquge8.net），不去重会重复请求同一站点、
+    // 命中重复，且 `sourceMap` 按 URL 取值时被后写入的那条覆盖。
     this.allSources = loadSources(ctx);
-    this.sources = sortByConfidence(enabledSources(this.allSources));
+    this.sources = dedupeByUrl(sortByConfidence(enabledSources(this.allSources)));
     for (const s of this.sources) {
       this.sourceMap.set(s.bookSourceUrl, s);
     }
@@ -110,7 +116,8 @@ export struct SearchResultPage {
     this.enriching = false;
     this.statusVisible = false;
     this.pickerVisible = false;
-    this.pickerGroup = undefined;
+    this.pickerDs = new SourceListDataSource();
+    this.pickerTotal = 0;
     this.expandedReason = '';
     this.expandedOk = false;
     this.searching = true;
@@ -401,14 +408,89 @@ export struct SearchResultPage {
     return author;
   }
 
-  private pickerOrigins(): BookSearchItem[] {
-    const g: SearchGroup | undefined = this.pickerGroup;
-    return g !== undefined ? g.origins : [];
+  // ── 选择来源（可含数百甚至数千个命中源）────────────────────────
+  //
+  // 打开时一次性物化「命中源 → PickerRow」（join 置信度），之后不再重算；
+  // `build` 里不逐行查表。列表**平铺**：不分组（分组头/折叠已移除）、无搜索框，
+  // 行由 `LazyForEach` 虚拟化，行定高 60vp。
+
+  private preparePicker(g: SearchGroup): void {
+    const rows: PickerRow[] = [];
+    for (let i = 0; i < g.origins.length; i++) {
+      const o: BookSearchItem = g.origins[i];
+      const src: BookSource | undefined = this.sourceMap.get(o.sourceUrl);
+      const chapter: string = this.cleanChapter(o.lastChapter);
+      rows.push({
+        key: o.sourceUrl + '|' + i.toString(),
+        item: o,
+        name: o.sourceName.length > 0 ? o.sourceName : o.sourceUrl,
+        confidence: src !== undefined ? confidenceOf(src) : 100,
+        chapter: chapter,
+        chapterNo: this.chapterNo(chapter)
+      });
+    }
+    // 各源进度差异是选源的主要依据 → 章节号大的排前面；再按置信度、源名，保证稳定。
+    rows.sort((a: PickerRow, b: PickerRow): number => {
+      if (a.chapterNo !== b.chapterNo) {
+        return b.chapterNo - a.chapterNo;
+      }
+      if (a.confidence !== b.confidence) {
+        return b.confidence - a.confidence;
+      }
+      if (a.name !== b.name) {
+        return a.name < b.name ? -1 : 1;
+      }
+      return 0;
+    });
+    // 每次打开都用全新数据源：上一次的监听器已随关闭的模态层作废，
+    // 复用旧实例通知时会命中已卸载的视图。
+    this.pickerDs = new SourceListDataSource();
+    this.pickerDs.setItems(rows);
+    this.pickerTotal = rows.length;
   }
 
-  private pickerChapter(o: BookSearchItem): string {
-    const chapter: string = this.cleanChapter(o.lastChapter);
-    return chapter.length > 0 ? '最新：' + chapter : '';
+  /** 章节名里最后一段数字（`第12卷 第1234章 完` → 1234）；取不到为 0。 */
+  private chapterNo(chapter: string): number {
+    let value: number = 0;
+    let run: number = 0;
+    for (let i = 0; i < chapter.length; i++) {
+      const ch: string = chapter.charAt(i);
+      if (ch >= '0' && ch <= '9') {
+        run = run * 10 + (ch.charCodeAt(0) - 48);
+      } else {
+        if (run > 0) {
+          value = run;
+        }
+        run = 0;
+      }
+    }
+    return run > 0 ? run : value;
+  }
+
+  /** 副标题：优先「最新章节」，源没给时退回域名（同名源太多时用于区分）。 */
+  private pickerSubtitle(row: PickerRow): string {
+    if (row.chapter.length > 0) {
+      return '最新：' + row.chapter;
+    }
+    return this.hostOf(row.item.bookUrl.length > 0 ? row.item.bookUrl : row.item.sourceUrl);
+  }
+
+  private hostOf(url: string): string {
+    let rest: string = url;
+    const scheme: number = rest.indexOf('://');
+    if (scheme >= 0) {
+      rest = rest.substring(scheme + 3);
+    }
+    const slash: number = rest.indexOf('/');
+    if (slash >= 0) {
+      rest = rest.substring(0, slash);
+    }
+    return rest;
+  }
+
+  private pickOrigin(item: BookSearchItem): void {
+    this.pickerVisible = false;
+    this.open(item);
   }
 
   private handleTap(g: SearchGroup): void {
@@ -416,7 +498,7 @@ export struct SearchResultPage {
       this.open(g.origins[0]);
       return;
     }
-    this.pickerGroup = g;
+    this.preparePicker(g);
     this.pickerVisible = true;
   }
 
@@ -804,35 +886,55 @@ export struct SearchResultPage {
   }
 
   @Builder
-  pickerContent() {
-    List() {
-      ForEach(this.pickerOrigins(), (o: BookSearchItem) => {
-        ListItem() {
-          Column({ space: 2 }) {
-            Text(o.sourceName.length > 0 ? o.sourceName : o.sourceUrl)
-              .fontSize(15)
-              .fontColor($r('app.color.text_1'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-            Text(this.pickerChapter(o))
-              .fontSize(12)
-              .fontColor($r('app.color.text_4'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-          }
-          .width('100%')
-          .alignItems(HorizontalAlign.Start)
-          .padding({ top: 10, bottom: 10 })
-        }
-        .onClick(() => {
-          this.pickerVisible = false;
-          this.open(o);
-        })
-      }, (o: BookSearchItem, index: number) => o.sourceUrl + '|' + index.toString())
+  pickerRowView(row: PickerRow) {
+    Row({ space: 8 }) {
+      Column({ space: 3 }) {
+        Text(row.name)
+          .fontSize(15)
+          .fontColor($r('app.color.text_1'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(this.pickerSubtitle(row))
+          .fontSize(12)
+          .fontColor($r('app.color.text_4'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Text('›')
+        .fontSize(20)
+        .fontColor($r('app.color.arrow'))
     }
     .width('100%')
-    .constraintSize({ maxHeight: 360 })
-    .scrollBar(BarState.Off)
+    // 定高：`LazyForEach` 才能按固定行高估算可视区，滚动不抖。
+    .height(60)
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => this.pickOrigin(row.item))
+  }
+
+  @Builder
+  pickerContent() {
+    Column() {
+      List() {
+        LazyForEach(this.pickerDs, (row: PickerRow) => {
+          ListItem() {
+            this.pickerRowView(row)
+          }
+        }, (row: PickerRow) => row.key)
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .divider({
+        strokeWidth: 1,
+        color: $r('app.color.divider'),
+        startMargin: 16
+      })
+      .cachedCount(6)
+      .scrollBar(BarState.Off)
+    }
+    .width('100%')
+    .height('100%')
   }
 
   @Builder
@@ -923,7 +1025,7 @@ export struct SearchResultPage {
 
       BottomDrawer({
         visible: this.pickerVisible,
-        title: '选择来源',
+        title: '选择来源 · ' + this.pickerTotal.toString(),
         sheetSize: 'large',
         mode: 'cover',
         onClose: () => {

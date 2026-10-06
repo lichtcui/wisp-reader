@@ -654,7 +654,11 @@ export struct BookSourceManagePage {
                     InsetDivider()
                   }
                 }
-              }, (source: BookSource) => source.bookSourceUrl + '#' + (source.enabled !== false ? '1' : '0'))
+              }, (source: BookSource, index: number) =>
+              // key 必须同时满足两点：① 唯一——同一 `bookSourceUrl` 可以有多条（内置集就有
+              // bbiquge8 / 笔趣阁8 同指 m.bbiquge8.net），只用 URL 会被 ForEach 静默去重、列表少一行，
+              // 「删除」还会误伤另一条；② 含 `enabled`——否则启停后 key 不变，ForEach 不重建该行，开关显示旧值。
+              source.bookSourceUrl + '#' + index.toString() + '#' + (source.enabled !== false ? '1' : '0'))
             }
             .width('100%')
 

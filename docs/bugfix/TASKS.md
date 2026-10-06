@@ -57,11 +57,14 @@
 ## 书源管理（BookSourceManage）
 
 - [ ] **T-SRC-1 导入持久化回归**：核对「启停/删除/恢复内置」后的 `preferences` 落盘与列表 key 稳定性。
-  - 证据（2026-10-06 补充，已确认真实触发）：`:657` 用 `source.bookSourceUrl + '#' + enabled` 作 ForEach key，
+  - 证据（2026-10-06 补充，已确认真实触发）：`:657` 原用 `source.bookSourceUrl + '#' + enabled` 作 ForEach key，
     用户库内 `bbiquge8` / `笔趣阁8` 指向同一 URL → 同 key 被静默去重，**列表少显示一行**，且启停/删除可能误伤另一条。
-    修法与搜索侧同源：key 补序号（`... + '#' + index + '#' + enabled`，保留 `enabled` 以便启停时重建该行）。
-    搜索侧已修（`SearchResult.ets` 的 `StatusRow.id`，见 `docs/progress.md` §「源状态抽屉内容整改」）。
-  - 验证：导入两条同 URL 不同名的书源 → 列表显示两行、各自可启停/删除。
+  - **修法（已实施 2026-10-06）**：key 改为 `bookSourceUrl + '#' + index + '#' + enabled` —— 保留 `enabled`
+    （否则启停后 key 不变、ForEach 不重建该行、开关显示旧值，见 `596f16a`），补 `index` 以区分同 URL 的两条。
+    搜索侧同族问题已修：`SearchResult.ets` 的 `StatusRow.id`（见 `docs/progress.md` §「源状态抽屉内容整改」）
+    与搜索前 `SourceRepository.dedupeByUrl()`（见 §「选择来源抽屉整改」）。
+  - 验证：导入两条同 URL 不同名的书源 → 列表显示两行、各自可启停/删除。**真机复验待补**（设备当时 Offline）。
+  - 残留语义（非缺陷）：一键「关闭/删除全部不可用」仍按 `bookSourceUrl` 聚合，同 URL 的两条会一起处理。
   - 证据：`pages/BookSourceManage.ets:65-70,175-198,343-386`、`model/SourceRepository.ets:39-47`
 - [ ] **T-SRC-2 检测并发/超时**：确认 `detect`（并发 4）无源级串扰，`busy` 态防重入。
   - 证据：`pages/BookSourceManage.ets:200-222`
@@ -110,7 +113,7 @@
 | T-TTS-1 引擎释放 | ✅ | `stop()` 增 `engine.shutdown()` 并置空、复位日志位（`TtsController.ets:226-243`） |
 | T-TTS-2 定时器自然结束 | ✅ | 末章播完 `clearTimer()`，避免 1s 定时器空转（`TtsController.ets:825-830`） |
 | T-TTS-3 错误态恢复 | ✅ | `onError` 清 in-flight、停 flush/progress 定时器、停后台；新增 `queueExhausted()`，播完后 `resume()` 可从章首重播 |
-| T-SRC-1 导入持久化回归 | ✅ | 列表 key 改为 `bookSourceUrl#enabled`（去 index），启停/一键清理即时刷新（`BookSourceManage.ets:644`） |
+| T-SRC-1 导入持久化回归 | ✅ | 列表 key 改为 `bookSourceUrl#enabled`（去 index），启停/一键清理即时刷新；**2026-10-06 补**：同 URL 重复源会撞 key → 再改为 `bookSourceUrl#index#enabled`（`BookSourceManage.ets:657`），真机复验待补 |
 | T-SRC-2 检测并发/超时 | ✅ | `runDetect` 加 `busy` 重入守卫并复位 `statusVisible`（`BookSourceManage.ets:292-308`）；引擎每源独立 Client（复核） |
 | T-DATA-1 封面读穿 | ✅ | S3 已实现：`pathCache` + `accessSync` 校验，命中不重下（`BookCover.ets:58-62`） |
 | T-DATA-2 清理缓存页 | ✅ | S9 已实现并真机核对（`CacheManage.ets`、`CacheRepository.ets`）；本轮增 `cover_*.img` 后缀精确匹配 |

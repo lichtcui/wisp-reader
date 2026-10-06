@@ -49,3 +49,25 @@ export function resetToBundled(ctx: common.UIAbilityContext): BookSource[] {
 export function enabledSources(sources: BookSource[]): BookSource[] {
   return sources.filter((s: BookSource) => s.enabled !== false);
 }
+
+/**
+ * 同一 `bookSourceUrl` 只保留一条。
+ *
+ * 书源集合里常见「同一站点的重复导入」（内置集就有 bbiquge8 / 笔趣阁8 同指 m.bbiquge8.net）：
+ * 不去重会重复请求同一站点、搜索结果重复，且 `Map<url, source>` 取值会被后写入的那条覆盖
+ * （表现为分组/置信度张冠李戴）。
+ *
+ * 入参需已按优先级排序（如置信度从高到低），本函数保留其中**首个**。
+ */
+export function dedupeByUrl(sources: BookSource[]): BookSource[] {
+  const seen: Set<string> = new Set<string>();
+  const out: BookSource[] = [];
+  for (const s of sources) {
+    if (seen.has(s.bookSourceUrl)) {
+      continue;
+    }
+    seen.add(s.bookSourceUrl);
+    out.push(s);
+  }
+  return out;
+}
