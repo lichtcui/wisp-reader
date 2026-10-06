@@ -57,6 +57,11 @@
 ## 书源管理（BookSourceManage）
 
 - [ ] **T-SRC-1 导入持久化回归**：核对「启停/删除/恢复内置」后的 `preferences` 落盘与列表 key 稳定性。
+  - 证据（2026-10-06 补充，已确认真实触发）：`:657` 用 `source.bookSourceUrl + '#' + enabled` 作 ForEach key，
+    用户库内 `bbiquge8` / `笔趣阁8` 指向同一 URL → 同 key 被静默去重，**列表少显示一行**，且启停/删除可能误伤另一条。
+    修法与搜索侧同源：key 补序号（`... + '#' + index + '#' + enabled`，保留 `enabled` 以便启停时重建该行）。
+    搜索侧已修（`SearchResult.ets` 的 `StatusRow.id`，见 `docs/progress.md` §「源状态抽屉内容整改」）。
+  - 验证：导入两条同 URL 不同名的书源 → 列表显示两行、各自可启停/删除。
   - 证据：`pages/BookSourceManage.ets:65-70,175-198,343-386`、`model/SourceRepository.ets:39-47`
 - [ ] **T-SRC-2 检测并发/超时**：确认 `detect`（并发 4）无源级串扰，`busy` 态防重入。
   - 证据：`pages/BookSourceManage.ets:200-222`

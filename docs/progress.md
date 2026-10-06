@@ -418,6 +418,24 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   并明文**禁止**再用「让 tab 栏让位」腾空间。
 - 状态：编译 ✅ BUILD SUCCESSFUL；**真机验证待用户复测**（设备当时不在线）。
 
+### 源状态抽屉内容整改（2026-10-06，用户真机反馈）
+
+| 反馈 | 处理 |
+|---|---|
+| 去掉「搜索源名」 | 删除 `statusSearchBox()` 与 `@Local statusFilter`（含 `statusRows()` 的名称过滤分支）；抽屉内已无 `TextInput` |
+| 所有组默认不展开 | 收起态改为**每次关闭抽屉时复位**（`BottomDrawer.onClose` 里清 `expandedReason/expandedOk`；遮罩/拖拽/X/系统 dismiss 四条关闭路径都经 `onClose`），不再保留上次展开态 |
+| 排序改为按「置信度影响」 | 新增 `statusGroups()`：成功组置顶，其余按 `-penaltyFor(reason)` 降序 → 成功 → 未搜索到 → 超时 → 网络错误 → 服务器错误 → 被拦截；同分按源数、再按名称 |
+| 展开后的源行去掉色点 | `statusSourceRow()` 不再画 8vp 圆点（**组头保留**，用于区分成功/失败） |
+| 「3 源」展开只有 2 行 | **根因：ForEach key 用了 `'s:' + sourceUrl`**，而用户书源里 `bbiquge8` 与 `笔趣阁8` 指向同一 URL（`http://m.bbiquge8.net`）→ 同 key 被 ForEach 静默去重。改为组内序号 key `'s:<group>#<i>'`（`StatusRow.id`），组内保持 `statuses` 追加序以保证 key 稳定 |
+| 统计区与下方列表无间隔 | 对齐目录抽屉的呼吸感：统计区改 `padding({ top: 16, bottom: 24 })`（原 `6/6`），并在统计区与列表之间加一条**通栏**分割线（`margin({left:-16,right:-16})` 抵消内容区左右 padding，与标题栏分割线同宽）。实测：“成功率”距标题栏分割线 8vp → **16vp**；“2 失败”距首个分组 30vp → **52vp**，中间夹 1px 分割线。内容区本身无顶部内边距（`BottomDrawer.contentArea`）→ 顶部留白由各页内容自备 |
+
+- `penaltyFor` 由 [`../entry/src/main/ets/model/SourceConfidence.ets`](../entry/src/main/ets/model/SourceConfidence.ets) 导出，**排序与计分共用同一张影响表**（改扣分即同步改排序）。
+- 真机验证（`uitest dumpLayout`）：抽屉内页面级 `TextInput` 仅剩顶部搜索框，抽屉自身 0 个；关闭重开后全部 `▸`；成功组置顶且「5 源」= 展开 5 行（含两个同 URL 源）、失败组「2 源」= 2 行；展开行内 8vp 圆点 = 0（组头保留）。
+- 抽屉规范已同步：[`specs/UI-SPEC.md`](./specs/UI-SPEC.md) §1.5（内容区无顶部内边距 + 通栏分割线写法）、§1.6/§2 修正陈旧的 `sheetSize`（「源状态」原记 `fit`、「选择来源」原记 `medium`，实际均为 `large`；现全项目 6×`large` + 1×`fit`）。
+- 已知无害噪音：cover 模态层开合时 ArkUI 记 `E AceStateMgmt: No views to update for containerId=100000`。
+  已实测**与本改动无关**（把复位写入删掉后该日志反而更多），属 `bindContentCover` + 大量页面 `@Local` 写入的既有现象；
+  复位展开态必须在 `onClose`（内容仍挂载）里做，别放进 `@Monitor('statusVisible')`（那时模态层可能尚未挂载）。
+
 ## 未决 / 风险
 - 目录分页 `nextTocUrl` / 卷 `isVolume` 已在引擎实现（真机 detect 覆盖当页路径），多页目录待复验。
 - 书源持久化仍用 `preferences` JSON（书籍/进度已用 `relationalStore`）；后续可迁移统一。
@@ -425,6 +443,8 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 - 文件导入/剪贴板导入：URL 导入已真机复验（成功 1 / 排除 2：需 JS 1、需登录 1）；文件/剪贴板走同一门禁函数。
 - 搜索排序已改为 Legado 分桶 + 同名同作者跨源合并 + 源 `weight`（见「搜索结果页整改」）；
   另加**书源置信度**（失败扣分/成功回分/持久化）决定**搜索调度顺序**（见「书源置信度 + 搜索滑动窗口调度」）。
+- **同 URL 重复书源**（用户库内确有两例：`bbiquge8` / `笔趣阁8` → `http://m.bbiquge8.net`）是「ForEach key 用 URL」
+  这一类缺陷的共同诱因。搜索侧已修（见「源状态抽屉内容整改」）；**书源管理列表仍是待办**（见 `bugfix/TASKS.md` T-SRC-1）。
 
 ## 交接备忘
 
