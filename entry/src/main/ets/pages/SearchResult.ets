@@ -4,7 +4,7 @@ import { Book, BookSearchItem, BookSource, SourceStatus } from '../engine/types'
 import { BookCover } from '../components/BookCover';
 import { EmptyView } from '../components/EmptyView';
 import { enabledSources, loadSources, saveSources } from '../model/SourceRepository';
-import { applyOutcomes, confidenceOf, sortByConfidence } from '../model/SourceConfidence';
+import { applyOutcomes, confidenceOf, penaltyFor, sortByConfidence } from '../model/SourceConfidence';
 import { getBooks } from '../model/ShelfRepository';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 
@@ -27,6 +27,22 @@ interface SearchGroup {
   bucket: number;
 }
 
+/**
+ * One render row in the source-status drawer. Flattened so a single lazy `List`
+ * can drive group headers and their (item-by-item) sources without materializing
+ * thousands of rows up front.
+ */
+interface StatusRow {
+  kind: string; // 'source' | 'reason' | 'ok'
+  status?: SourceStatus;
+  reason?: string;
+  label?: string;
+  count?: number;
+  /** 源行的稳定唯一 key。不能用 `sourceUrl`：两个书源可以指向同一 URL（重复导入），
+   *  同 key 会被 ForEach 静默去重 → 「3 源」只渲染出 2 行。 */
+  id?: string;
+}
+
 @ComponentV2
 export struct SearchResultPage {
   @Param keyword: string = '';
@@ -43,6 +59,9 @@ export struct SearchResultPage {
   @Local shelfKeys: Set<string> = new Set<string>();
   @Local pickerVisible: boolean = false;
   @Local pickerGroup: SearchGroup | undefined = undefined;
+  // 源状态抽屉：按置信度影响排序的「成功 / 失败原因」分组下钻，默认（及每次打开）全部收起。
+  @Local expandedReason: string = '';
+  @Local expandedOk: boolean = false;
 
   private ctx: common.UIAbilityContext | undefined = undefined;
   private sources: BookSource[] = [];
@@ -92,6 +111,8 @@ export struct SearchResultPage {
     this.statusVisible = false;
     this.pickerVisible = false;
     this.pickerGroup = undefined;
+    this.expandedReason = '';
+    this.expandedOk = false;
     this.searching = true;
     this.nextIndex = 0;
     // 每次搜索前按最新置信度排序，保证高置信源排在前面先被调度。
@@ -427,6 +448,151 @@ export struct SearchResultPage {
     return s === undefined ? '—' : confidenceOf(s).toString();
   }
 
+  /** Rust `FailReason` 短码 → 中文。与 rust/legado-engine/src/status.rs `fail_message` 保持同步。 */
+  private failLabel(reason: string): string {
+    switch (reason) {
+      case 'no_results': return '未搜索到结果';
+      case 'blocked': return '被站点拦截';
+      case 'not_found': return '页面不存在';
+      case 'rate_limited': return '请求过于频繁';
+      case 'network_error': return '网络错误';
+      case 'server_error': return '服务器错误';
+      case 'timeout': return '超时';
+      case 'builder_error': return '无法构建搜索请求';
+      case 'http_error': return 'HTTP 错误';
+      case 'needs_js': return '需要 JS（v1 不支持）';
+      case 'needs_login': return '需要登录（v1 不支持）';
+      default: return reason.length > 0 ? reason : '未知错误';
+    }
+  }
+
+  private okCount(): number {
+    let n: number = 0;
+    for (const s of this.statuses) {
+      if (s.ok) {
+        n += 1;
+      }
+    }
+    return n;
+  }
+
+  private failCount(): number {
+    return this.statuses.length - this.okCount();
+  }
+
+  private successPct(): number {
+    if (this.statuses.length === 0) {
+      return 0;
+    }
+    return Math.round(this.okCount() * 100 / this.statuses.length);
+  }
+
+  private okStatuses(): SourceStatus[] {
+    const arr: SourceStatus[] = [];
+    for (const s of this.statuses) {
+      if (s.ok) {
+        arr.push(s);
+      }
+    }
+    return arr;
+  }
+
+  /**
+   * 组排序分 = 该组对置信度的「影响」（复用计分用的 `penaltyFor`）：
+   * 成功为正向影响 → `1`（置顶）；`no_results` 等不计分 → `0`；其余为扣分负值。
+   * 因此顺序为：成功 → 未搜索到 → 超时 → 网络错误 → 服务器错误 → 被拦截。
+   */
+  private groupScore(row: StatusRow): number {
+    if (row.kind === 'ok') {
+      return 1;
+    }
+    return -penaltyFor(row.reason ?? '');
+  }
+
+  /** 分组：成功组 + 失败源按错误原因聚合；按置信度影响从好到坏排序（成功置顶）。 */
+  private statusGroups(): StatusRow[] {
+    const map: Map<string, number> = new Map<string, number>();
+    for (const s of this.statuses) {
+      if (s.ok) {
+        continue;
+      }
+      const reason: string = s.error.length > 0 ? s.error : 'unknown';
+      map.set(reason, (map.get(reason) ?? 0) + 1);
+    }
+    const rows: StatusRow[] = [];
+    rows.push({ kind: 'ok', count: this.okCount() });
+    map.forEach((count: number, reason: string) => {
+      rows.push({ kind: 'reason', reason: reason, label: this.failLabel(reason), count: count });
+    });
+    rows.sort((a: StatusRow, b: StatusRow): number => {
+      const byScore: number = this.groupScore(b) - this.groupScore(a);
+      if (byScore !== 0) {
+        return byScore;
+      }
+      // 影响相同时源多的靠前，再退化到名称，保证顺序稳定。
+      const byCount: number = (b.count ?? 0) - (a.count ?? 0);
+      return byCount !== 0 ? byCount : (a.label ?? '').localeCompare(b.label ?? '');
+    });
+    return rows;
+  }
+
+  private statusesOfReason(reason: string): SourceStatus[] {
+    const arr: SourceStatus[] = [];
+    for (const s of this.statuses) {
+      if (!s.ok && (s.error.length > 0 ? s.error : 'unknown') === reason) {
+        arr.push(s);
+      }
+    }
+    return arr;
+  }
+
+  /** 展平的渲染行：「组头 → （展开时）组内源」。默认全部收起。 */
+  private statusRows(): StatusRow[] {
+    const rows: StatusRow[] = [];
+    for (const g of this.statusGroups()) {
+      const reason: string = g.reason ?? '';
+      const groupKey: string = g.kind === 'ok' ? 'ok' : reason;
+      rows.push(g);
+      // 组内保持 `statuses` 顺序（追加序 = 置信度降序的派发序），使行 key 稳定。
+      const members: SourceStatus[] = this.isGroupExpanded(g) ? this.statusesOfGroup(g) : [];
+      for (let i = 0; i < members.length; i++) {
+        rows.push({ kind: 'source', status: members[i], id: 's:' + groupKey + '#' + i.toString() });
+      }
+    }
+    return rows;
+  }
+
+  private isGroupExpanded(g: StatusRow): boolean {
+    return g.kind === 'ok' ? this.expandedOk : this.expandedReason === (g.reason ?? '');
+  }
+
+  private statusesOfGroup(g: StatusRow): SourceStatus[] {
+    return g.kind === 'ok' ? this.okStatuses() : this.statusesOfReason(g.reason ?? '');
+  }
+
+  private statusRowKey(row: StatusRow): string {
+    if (row.kind === 'source') {
+      return row.id ?? '';
+    }
+    // 把展开态编进 key：否则 ForEach 复用同 key 的组头，`expanded` 参数不会
+    // 重新求值，chevron 会停在旧方向。
+    if (row.kind === 'ok') {
+      return 'g:ok' + (this.expandedOk ? ':o' : ':c');
+    }
+    const reason: string = row.reason ?? '';
+    return 'g:' + reason + (this.expandedReason === reason ? ':o' : ':c');
+  }
+
+  private elapsedLabel(ms: number): string {
+    if (ms <= 0) {
+      return '';
+    }
+    if (ms < 1000) {
+      return ms.toString() + 'ms';
+    }
+    return (ms / 1000).toFixed(1) + 's';
+  }
+
   @Builder
   searchBanner() {
     Row({ space: 8 }) {
@@ -502,34 +668,139 @@ export struct SearchResultPage {
   }
 
   @Builder
-  statusContent() {
-    Scroll() {
-      Column() {
-        ForEach(this.statuses, (status: SourceStatus) => {
-          Row() {
-            Text(status.sourceName.length > 0 ? status.sourceName : status.sourceUrl)
-              .fontSize(13)
-              .fontColor($r('app.color.text_2'))
-              .layoutWeight(1)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-            Text(status.ok ? `✓ ${status.count}` : status.error)
-              .fontSize(12)
-              .fontColor(status.ok ? $r('app.color.brand') : $r('app.color.warning'))
-            Text('置信 ' + this.confidenceLabel(status))
-              .fontSize(11)
-              .fontColor($r('app.color.text_5'))
-              .margin({ left: 8 })
-          }
+  statusSummary() {
+    Column({ space: 8 }) {
+      Row() {
+        Text('成功率 ' + this.successPct().toString() + '%')
+          .fontSize(13)
+          .fontColor($r('app.color.text_2'))
+        Blank()
+        Text(this.statuses.length.toString() + ' 源')
+          .fontSize(12)
+          .fontColor($r('app.color.text_4'))
+      }
+      .width('100%')
+
+      Stack({ alignContent: Alignment.Start }) {
+        Row()
           .width('100%')
-          .padding({ top: 6, bottom: 6 })
-        }, (status: SourceStatus) => status.sourceUrl)
+          .height(6)
+          .borderRadius(3)
+          .backgroundColor($r('app.color.bg_pill'))
+        Row()
+          .width(this.successPct().toString() + '%')
+          .height(6)
+          .borderRadius(3)
+          .backgroundColor($r('app.color.success'))
+      }
+      .width('100%')
+
+      Row({ space: 12 }) {
+        Text(this.okCount().toString() + ' 成功')
+          .fontSize(12)
+          .fontColor($r('app.color.success'))
+        Text(this.failCount().toString() + ' 失败')
+          .fontSize(12)
+          .fontColor($r('app.color.warning'))
+        Blank()
       }
       .width('100%')
     }
     .width('100%')
-    .constraintSize({ maxHeight: 320 })
-    .scrollBar(BarState.Off)
+    // 上 16vp：与标题栏分割线拉开（内容区本身无顶部内边距，见 UI-SPEC §1.5）；
+    // 下 24vp：把统计区与下方分组列表分成两块（下方接 1px 分割线）。
+    .padding({ top: 16, bottom: 24 })
+  }
+
+  @Builder
+  statusGroupHeader(label: string, count: number, kind: string, reasonKey: string, expanded: boolean) {
+    Row({ space: 8 }) {
+      Row()
+        .width(8)
+        .height(8)
+        .borderRadius(4)
+        .backgroundColor(kind === 'ok' ? $r('app.color.success') : $r('app.color.warning'))
+      Text(label)
+        .fontSize(14)
+        .fontColor($r('app.color.text_1'))
+        .layoutWeight(1)
+      Text(count.toString() + ' 源')
+        .fontSize(12)
+        .fontColor($r('app.color.text_4'))
+      Text(expanded ? '▾' : '▸')
+        .fontSize(14)
+        .fontColor($r('app.color.text_4'))
+    }
+    .width('100%')
+    .padding({ top: 14, bottom: 14 })
+    .onClick(() => {
+      if (kind === 'ok') {
+        this.expandedOk = !this.expandedOk;
+      } else {
+        this.expandedReason = this.expandedReason === reasonKey ? '' : reasonKey;
+      }
+    })
+  }
+
+  @Builder
+  statusSourceRow(status: SourceStatus) {
+    // 不带状态色点：展开后整列都是点，干扰阅读（状态已由组头表达）。
+    Row({ space: 8 }) {
+      Text(status.sourceName.length > 0 ? status.sourceName : status.sourceUrl)
+        .fontSize(13)
+        .fontColor($r('app.color.text_2'))
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      if (status.ok) {
+        Text(status.count.toString() + ' 条')
+          .fontSize(12)
+          .fontColor($r('app.color.success'))
+      }
+      Text('置信 ' + this.confidenceLabel(status))
+        .fontSize(11)
+        .fontColor($r('app.color.text_4'))
+      if (status.elapsedMs > 0) {
+        Text(this.elapsedLabel(status.elapsedMs))
+          .fontSize(11)
+          .fontColor($r('app.color.text_5'))
+      }
+    }
+    .width('100%')
+    .padding({ top: 10, bottom: 10 })
+  }
+
+  @Builder
+  statusContent() {
+    Column() {
+      this.statusSummary()
+
+      // 统计区与分组列表之间的分隔线（-16 与外层内容区的左右 padding 相抵消 → 通栏）。
+      Divider()
+        .color($r('app.color.divider'))
+        .strokeWidth(1)
+        .margin({ left: -16, right: -16 })
+
+      List({ space: 0 }) {
+        ForEach(this.statusRows(), (row: StatusRow) => {
+          ListItem() {
+            if (row.kind === 'source' && row.status !== undefined) {
+              this.statusSourceRow(row.status)
+            } else if (row.kind === 'reason' && row.reason !== undefined
+              && row.label !== undefined && row.count !== undefined) {
+              this.statusGroupHeader(row.label, row.count, 'reason', row.reason, this.expandedReason === row.reason)
+            } else if (row.kind === 'ok' && row.count !== undefined) {
+              this.statusGroupHeader('成功', row.count, 'ok', '', this.expandedOk)
+            }
+          }
+        }, (row: StatusRow) => this.statusRowKey(row))
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .scrollBar(BarState.Off)
+    }
+    .width('100%')
+    .height('100%')
   }
 
   @Builder
@@ -640,6 +911,11 @@ export struct SearchResultPage {
         mode: 'cover',
         onClose: () => {
           this.statusVisible = false;
+          // 关闭即回到「全部收起」：下次打开不看上次的展开状态。
+          // 必须在此处（内容仍挂载）复位；放到 `@Monitor('statusVisible')` 里会在
+          // cover 模态层尚未挂载时报 `No views to update`。
+          this.expandedReason = '';
+          this.expandedOk = false;
         }
       }) {
         this.statusContent()

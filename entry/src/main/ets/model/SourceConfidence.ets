@@ -11,8 +11,8 @@ export const CONFIDENCE_MAX: number = 100;
 export const CONFIDENCE_MIN: number = 0;
 export const CONFIDENCE_DEFAULT: number = CONFIDENCE_MAX;
 
-/** 越严重扣得越多（站点级故障 > 临时故障）。 */
-function penaltyFor(error: string): number {
+/** 越严重扣得越多（站点级故障 > 临时故障）。同时被源状态抽屉用于「按置信度影响」排序分组。 */
+export function penaltyFor(error: string): number {
   switch (error) {
     case 'blocked':
       return 30;

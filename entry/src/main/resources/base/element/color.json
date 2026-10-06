@@ -89,6 +89,10 @@
       "value": "#3A6FD8"
     },
     {
+      "name": "success",
+      "value": "#2E9E5B"
+    },
+    {
       "name": "reader_bg",
       "value": "#181820"
     },
