@@ -160,16 +160,25 @@ struct Index {
   }
 
   @Builder
+  // The bar is the last thing above the bottom safe area, so extending its own
+  // background into that area is what keeps the system navigation-bar strip (a
+  // grey band) from showing up right below the page. The inner Row keeps the
+  // 60vp tab height, so the icons stay exactly where they were.
+  @Builder
   bottomBar() {
-    Row() {
-      this.bottomTab($r('sys.symbol.bookshelf'), '书架', TAB_SHELF)
-      this.bottomTab($r('sys.symbol.magnifyingglass'), '搜索', TAB_SEARCH)
-      this.bottomTab($r('sys.symbol.gearshape'), '设置', TAB_SETTINGS)
+    Column() {
+      Row() {
+        this.bottomTab($r('sys.symbol.bookshelf'), '书架', TAB_SHELF)
+        this.bottomTab($r('sys.symbol.magnifyingglass'), '搜索', TAB_SEARCH)
+        this.bottomTab($r('sys.symbol.gearshape'), '设置', TAB_SETTINGS)
+      }
+      .width('100%')
+      .height(60)
     }
     .width('100%')
-    .height(60)
     .backgroundColor($r('app.color.bg_page'))
     .border({ width: { top: 1 }, color: $r('app.color.divider') })
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
   }
 
   @Builder
@@ -324,6 +333,9 @@ struct Index {
         .width('100%')
         .backgroundColor($r('app.color.bg_page'))
 
+        // The bottom bar is always laid out here; a drawer that must show above it
+        // uses BottomDrawer's 'cover' mode (window-level layer), so the bar never
+        // moves (see docs/specs/UI-SPEC.md §1.2.1).
         this.bottomBar()
       }
       .width('100%')

@@ -42,6 +42,8 @@
 **听书（Listening / TTS）**
 - 生命周期闭环（见 §1.1）：后台任务配对、引擎释放、定时器自然结束清理、错误可恢复、播完可重播。
 - 听书目录抽屉由 `overlay` 改为 `system` 模式（`large`），符合 UI-SPEC「目录走系统 sheet」。
+  > ⚠️ **已被取代（2026-10-06）**：该条连同「目录走系统 sheet」规则已作废，现行为**全部抽屉统一 overlay**，
+  > 见 [`docs/specs/UI-SPEC.md`](../specs/UI-SPEC.md)。请勿按本条回改。
 - 浮动按钮（`FloatingListenButton`）复核：挂载后测量、拖动吸附定时器清理、`HitTestMode.None` 均正确。
 
 **书源管理**
@@ -63,7 +65,7 @@
 | 书架「…」功能键热区不足 44×44 | → `MoreMenuButton`（44×44 + 按压反馈） |
 | 详情页 `Text('‹')` 返回 | → `AppBackButton(tone:'onBrand')` |
 | 阅读页返回 / 更多为手搓实现 | → `AppBackButton` / `MoreMenuButton`（带 day/night 颜色覆盖） |
-| 听书目录用 overlay 模式 | → `system` + `large` |
+| 听书目录用 overlay 模式 | → `system` + `large`（⚠️ **已被取代**：2026-10-06 起统一 overlay，见 [`docs/specs/UI-SPEC.md`](../specs/UI-SPEC.md)） |
 | 抽屉内容根写死高度 | → 移除（Reader / Listening） |
 | 详情页面板圆角 16 | → 20（`sheetTopRadius`，可选项） |
 | `mask` 色令牌 | 复核 base `#52000000` / dark `#80000000`，已正确 |
@@ -147,6 +149,7 @@
 ### 4.3 保留的工作文档（未纳入版本控制）
 
 `AUDIT.md`、`ROOT-CAUSE.md`、`TASKS.md`、`UI-SPEC.md`、`TTS-PLAN.md`、`HANDOFF-S3/4/5.md` 为未跟踪工作文档（`HANDOFF-S6..S9.md` 已跟踪）。
+> 注：其中 `UI-SPEC.md` 已于 2026-10-06 重建为 [`docs/specs/UI-SPEC.md`](../specs/UI-SPEC.md)（底部抽屉统一规范，现行有效）。
 建议择一：提交归档，或加入 `.gitignore`；**本轮未删除**这些审计轨迹。
 
 ---

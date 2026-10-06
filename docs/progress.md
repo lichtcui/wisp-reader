@@ -352,6 +352,72 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 - 规模扩展提醒（300–4000 源时再处理）：总耗时 ≈ 源数/并发 × 平均耗时，Rust `concurrency.clamp(1,16)` 是硬上限；
   `book_sources_v1` 单条 JSON 存 preferences 届时可能过大，或需迁 RDB。
 
+## 抽屉统一样式 + 打开方式（2026-10-06，真机验证）
+
+把全项目底部抽屉统一为**阅读页目录/阅读设置**那一套：从**屏幕最底部上滑**的番茄式浮层。
+规范已归档为 [`specs/UI-SPEC.md`](./specs/UI-SPEC.md)（**改动抽屉前必读**，含 7 处调用点清单 + 检查清单）。
+
+| 验证项 | 结果 |
+|---|---|
+| 全部抽屉 `mode` 统一 `overlay`（去 `system`/`bindSheet`） | ✅ 书源管理 / 搜索页两处 / 听书目录 |
+| 打开方式统一：都从屏幕最底边上滑 | ✅ 慢放到 1500ms 连拍，面板顶边逐帧 2672 → 2281 → 1480 → 845 → 588（屏高 2844） |
+| 首开不再「弹出」（面板常驻测量，消除 3000 兜底起点） | ✅ 页面加载即测高，打开行程 = 面板实测高度 |
+| 关掉遮罩后页面仍可滚动/点击（命中测试） | ✅ 修掉常驻挂载吞手势的回归（宿主 `Stack` 需 `HitTestMode.None`） |
+| 圆角 20 可见（白叠白加阴影 `#33000000`） | ✅ 逐像素：顶部出现阴影渐变，左右角镜像对称 |
+| 阅读页目录 / 阅读设置无回归 | ✅ 目录照旧打开、内容正常 |
+| 编译 + 真机装机闭环 | ✅ BUILD SUCCESSFUL（0 error） |
+
+- 改动：`ui/common/BottomDrawer.ets`（常驻挂载 + 精确测高 + 命中测试 + 阴影）、
+  `pages/BookSourceManage.ets` / `pages/SearchResult.ets` / `pages/Listening.ets`（改 overlay + 常驻挂载）。
+- **作废旧规**：旧 UI-SPEC「目录走系统 sheet」与 `RELEASE-NOTES.md` 对应条目已标注取代，**勿回改**。
+- 未提交；听书目录抽屉待联上可用书源后补一次真机点开复验。
+
+### 补修：底部锚点 + 关闭态阴影（2026-10-06，用户真机反馈）
+
+反馈两条：①「书源状态/书源选择」从底部 menu 上方弹出，「书源校验」从安全区上方一点弹出（都不是从屏幕最底部）；
+②抽屉没打开时，在弹出位置能看到**一条两端缺角的阴影带**。
+
+定位（用已有实测数据反推几何，逐项吻合）：
+
+| 抽屉 | 宿主布局区底边 | 实测面板顶 | 推算验证 |
+|---|---|---|---|
+| 书源管理「书源状态」(large) | 屏幕底 − 安全区 = **2717** | ~557–570 | 2717 − 0.9×(2717−317) ≈ 557 |
+| 搜索页「源状态/选择来源」 | **tab 栏顶边 2597** | 1181 / 996 | 2597 − 0.7×(2597−296) ≈ 987 ≈ 996 ✅ |
+| 阅读页（基准） | 屏幕底 2844 | — | 基准正常 |
+
+结论：宿主 `clip`/布局区被**底部安全区（127px）**与**底部 tab 栏（120px）**截断；关闭态阴影是面板常驻后 `shadow` 从宿主裁切区上方溢出（`clip(true)` 裁不掉阴影）。
+
+修复（三处）：
+
+1. **锚定屏幕物理底边**：`overlayHost` 加 `.expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])`；
+2. ~~打开期间让出底部 tab 栏~~（**已废弃**，见下节）；
+3. **关闭后彻底不可见**：新增 `@Local panelShown` → `visibility(Hidden)`（保留布局与测高），关闭动画结束 +40ms 才隐藏。
+
+- 附带：打开时改为「先重新测高再起滑」（`MEASURE_WAIT_MS = 32`）。
+- 规范已同步：[`specs/UI-SPEC.md`](./specs/UI-SPEC.md) §1.2.1（必须锚定屏幕物理底边）/ §1.2.2（关闭后必须完全不可见）。
+- 状态：编译 ✅ BUILD SUCCESSFUL。
+
+### 修正：tab 页内抽屉改用窗口模态层 `mode: 'cover'`（2026-10-06，用户真机二次反馈）
+
+反馈：「源状态 / 选择来源」抽屉打开时，**下方 tab 栏会先消失再出现**；要求像阅读页目录抽屉那样——
+**tab 栏原地不动，只是被抽屉遮罩盖住**。
+
+根因：上节方案 ②「隐藏 tab 栏」本身就是被反馈的缺陷；且从绘制序上说，tab 栏是 `Index` 里 `Tabs` 的**后置兄弟**，
+而抽屉声明在 `TabContent` 内的页面里 → 页面级抽屉**永远画不到 tab 栏之上**（除非让 tab 栏让出布局，而那会带动整页重排）。
+
+方案（新增 `BottomDrawer` 第三种模式）：
+
+- **`mode: 'cover'`**：抽屉用 `bindContentCover` 画到**窗口模态层**（`ModalTransition.NONE` + `backgroundColor: Color.Transparent`
+  + `onWillDismiss` 回到 `onClose()`），面板天然锚定窗口底边、且**在 tab 栏之上**；
+  打开/关闭动画仍由 `BottomDrawer` 自己的状态机驱动（`translate` + `animateTo`），所以视觉与阅读页抽屉一致；
+  关闭动画结束后整层模态卸载（不会残留阴影，不需要 `visibility` 补救）。
+- **搜索页「源状态 / 选择来源」两个抽屉迁到 `cover`**；`NavDestination` 页（阅读页 / 书源管理 / 听书）与
+  页面已直达屏幕底边的场景继续用 `overlay`（已验证、无 tab 栏干扰）。
+- **删除** `model/DrawerOverlay.ets` 计数单例，`Index.ets` 恢复**无条件**底部栏（tab 栏位置全程不变）。
+- 规范已订正：[`specs/UI-SPEC.md`](./specs/UI-SPEC.md) §1.2.1 新增「页内 `overlay` / 窗口层 `cover` 二选一」规则，
+  并明文**禁止**再用「让 tab 栏让位」腾空间。
+- 状态：编译 ✅ BUILD SUCCESSFUL；**真机验证待用户复测**（设备当时不在线）。
+
 ## 未决 / 风险
 - 目录分页 `nextTocUrl` / 卷 `isVolume` 已在引擎实现（真机 detect 覆盖当页路径），多页目录待复验。
 - 书源持久化仍用 `preferences` JSON（书籍/进度已用 `relationalStore`）；后续可迁移统一。
@@ -363,6 +429,7 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 ## 交接备忘
 
 - 构建/安装/调试命令见 [`../AGENTS.md`](../AGENTS.md) §4。
+- **底部抽屉规范见 [`specs/UI-SPEC.md`](./specs/UI-SPEC.md)**（唯一权威；改动抽屉必须全项目同步）。
 - 引擎复用清单与门禁见 [`engine.md`](./engine.md)。
 - 架构与 NAPI 边界见 [`architecture.md`](./architecture.md)。
 - 端侧自建 TTS（本地 GPT-SoVITS 音色）调研与原型计划见 [`research/TTS-PLAN.md`](./research/TTS-PLAN.md)

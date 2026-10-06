@@ -102,7 +102,7 @@ docs/
   plan.md                   完整设计方案（权威）
   progress.md               进度/下一步
   architecture.md / engine.md / development.md
-  specs/                    UI 规范（UI-SPEC；当前为空）
+  specs/                    UI 规范：UI-SPEC.md（**底部抽屉统一规范，改动抽屉前必读**）
   research/                 TTS-PLAN.md（端侧自建 TTS 调研）
   bugfix/                   TASKS / RELEASE-NOTES（bug 修复生命周期）
   handoff/                  HANDOFF-S9.md + ARCHIVE-S3-S8.md（阶段性交接记录）
@@ -156,6 +156,12 @@ import {
   UI/交互规范 → `docs/specs/`；调研/方案 → `docs/research/`；bug 审计与修复生命周期 →
   `docs/bugfix/`；阶段性交接 → `docs/handoff/`（命名 `HANDOFF-S<N>.md`）；核心常读文档留在 `docs/` 根。
   **禁止**再在根目录新建 `.md`。移动或新增文档后，务必同步更新引用它的相对链接。
+- **底部抽屉（硬性）**：任何抽屉的样式/动效改动，**先读 [`docs/specs/UI-SPEC.md`](./docs/specs/UI-SPEC.md)**；
+  全项目抽屉**必须一起改**（共 7 处调用点，见该文档 §2 清单），并逐项过 §3 检查清单。
+  **底部 tab 页（`TabContent`）内的抽屉一律用 `mode: 'cover'`**（窗口模态层，面板可从屏幕最底部上滑并盖住 tab 栏，
+  tab 栏全程不动）；`NavDestination` 页用 `overlay`。
+  唯一实现是 `ui/common/BottomDrawer.ets`（`mode: 'overlay'`，常驻挂载）；**禁止**裸 `bindSheet`
+  与 `if (flag) { BottomDrawer(...) }` 式条件挂载。
 - **ArkTS 严格模式**：不用 `any`；JSON 解析字段名等点语法属性要在 `entry/obfuscation-rules.txt` 的
   `-keep-property-name` 保留（release 已开混淆）。
 - **签名凭据**：`build-profile.json5` 含明文/加密凭据，**不要提交**。初始化 git 后建议：

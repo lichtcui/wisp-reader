@@ -383,7 +383,7 @@ export struct ListeningPage {
         visible: this.sheetVisible,
         title: '目录',
         sheetSize: 'large',
-        mode: 'system',
+        mode: 'overlay',
         onClose: () => {
           this.sheetVisible = false;
         }

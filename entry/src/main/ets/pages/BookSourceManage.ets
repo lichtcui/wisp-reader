@@ -703,18 +703,16 @@ export struct BookSourceManagePage {
       .width('100%')
       .height('100%')
 
-      if (this.statusVisible) {
-        BottomDrawer({
-          visible: true,
-          title: '书源状态',
-          sheetSize: 'large',
-          mode: 'system',
-          onClose: () => {
-            this.statusVisible = false;
-          }
-        }) {
-          this.statusContent()
+      BottomDrawer({
+        visible: this.statusVisible,
+        title: '书源状态',
+        sheetSize: 'large',
+        mode: 'overlay',
+        onClose: () => {
+          this.statusVisible = false;
         }
+      }) {
+        this.statusContent()
       }
     }
     .width('100%')

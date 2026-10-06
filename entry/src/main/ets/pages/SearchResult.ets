@@ -630,32 +630,31 @@ export struct SearchResultPage {
       .width('100%')
       .height('100%')
 
-      if (this.statusVisible) {
-        BottomDrawer({
-          visible: true,
-          title: '源状态',
-          sheetSize: 'fit',
-          mode: 'system',
-          onClose: () => {
-            this.statusVisible = false;
-          }
-        }) {
-          this.statusContent()
+      BottomDrawer({
+        visible: this.statusVisible,
+        title: '源状态',
+        // Same size as the reader's table-of-contents drawer ('large' = 90%).
+        sheetSize: 'large',
+        // 'cover': drawn in the window layer so the panel covers the bottom tab
+        // bar while the tab bar itself stays put (see UI-SPEC.md §1.2.1).
+        mode: 'cover',
+        onClose: () => {
+          this.statusVisible = false;
         }
+      }) {
+        this.statusContent()
       }
 
-      if (this.pickerVisible) {
-        BottomDrawer({
-          visible: true,
-          title: '选择来源',
-          sheetSize: 'medium',
-          mode: 'system',
-          onClose: () => {
-            this.pickerVisible = false;
-          }
-        }) {
-          this.pickerContent()
+      BottomDrawer({
+        visible: this.pickerVisible,
+        title: '选择来源',
+        sheetSize: 'large',
+        mode: 'cover',
+        onClose: () => {
+          this.pickerVisible = false;
         }
+      }) {
+        this.pickerContent()
       }
     }
     .width('100%')
