@@ -14,7 +14,23 @@
 - `ohrs doctor` 可自检环境。
 - **crates.io 本机不可达**：项目根 `.cargo/config.toml` 已指向 `rsproxy.cn`（勿删）。
 
-## 构建 native
+## 首选：`make`（命令统一入口）
+
+先试 `make help`（根目录 `Makefile` 已把环境变量、产物路径、设备命令都固定下来了）：
+
+| 命令 | 作用 |
+|---|---|
+| `make run` | **改完代码走这个**：编译 debug HAP → 安装 → force-stop → 启动 |
+| `make hap` / `make hap-release` | 只编译（debug / release+混淆+签名） |
+| `make rust` | 交叉编译 `.so` **并拷 `index.d.ts`** 进 `entry/` |
+| `make test` | 主机跑引擎单测（`cargo test`，不碰真机） |
+| `make log` | 清日志 + 实时过滤 `SourceReaderPoC` |
+| `make devices` | 列出设备 UDID |
+| `make docs-toc` | 重建大文档顶部的行号目录 |
+
+下面各节保留**底层原始命令**，供排查或手工分步时对照（`make` 干的就是这些）。
+
+## 构建 native（= `make rust`）
 
 ```bash
 export OHOS_NDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony
@@ -24,9 +40,11 @@ cp dist/arm64-v8a/liblegado_core.so ../../entry/libs/arm64-v8a/
 ```
 
 - 首次构建依赖树大，约 10–15 分钟；之后增量很快。
-- `ohrs build` 会顺带生成 `dist/index.d.ts`（NAPI 类型声明）。
+- `ohrs build` 会顺带生成 `dist/index.d.ts`（NAPI 类型声明，由 Rust 的 `///` doc comment 来）。
+  **改接口说明改 Rust 的 `///`**，手工分步时记得一并拷贝：
+  `cp rust/legado-core/dist/index.d.ts entry/src/main/cpp/types/liblegado_core/`。
 
-## 构建 HAP
+## 构建 HAP（= `make hap` / `make hap-release`）
 
 ```bash
 export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk
@@ -48,7 +66,7 @@ export PATH="/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applicatio
   4. 确认代理未拦 `*.dbankcloud.*` / `*.huawei.com`。
 - **`build-profile.json5` 含凭据，勿提交**。初始化 git 后：`git update-index --skip-worktree build-profile.json5`。
 
-## 安装 / 启动 / 日志
+## 安装 / 启动 / 日志（= `make run` / `make log` / `make devices`）
 
 ```bash
 HDC=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc
@@ -57,7 +75,7 @@ $HDC install -r entry/build/default/outputs/default/entry-default-signed.hap
 $HDC shell aa force-stop com.lichtcui.sourcereader
 $HDC shell aa start -a EntryAbility -b com.lichtcui.sourcereader
 $HDC shell hilog -r                     # 清日志
-$HDC shell hilog -x | grep SourceReaderPoC
+$HDC shell hilog -x -T SourceReaderPoC   # 按 tag 过滤；裸 hilog -x | grep 会刷屏（= make log）
 ```
 
 **坑**：仅 `aa start` 不会重跑 `aboutToAppear`；要重跑页面逻辑必须先 `aa force-stop`。
@@ -100,9 +118,10 @@ $HDC shell hilog -x | grep SourceReaderPoC
 
 | 项 | 路径 |
 |---|---|
+| 命令统一入口 | `Makefile`（`make help`）；文档目录生成器 `scripts/docs-toc.sh` |
 | Rust 引擎核心（纯 Rust，可 `cargo test`） | `rust/legado-engine/` |
 | Rust NAPI 包装（cdylib） | `rust/legado-core/` |
 | 内置书源生成器 | `rust/legado-engine/examples/bundled_gen.rs` |
 | native 产物 | `entry/libs/arm64-v8a/liblegado_core.so` |
-| NAPI 类型声明 | `entry/src/main/cpp/types/liblegado_core/{index.d.ts, oh-package.json5}` |
+| NAPI 类型声明（**生成物，勿手改**） | `entry/src/main/cpp/types/liblegado_core/index.d.ts` ← `rust/legado-core/src/lib.rs` 的 `///` |
 | HAP 产物 | `entry/build/default/outputs/default/entry-default-signed.hap` |

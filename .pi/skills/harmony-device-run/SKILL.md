@@ -18,20 +18,30 @@ description: 改完本仓库代码后在真机验证的完整闭环流程（判�
 | 只改 `entry/src/main/resources/**`、`module.json5` | 否 | 直接 ②③ |
 
 改 Rust 后额外两件事：
-1. 先在主机跑测试：`cd rust/legado-engine && cargo test`（50 项，含 mock 端到端）——过了再上设备；
-2. 用重新生成的 `rust/legado-core/dist/index.d.ts` 更新 `entry/src/main/cpp/types/liblegado_core/index.d.ts`。
+1. 先在主机跑测试：`make test`（= `cd rust/legado-engine && cargo test`，含 mock 端到端）——过了再上设备；
+2. 重新生成 `.so` 与 `index.d.ts`：`make rust`（会一次性拷进 `entry/libs/...` 与 `entry/src/main/cpp/types/liblegado_core/`）。
 
 ## 2. 执行
 
-命令与环境变量（`OHOS_NDK_HOME` / `DEVECO_SDK_HOME` / `PATH` / hdc 路径）**原样照抄**
-[`docs/development.md`](../../../docs/development.md)，不要自创路径。
+**优先用 `make`（根目录 `Makefile`，环境变量/路径已固定）**：
+
+| 场景 | 命令 |
+|---|---|
+| 只改 ArkTS | `make run` |
+| 改了 Rust / NAPI 类型 | `make test && make rust && make run` |
+| 看日志 | `make log`（已带 `hilog -r` + `-T SourceReaderPoC`） |
+| 看设备 | `make devices` |
+
+需要手工分步时，`make -n <target>` 可打印它到底执行了什么；原始命令与环境变量
+（`OHOS_NDK_HOME` / `DEVECO_SDK_HOME` / `PATH` / hdc 路径）以 [`Makefile`](../../../Makefile) 与
+[`docs/development.md`](../../../docs/development.md) 为准，**不要自创路径**。
 
 - `OHOS_NDK_HOME` **不要**指到 `.../openharmony/native`（`ohrs` 会自己再拼 `native/`）。
 - 本机 `crates.io` 不可达：项目根 `.cargo/config.toml` 指向 `rsproxy.cn`，**勿删**。
 
 ## 3. 输出卫生（避免刷爆上下文）
 
-- 构建：`... > /tmp/build.log 2>&1`，然后 `rg -n "ERROR|error\[|error:|FAILED" /tmp/build.log`。
+- 构建：`make hap > /tmp/build.log 2>&1`，然后 `rg -n "ERROR|error\[|error:|FAILED" /tmp/build.log`。
   **不要**把完整构建日志贴回来。
 - 日志：先 `hdc shell hilog -r` 清，再 `hdc shell hilog -x -T SourceReaderPoC | tail -n 200`。
   不要裸 `hilog -x | grep`（会刷屏）。

@@ -29,18 +29,17 @@ M0–M5 已完成并真机验证；M6（规则调试器 + 缓存/备份）未开
 
 ## 快速开始
 
-```bash
-# 1) 构建 native 引擎
-export OHOS_NDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony
-cd rust/legado-core && ohrs build --arch arm64 --release
-cp dist/arm64-v8a/liblegado_core.so ../../entry/libs/arm64-v8a/
+命令都收在根目录 `Makefile` 里（`make help` 看全部）：
 
-# 2) 构建 HAP（需 DevEco 自动签名，见 docs/development.md）
-export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk
-export PATH="/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applications/DevEco-Studio.app/Contents/tools/ohpm/bin:$PATH"
-/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw assembleHap \
-  --mode module -p product=default -p buildMode=debug --no-daemon
+```bash
+make rust        # 交叉编译 .so 并拷进 entry/libs（首次约 10–15 分钟；非首次可跳过）
+make run         # 编译 HAP → 安装 → force-stop → 启动（改完代码走这个）
+make log         # 清日志 + 实时过滤本应用日志
+make test        # 主机上跑引擎单测（cargo test，不碰真机）
 ```
+
+底层原始命令与环境变量说明见 [`docs/development.md`](./docs/development.md)
+（签名需 DevEco 自动签名）。
 
 ## 免责声明
 

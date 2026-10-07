@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# 重建大文档顶部的「行号目录」。
+#
+# 用法：
+#   scripts/docs-toc.sh                  # 重建下面 FILES 里列出的全部文档（= make docs-toc）
+#   scripts/docs-toc.sh docs/plan.md     # 只重建指定文档
+#
+# 约定：
+#   - 目录内容必须夹在 `<!-- TOC:BEGIN -->` 与 `<!-- TOC:END -->` 两行之间（这两行本身不动）。
+#   - 条目来自 `## ` 标题；若该文件的 `## ` 条目 ≤ 30 条，同时收录 `### `（缩进为二级）。
+#     归档类大文件（`## ` 很多）只列 `## `，免得目录本身变成噪音。
+#   - `docs/archive/ARCHIVE-S3-S8.md` 不在本列表里：它的分节标题是 H1且文件内还有代码块
+#     注释（`# cargo test …`）会污染自动索引，改用文件头部的手写固定索引（已冻结）。
+#   - 行号是「生成时的快照」。改完文档跑一次 `make docs-toc` 即可，**不要再手改目录行号**。
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# 需要重建目录的文档。ARCHIVE-S3-S8.md 不在内（用手写固定索引，见下）。
+FILES=(
+  docs/plan.md
+  docs/progress.md
+  docs/archive/PROGRESS-HISTORY.md
+  docs/archive/SHELF-EDIT-PLAN.md
+)
+if [ "$#" -gt 0 ]; then
+  FILES=("$@")
+fi
+
+for f in "${FILES[@]}"; do
+  if [ ! -f "$f" ]; then
+    echo "跳过（文件不存在）: $f" >&2
+    continue
+  fi
+  if ! grep -q '<!-- TOC:BEGIN -->' "$f"; then
+    echo "跳过（没有 <!-- TOC:BEGIN --> 标记）: $f" >&2
+    continue
+  fi
+
+  h2="$(grep -c '^## ' "$f" || true)"
+  toc="$(mktemp)"
+
+  # 「## 目录…」这一节自身不进目录。
+  if [ "$h2" -le 30 ]; then
+    awk '/^## 目录/ {next}
+         /^## /   {printf "- %s — L%d\n", substr($0, 4), NR; next}
+         /^### /  {printf "  - %s — L%d\n", substr($0, 5), NR; next}' "$f" > "$toc"
+  else
+    awk '/^## 目录/ {next}
+         /^## /   {printf "- %s — L%d\n", substr($0, 4), NR}' "$f" > "$toc"
+  fi
+  n="$(wc -l < "$toc" | tr -d ' ')"
+
+  awk -v toc="$toc" '
+    /<!-- TOC:BEGIN -->/ { print; while ((getline line < toc) > 0) print line; skip = 1; next }
+    /<!-- TOC:END -->/   { skip = 0; print; next }
+    skip { next }
+    { print }
+  ' "$f" > "$f.tmp"
+
+  mv "$f.tmp" "$f"
+  rm -f "$toc"
+  echo "✓ ${f}（${n} 条）"
+done
