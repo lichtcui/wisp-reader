@@ -137,6 +137,9 @@ rendererFlags
 usage
 eventType
 hintType
+# Remote TTS (RemoteTtsClient POST body: {"text","voice","speed"})
+text
+voice
 # Backup payload (BackupManage)
 schemaVersion
 exportedAt

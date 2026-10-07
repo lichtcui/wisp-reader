@@ -38,6 +38,25 @@ export const TTS_SPEED_OPTIONS: number[] = [0.5, 0.8, 1.0, 1.2, 1.5, 2.0];
 export const TTS_VOICE_OPTIONS: number[] = [13, 21];
 export const TTS_TIMER_OPTIONS: number[] = [0, 15, 30, 60];
 
+/**
+ * 朗读引擎：系统 TTS（默认，断网/失败兜底）或远端 VPS 合成。
+ * 取值 1 曾用于端侧 ZipVoice（已封存），此处保留空洞以免与既有 pref 冲突。
+ */
+export const KEY_TTS_ENGINE: string = 'tts_engine';
+export const TTS_ENGINE_SYSTEM: number = 0;
+export const TTS_ENGINE_REMOTE: number = 2;
+
+/** 远端 TTS（VPS + sherpa-onnx ZipVoice）：服务地址 / API Key / 音色。 */
+export const KEY_TTS_SERVER: string = 'tts_server';
+export const TTS_SERVER_DEFAULT: string = '';
+export const KEY_TTS_API_KEY: string = 'tts_api_key';
+export const TTS_API_KEY_DEFAULT: string = '';
+export const KEY_TTS_REMOTE_VOICE: string = 'tts_remote_voice';
+export const TTS_REMOTE_VOICE_DEFAULT: string = '流萤';
+export const TTS_REMOTE_VOICE_OPTIONS: string[] = ['流萤', '花火', '卡芙卡'];
+/** 远端每段合成的预取深度（比系统 TTS 的 AHEAD=2 略深，抵消网络往返）。 */
+export const AHEAD_REMOTE: number = 3;
+
 /** Keyword used by the book-source availability detector. */
 export const DEFAULT_DETECT_KEYWORD: string = '重生';
 

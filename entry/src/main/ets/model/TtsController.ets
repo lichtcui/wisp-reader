@@ -9,13 +9,24 @@ import { Book, BookSource, Chapter } from '../engine/types';
 import { isReadable, nextReadable, prevReadable } from '../common/ChapterUtil';
 import { loadChapterParagraphs } from './BookContent';
 import { saveProgress } from './ShelfRepository';
-import { getNumber, putNumber } from '../common/Prefs';
+import { getNumber, putNumber, getString, putString } from '../common/Prefs';
 import {
   KEY_TTS_SPEED,
   KEY_TTS_VOICE,
+  KEY_TTS_ENGINE,
+  KEY_TTS_SERVER,
+  KEY_TTS_API_KEY,
+  KEY_TTS_REMOTE_VOICE,
   TTS_SPEED_DEFAULT,
-  TTS_VOICE_DEFAULT
+  TTS_VOICE_DEFAULT,
+  TTS_ENGINE_SYSTEM,
+  TTS_ENGINE_REMOTE,
+  TTS_SERVER_DEFAULT,
+  TTS_API_KEY_DEFAULT,
+  TTS_REMOTE_VOICE_DEFAULT,
+  AHEAD_REMOTE
 } from '../common/Const';
+import { remoteSynthesize } from './RemoteTtsClient';
 
 const ENGINE_NAME: string = 'source-reader-tts';
 const SESSION_TAG: string = 'source-reader-listen';
@@ -28,9 +39,11 @@ const AHEAD: number = 2;
 /** TTS `onComplete` may fire before the last `onData`; wait a moment before flushing. */
 const FLUSH_GRACE_MS: number = 80;
 const FLUSH_TICK_MS: number = 40;
-/** PCM format: 16 kHz mono S16LE → 16000 frames (32000 bytes) per second. */
-const FRAMES_PER_SECOND: number = 16000;
-const BYTES_PER_SECOND: number = 32000;
+/** S16LE mono PCM → 2 bytes per frame. */
+const BYTES_PER_FRAME: number = 2;
+/** System TTS renders 16 kHz; the remote VPS WAV comes back at 24 kHz. */
+const SAMPLE_RATE_SYSTEM: number = 16000;
+const SAMPLE_RATE_REMOTE: number = 24000;
 /** UI progress refresh cadence, and how often the AVSession/DB state is pushed. */
 const PROGRESS_TICK_MS: number = 200;
 const STATE_PUSH_MS: number = 1000;
@@ -145,6 +158,13 @@ export class TtsController {
   private timerId: number = -1;
   private tickId: number = -1;
 
+  // ── Engine selection: system TTS (default / offline fallback) or remote VPS ──
+  @Trace engineKind: number = TTS_ENGINE_SYSTEM;
+  @Trace remoteVoice: string = TTS_REMOTE_VOICE_DEFAULT;
+  private serverUrl: string = TTS_SERVER_DEFAULT;
+  private apiKey: string = TTS_API_KEY_DEFAULT;
+  private fallingBack: boolean = false;
+
   // ── Preferences / getters ─────────────────────────────────────
 
   private loadPrefs(): void {
@@ -154,6 +174,15 @@ export class TtsController {
     }
     this.speed = getNumber(ctx, KEY_TTS_SPEED, TTS_SPEED_DEFAULT);
     this.voice = getNumber(ctx, KEY_TTS_VOICE, TTS_VOICE_DEFAULT);
+    this.engineKind = getNumber(ctx, KEY_TTS_ENGINE, TTS_ENGINE_SYSTEM);
+    this.serverUrl = getString(ctx, KEY_TTS_SERVER, TTS_SERVER_DEFAULT);
+    this.apiKey = getString(ctx, KEY_TTS_API_KEY, TTS_API_KEY_DEFAULT);
+    this.remoteVoice = getString(ctx, KEY_TTS_REMOTE_VOICE, TTS_REMOTE_VOICE_DEFAULT);
+  }
+
+  /** PCM frame rate of the active engine's renderer (system 16 kHz / remote 24 kHz). */
+  private get sampleRate(): number {
+    return this.engineKind === TTS_ENGINE_REMOTE ? SAMPLE_RATE_REMOTE : SAMPLE_RATE_SYSTEM;
   }
 
   isActiveFor(bookId: string): boolean {
@@ -185,6 +214,10 @@ export class TtsController {
   ): Promise<void> {
     this.ctx = ctx;
     this.loadPrefs();
+    if (this.engineKind === TTS_ENGINE_REMOTE && this.serverUrl.trim().length === 0) {
+      hilog.warn(DOMAIN, TAG, 'remote engine selected but no server URL, using system TTS');
+      this.engineKind = TTS_ENGINE_SYSTEM;
+    }
     if (this.active && this.book !== undefined && this.book.bookId !== book.bookId) {
       this.stop();
     }
@@ -197,17 +230,23 @@ export class TtsController {
     this.error = '';
     hilog.info(DOMAIN, TAG, 'start book=%{public}s chapter=%{public}d para=%{public}d',
       book.name, chapterIndex, paragraphIndex);
+    this.loading = true;
     try {
-      await this.ensureEngine();
+      // The remote engine needs no local TTS engine; only the renderer/session.
+      if (this.engineKind !== TTS_ENGINE_REMOTE) {
+        await this.ensureEngine();
+      }
       await this.ensureSession();
       await this.ensureRenderer();
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'init failed');
       this.error = '听书初始化失败';
+      this.loading = false;
       this.active = false;
       this.playing = false;
       return;
     }
+    this.loading = false;
     if (chapterIndex >= 0 && chapterIndex < chapters.length && paragraphs.length > 0) {
       this.setChapter(chapterIndex, chapters[chapterIndex].title, paragraphs);
       this.beginFrom(paragraphIndex);
@@ -286,7 +325,9 @@ export class TtsController {
       return;
     }
     const streamInfo: audio.AudioStreamInfo = {
-      samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_16000,
+      samplingRate: this.engineKind === TTS_ENGINE_REMOTE
+        ? audio.AudioSamplingRate.SAMPLE_RATE_24000
+        : audio.AudioSamplingRate.SAMPLE_RATE_16000,
       channels: audio.AudioChannel.CHANNEL_1,
       sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
       encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW
@@ -570,10 +611,17 @@ export class TtsController {
     this.startRenderer();
   }
 
-  /** Issue `speak()` for upcoming paragraphs so playback has a small buffer. */
+  /** Issue synth requests for upcoming paragraphs so playback has a small buffer. */
   private ensureSynthesized(): void {
+    if (!this.playing) {
+      return;
+    }
+    if (this.engineKind === TTS_ENGINE_REMOTE) {
+      this.ensureRemoteSynthesized();
+      return;
+    }
     const engine: textToSpeech.TextToSpeechEngine | undefined = this.engine;
-    if (engine === undefined || !this.playing) {
+    if (engine === undefined) {
       return;
     }
     while (this.issuedIndex < this.paragraphs.length && this.issuedIndex - this.flushIndex < AHEAD) {
@@ -601,6 +649,62 @@ export class TtsController {
         break;
       }
       this.issuedIndex++;
+    }
+  }
+
+  /** Issue remote fetch requests ahead of the playback head (whole-paragraph HTTP). */
+  private ensureRemoteSynthesized(): void {
+    while (this.issuedIndex < this.paragraphs.length && this.issuedIndex - this.flushIndex < AHEAD_REMOTE) {
+      const idx: number = this.issuedIndex;
+      this.reqByIndex.set(idx, new ReqBuffer(idx));
+      this.issuedIndex++;
+      this.remoteSynth(idx, this.paragraphs[idx]);
+    }
+  }
+
+  private async remoteSynth(idx: number, text: string): Promise<void> {
+    let pcm: ArrayBuffer;
+    try {
+      pcm = await remoteSynthesize(this.serverUrl, this.apiKey, text, this.remoteVoice);
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, 'remote synth failed para=%{public}d', idx);
+      this.fallbackToSystem();
+      return;
+    }
+    const rb: ReqBuffer | undefined = this.reqByIndex.get(idx);
+    if (rb === undefined) {
+      return;
+    }
+    rb.chunks.set(0, pcm);
+    rb.bytes = pcm.byteLength;
+    rb.doneAt = Date.now();
+  }
+
+  /** Remote synthesis failed: drop to the system TTS engine and restart the current paragraph. */
+  private async fallbackToSystem(): Promise<void> {
+    if (this.engineKind !== TTS_ENGINE_REMOTE || this.fallingBack) {
+      return;
+    }
+    this.fallingBack = true;
+    hilog.warn(DOMAIN, TAG, 'remote synth failed, falling back to system TTS');
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    const resumeIdx: number = this.currentIndex;
+    this.pause();
+    this.engineKind = TTS_ENGINE_SYSTEM;
+    if (ctx !== undefined) {
+      putNumber(ctx, KEY_TTS_ENGINE, TTS_ENGINE_SYSTEM);
+    }
+    this.error = '远端合成失败，已切换回系统 TTS';
+    this.releaseRenderer();
+    try {
+      await this.ensureEngine();
+      await this.ensureRenderer();
+    } catch (err) {
+      this.error = '系统 TTS 初始化失败';
+    }
+    this.fallingBack = false;
+    if (this.active) {
+      this.beginFrom(resumeIdx);
     }
   }
 
@@ -717,7 +821,7 @@ export class TtsController {
     if (renderer !== undefined) {
       try {
         const info: audio.AudioTimestampInfo = renderer.getAudioTimestampInfoSync();
-        return info.framePos / FRAMES_PER_SECOND * 1000;
+        return info.framePos / this.sampleRate * 1000;
       } catch (err) {
       }
     }
@@ -782,7 +886,7 @@ export class TtsController {
     }
     this.queue.push(new RenderItem(rb.index, merged.buffer as ArrayBuffer, false));
     this.queue.push(new RenderItem(rb.index, new ArrayBuffer(0), true));
-    const durationMs: number = total / BYTES_PER_SECOND * 1000;
+    const durationMs: number = total / (this.sampleRate * BYTES_PER_FRAME) * 1000;
     const startMs: number = this.timeline.length > 0
       ? this.timeline[this.timeline.length - 1].endMs
       : 0;
@@ -1056,6 +1160,21 @@ export class TtsController {
       }
     } finally {
       this.voiceSwitching = false;
+    }
+  }
+
+  /** Switch the remote zero-shot voice; no local model re-init needed (server-side). */
+  setRemoteVoice(voice: string): void {
+    if (voice === this.remoteVoice) {
+      return;
+    }
+    this.remoteVoice = voice;
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    if (ctx !== undefined) {
+      putString(ctx, KEY_TTS_REMOTE_VOICE, voice);
+    }
+    if (this.active && this.playing && this.engineKind === TTS_ENGINE_REMOTE) {
+      this.beginFrom(this.currentIndex);
     }
   }
 

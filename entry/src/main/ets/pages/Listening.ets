@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { BookCover } from '../components/BookCover';
-import { ListenParam, TTS_SPEED_OPTIONS, TTS_TIMER_OPTIONS, TTS_VOICE_OPTIONS } from '../common/Const';
+import { ListenParam, TTS_SPEED_OPTIONS, TTS_TIMER_OPTIONS, TTS_VOICE_OPTIONS,
+  TTS_ENGINE_REMOTE, TTS_REMOTE_VOICE_OPTIONS } from '../common/Const';
 import { Chapter } from '../engine/types';
 import { TtsController } from '../model/TtsController';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
@@ -101,6 +102,15 @@ export struct ListeningPage {
 
   private voiceMenuItems(): MenuElement[] {
     const items: MenuElement[] = [];
+    if (this.tts.engineKind === TTS_ENGINE_REMOTE) {
+      for (const voice of TTS_REMOTE_VOICE_OPTIONS) {
+        items.push({
+          value: voice,
+          action: () => this.tts.setRemoteVoice(voice)
+        });
+      }
+      return items;
+    }
     for (const value of TTS_VOICE_OPTIONS) {
       items.push({
         value: voiceName(value),
@@ -294,7 +304,9 @@ export struct ListeningPage {
   @Builder
   voiceRow() {
     Row() {
-      Text('朗读音色 · ' + voiceName(this.tts.voice))
+      Text(this.tts.engineKind === TTS_ENGINE_REMOTE
+        ? '远端音色 · ' + this.tts.remoteVoice
+        : '朗读音色 · ' + voiceName(this.tts.voice))
         .fontSize(15)
         .fontColor($r('app.color.listen_text'))
       Blank()
