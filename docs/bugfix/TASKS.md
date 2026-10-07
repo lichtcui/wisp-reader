@@ -22,12 +22,24 @@
 
 ## 书架（Shelf）
 
-- [ ] **T-SHELF-1（R5）删除书籍清理关联缓存**：`removeBook` 后一并删除 `filesDir/chapters/{bookId}_*` 与 `filesDir/local/{bookId}`（本地书）。
-  - 证据：`model/ShelfRepository.ets:80-87`、`model/ChapterCache.ets:24-30`、`model/LocalBook.ets:49-59`
+- [x] **T-SHELF-1（R5）删除书籍清理关联缓存**：`removeBook` 后一并删除 `filesDir/chapters/{bookId}_*`、`filesDir/tocs/{bookId}.json` 与 `filesDir/local/{bookId}`（本地书），并 evict `ChapterCache`/`TocCache`/`LocalBook` 内存层。
+  - 证据（修复前）：`model/ShelfRepository.ets:80-87`、`model/ChapterCache.ets:24-30`、`model/TocCache.ets:34-45`、`model/LocalBook.ets:49-59`
+  - **处置（2026-10-07，SHELF-EDIT-PLAN §8 S2）**：`removeBook` → `removeBooks(bookIds)`（批量，含 `lastWriteAt.delete`，连过时 TODO doc comment 一起替换）；新增 `ChapterCache.deleteBookChapters`、`TocCache.deleteBookToc`、`LocalBook.deleteLocalBookData`，由新增 `model/BookRemoval.ets::deleteBooks(ctx, bookIds)` 编排（DB 先删 → 再清三类缓存；删除前 `tts.isActiveFor → stop()`；封面文件刻意不删，见该文件注释）。
+  - 集成：`Index.confirmDelete()`（二次确认弹窗）+ `Index.doDelete()`（`deleting` 防重入 → `deleteBooks` → `edit.exit()` → `shelfRefresh+1` → Toast）。
+  - 验证：真机项见 `SHELF-EDIT-PLAN.md` §8 S2 验证 / §10 D6–D12。【**2026-10-07 已真机验证**】删「夜的命名术」（播放 TTS 中）：书架 4→3、重启仍 3；DB `books` 4→3 / `progress` 7→6；`chapters/` 13→6、`tocs/` 4→3（应用内「目录缓存」235.5→73.8KB = 差值与文件字节对得上）；TTS 停（之后无 `play para=`）+ FAB 消失；双击「删除」防重入只删一次；0 JS error。**D10（本地书）/D12（删空）经用户同意跳过。** 编译 ✅ debug + release（含签名）均 `BUILD SUCCESSFUL`（见 `RELEASE-NOTES.md` §1.3）。
+  - 触发路径方案（含书架编辑模式 / 多选删除）：[`../research/SHELF-EDIT-PLAN.md`](../research/SHELF-EDIT-PLAN.md)（§8 S2）
+  - 方案状态：已经**五轮审计**（§1.1–§1.4）。第四轮关闭 R2（官方 V2 文档同形示例）；第五轮用**本机 release 混淆产物**取证：
+    ArkUI struct 成员被自动保留、`@ObservedV2` 类成员会被改名 → 新增 K15/§5.5「禁字符串式属性访问」约束（`obfuscation-rules.txt` 不必改）；
+    另修一处计划缺口（`ShelfRepository.ets:79-86` 的过时 TODO 注释需在 S2-1 连注释一起替换）；S1/S2 逐行对账通过 = **代码零修改**。
+    带完整代码与逐步验证清单，可直接按 §8 S1 开工。
 - [ ] **T-SHELF-2（R10）数据层懒初始化**：`ShelfRepository` 在 `store===undefined` 时补初始化，避免书架 Tab 初始化前进度丢写。
   - 证据：`model/ShelfRepository.ets:20-36,130-145`、`pages/Shelf.ets:42`
 - [ ] **T-SHELF-3 进度三态**：核对 `progressText` 的 `total` 反推在 `percent` 为 0/极小值时是否正确。
   - 证据：`pages/Shelf.ets:225-232`
+- [x] **T-SHELF-4（真机）长按手势被静默丢弃**：`Shelf.ets` 按计划 §8 S1-3e 写成 helper 返回 gesture（`longPressToEdit(entry): GestureType`）+ `.gesture(this.longPressToEdit(entry))` → **真机长按从不触发**（编译无错、无告警）。
+  - 证据（转译产物）：`entry/build/.../esmodule/debug/entry/src/main/ets/pages/Shelf.ts` 里该参数位退化为 `globalThis.Gesture.create(GesturePriority.Parallel); globalThis.Gesture.pop();`（**空手势**）；真机 `uinput -T -d x y -i 900 -u x y` 实测 Down/Up 间隔 935ms 但无任何 gesture 回调。
+  - **处置（2026-10-07）**：改为内联手势字面量 `.parallelGesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => this.onLongPress(entry)))`（grid/list 两分支同形），helper 改名 `onLongPress(entry): void`（只留 `longPressFired=true` + `edit.enter`）。理由：`.gesture()/.parallelGesture()` **只接受内联手势字面量**；且 `.gesture()` = `GesturePriority.Low` 会输给祖先识别器。
+  - 验证：✅ 真机长按 +498ms 进编辑态（D1/D19）；已回写计划 §1.6 #42/#43、§5 K16、§5.2。
 
 ## 搜索（Search）
 
@@ -79,6 +91,14 @@
   - 证据：`plan.md:272`、`pages/Settings.ets:88-93`
 - [ ] **T-DATA-4 缓存上限策略**：落实 plan §7「已读永久保留、未读超 N 天清理 / LRU ~200MB」。
   - 证据：`plan.md:270-271`
+- [x] **T-DATA-5 目录缓存未纳入统计**：`filesDir/tocs/<bookId>.json`（`TocCache` 写入）不在 `CacheStats` 任何分类内，「清理缓存」页显示的数字偏小。
+  - **处置（2026-10-07）**：`CacheStats` 增 `toc` 分类；`isChapterFile` **改名**为 `isJsonFile`（chapters 与 tocs 共用，未新增重复函数）；`getCacheStats()` 计入 `toc` 并加入合计；`CacheManage` 增「目录缓存」行 + 文案补「目录」（`CacheRepository.ets`、`CacheManage.ets`）。真机数字比对见 §10 D15（设备离线，待补）。
+  - 证据：`model/TocCache.ets:37-45`、`model/CacheRepository.ets:20-56`
+  - 方案：`CacheStats` 增 `toc` 分类 + `CacheManage` 增一行 → [`../research/SHELF-EDIT-PLAN.md`](../research/SHELF-EDIT-PLAN.md) §8 S4
+- [x] **T-DATA-6 清理缓存漏删目录缓存**：`clearCache()` 只删 `cover_*` / `chapters` / `tts`，`filesDir/tocs` 永不被清 → 真实磁盘泄漏（无任何 UI 入口可清）。
+  - **处置（2026-10-07）**：`clearCache()` 增 `removeDir(tocDir(ctx))`（`CacheRepository.ets`）。真机见 §10 D15（设备离线，待补）。
+  - 证据：`model/CacheRepository.ets:128-132`、`model/TocCache.ets:37-45`
+  - 方案：`clearCache()` 增 `removeDir(tocDir(ctx))` → 同上 §8 S4
 
 ---
 
@@ -102,9 +122,10 @@
 | T-CROSS-1 阅读↔听书串扰 | ✅ | `Reader.onTtsProgress` / `isSpeaking` 增加 `tts.isActiveFor(bookId)` 守卫（`Reader.ets:65-77`、`:450-457`） |
 | T-CROSS-2 后台任务泄漏 | ✅ | `pause()` 与自然播完末章分支调用 `stopBackground()`，恢复播放再 `startBackground()`（`TtsController.ets:855`、`:825-838`） |
 | T-CROSS-3 进度写竞争 | ➖ | `saveProgress` 加 `lastWriteAt` 时间戳防旧写覆盖；叠加 T-CROSS-1 消除跨书污染（`ShelfRepository.ets:132-152`） |
-| T-SHELF-1 删除书籍清缓存 | ⏭ | `removeBook` 全仓**无调用点**（无删除 UI），无可触发路径；加删除入口时一并落清理 |
+| T-SHELF-1 删除书籍清缓存 | ✅ | 2026-10-07 落地：`removeBooks` + `ChapterCache.deleteBookChapters` / `TocCache.deleteBookToc` / `LocalBook.deleteLocalBookData` + 新增 `model/BookRemoval.ets` 编排；`Index` 二次确认弹窗 + `deleting` 防重入。**真机已验证（D6–D9/D11/D13/D17）**：书架 4→3 且重启仍 3、DB 4/7→3/6 行、`chapters/` 13→6、`tocs/` 4→3、TTS 播放中删除即停播 + FAB 消失；D10/D12 经用户同意跳过 |
+| T-SHELF-4 长按手势被编译成空手势 | ✅ | 2026-10-07 真机发现：helper 返回 gesture + `.gesture()` → 转译为 `Gesture.create; Gesture.pop();` 空手势，真机永不触发 → 改内联 `.parallelGesture(LongPressGesture(...))` + helper 只留业务（`onLongPress`）。计划 §1.6 #42/#43、K16 |
 | T-SHELF-2 数据层懒初始化 | ✅ | `EntryAbility.onCreate` 预调 `initShelf`，搜索直达阅读也能落进度（`EntryAbility.ets:14-19`） |
-| T-SHELF-3 进度三态 | ⏭ | `percent` 极小值反推 `total` 的理论边界未在真机复现（设备离线）；低风险，顺延复验 |
+| T-SHELF-3 进度三态 | ⏭ | `percent` 极小值反推 `total` 的边界不在本轮 DoD 范围（D1–D21 未覆盖）；低风险，顺延复验 |
 | T-SEARCH-1 concurrency 透传 | ✅ | `BookEngineNapi.search` 现传 `concurrency`（`BookEngineNapi.ets:23-26`） |
 | T-SEARCH-2 搜索代次 guard | ✅ | S6 实现并真机验证；本轮静态复核无残影 |
 | T-READ-1 统一正文清洗 | ⏭ | 两处 `sanitize` 当前**逐字节一致**（非功能缺陷）；合并为纯重构，顺延 |
@@ -119,6 +140,8 @@
 | T-DATA-2 清理缓存页 | ✅ | S9 已实现并真机核对（`CacheManage.ets`、`CacheRepository.ets`）；本轮增 `cover_*.img` 后缀精确匹配 |
 | T-DATA-3 备份/恢复 | ⏭ | M6 范围，未开始 |
 | T-DATA-4 缓存上限策略 | ⏭ | M6 范围，未开始 |
+| T-DATA-5 目录缓存未统计 | ✅ | 2026-10-07：`CacheStats.toc` + `CacheManage`「目录缓存」行（`isChapterFile`→`isJsonFile` 改名） |
+| T-DATA-6 清理缓存漏 `tocs` | ✅ | 2026-10-07：`clearCache()` 增 `removeDir(filesDir/tocs)` |
 | T-VER-1 clean 构建 | ✅ | `hvigorw clean` + `assembleHap debug --no-daemon` → `BUILD SUCCESSFUL`（全量任务） |
 | T-VER-2 Rust 回归 | ✅ | `cargo test` → `54 passed; 0 failed`（无 Rust 改动，未重出 `.so`） |
 | T-VER-3 真机闭环 | ✅ | 设备已连接（`33Z0224424136564`）：release + debug 安装/启动、书架→阅读→目录→听书全链路冒烟通过，无 `JSCRASH`/`CPPCRASH`。详见 `RELEASE-NOTES.md` §5；跨书串扰因设备仅一本本地书可读未覆盖 |

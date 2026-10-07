@@ -458,7 +458,82 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   （原来只用 `url#enabled`，同 URL 的两条会撞 key → 少显示一行、启停/删除误伤），见 `bugfix/TASKS.md` T-SRC-1。
 - 状态：编译 ✅ BUILD SUCCESSFUL；**真机闭环待补**（`33Z0224424136564` 当时 `Offline`）。
 
+## 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21）
+
+按 [`research/SHELF-EDIT-PLAN.md`](./research/SHELF-EDIT-PLAN.md) §8 逐步实施（未改交互设计、未改 `UI-SPEC.md`）。
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| S1 | 新增 `model/ShelfEditState.ets`（`@ObservedV2` + `@Trace`）；`Index` 顶/底栏分支 + `deleteAction()` + `onBackPress` + `.scrollable`；`Shelf` 长按/点按分流 + 三态 `entryKey` + 角标 + FAB 隐；`BookCover` 加 `@Param dimmed` | ✅ 编译通过 |
+| S2 | `removeBook`→`removeBooks`（含 `lastWriteAt.delete` + 替换过时 TODO 注释）；`ChapterCache.deleteBookChapters` / `TocCache.deleteBookToc` / `LocalBook.deleteLocalBookData`；新增 `model/BookRemoval.ets`；`Index` 二次确认弹窗 + `doDelete` | ✅ 编译通过 |
+| S3 | `Shelf.reload()` 加 `reloadGen` 代次守卫（慢刷新不覆盖新结果） | ✅ 编译通过 |
+| S4 | `CacheStats.toc` 分类 + `isChapterFile`→`isJsonFile` 改名 + `clearCache()` 清 `tocs` + `CacheManage`「目录缓存」行 | ✅ 编译通过 |
+
+**验证证据（本轮）**
+
+| 项 | 结果 |
+|---|---|
+| debug `assembleHap` | ✅ `BUILD SUCCESSFUL` |
+| release `assembleHap`（含 SignHap） | ✅ `BUILD SUCCESSFUL`（D21 只要求跑到混淆阶段） |
+| 混淆产物 | ✅ `entry/build/.../release/obfuscation/{nameCache,fileWhiteLists,projectWhiteList}.json` 已刷新 |
+| K15/§5.5 静态自查 | ✅ 无 `@Monitor('edit.x')`、无 `this.edit['x']`、无 `ShelfEditState` JSON 往返 |
+| 混淆面实证（新增） | ✅ `PropertyCache`: `editing→c12`、`bookIds→d12`（类成员**确实**被改名，印证 K15）；`Shelf.ets`/`Index.ets`/`CacheManage.ets` 的 struct 成员整列自动保留（含 `edit`/`deleting`/`selectBadge`/`tocCount` 等新增项） |
+| 真机 D1–D21 | ✅ **已验**（设备 `33Z0224424136564`）：D1–D9 / D11 / D13 / D15–D17 / D19 / D21 全通过；D10/D12/D14/D18 按用户决定跳过；D20 部分通过（书架书量不足，见下）。逐条证据见 [`research/SHELF-EDIT-PLAN.md`](./research/SHELF-EDIT-PLAN.md) §12.3 |
+
+**计划的 3 处修正（实施/真机中发现，已回写计划 §1.5、§1.6）**
+1. `selectBadge` 不能像计划 §8 S1-3e 那样写 `.justifyContent/.alignItems` —— `StackAttribute` 在本 SDK 无此二属性，改用构造参数 `Stack({ alignContent: Alignment.Center })`（居中效果等价）。
+2. S1 里作为占位 Toast 的 `confirmDelete()` 在 S2 已被真实二次确认弹窗替换（同一函数，非新增）。
+3. **（真机专属缺陷）** 计划 §8 S1-3e 的长按写法（helper 返回 `GestureType` + `.gesture(this.longPressToEdit(entry))`）在真机上**永不触发**：转译产物实证它被编译成**空手势**（`Gesture.create(GesturePriority.Parallel); Gesture.pop();`）—— `.gesture()/.parallelGesture()` 只接受**内联手势字面量**。且 `.gesture()` = `GesturePriority.Low`，会输给祖先识别器。→ 统一改为 `.parallelGesture(LongPressGesture({repeat:false,duration:500}).onAction(...))`，helper 改名 `onLongPress(entry): void` 只留业务逻辑。
+
+**真机验证要点（设备 `33Z0224424136564`）**
+- **三个真机疑点全部关闭**：**R6** 长按在 +498ms 触发（`duration:500` 手感符合预期）；**R10** `Index.onBackPress` **生效**（系统 Back 键正确退出编辑态并留在书架，`EntryAbility.ets` 无需回退方案）；**R12** 长按后**不补送 click**（`longPressFired` 兜底未被依赖，`GestureGroup` 回退未启用），且 3s 慢滑（手指持续移动 ≥500ms）**不误进编辑态**、编辑态内跨书慢滑选中数不变 → `.parallelGesture` + `.onTouch(被动回调)` 不阻断 `Grid`/`List` 滚动。
+- **删除链路端到端**（删「夜的命名术」，播放 TTS 中）：书架 4→3、重启仍 3、DB `books` 4→3 行 / `progress` 7→6 行；`chapters/` 13→6、`tocs/` 4→3；「清理缓存」页章节 125.2→28.6KB、**目录 235.5→73.8KB**（= 235.5 − 161.7，逐字节对上）；点「清理全部缓存」后四类缓存全部归零。**播放中删除 → 之后无任何 `play para=` 日志（TTS 已停）+ 听书 FAB 消失**。双击「删除」验证防重入：只删一次。
+- **异常面**：`hilog` 全量扫描 **0 条** JS/ArkTS 错误 + **0 条**本应用 error 级日志。
+- **唯一没验全的 D20**（编辑态滚动）：本机书架只有 3–4 本书（grid 2 行 / list 4 行 ≤ 一屏），**内容不足以滚动**；三条加书路径均不可自动化（硬件键盘态下 `TextInput.onSubmit` 无法注入；`DocumentViewPicker` 内无 `.txt` 且 shell 不可写共享存储；`aa start` 不支持 `--wh/--ww` → `10106107`）。改以「慢滑不误触 + 编辑态慢滑不改选 + 代码层不阻断滚动」三项替代证据（详计划 §12.3）。
+- **临时诊断已清理**：真机排查用的 3 条 `hilog('ShelfDiag')`（+ import）已移除，重新构建/安装并复验 D1–D4/D6 通过。
+
 ## 未决 / 风险
+- **书架编辑模式（多选删除）已实施并真机验证（2026-10-07）**：见上文「书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21）」
+  与 [`research/SHELF-EDIT-PLAN.md`](./research/SHELF-EDIT-PLAN.md)（**已实施并真机验证**：§8 S1–S4 逐步代码、§10 DoD、§12 实施结果 + §12.3 真机 DoD 逐条证据）。
+  交互：长按进编辑态 + 顶栏「全选 / 已选择 X 本书 / 完成」+ 底栏「删除」取代三 Tab；一并落实 `T-SHELF-1` 缓存清理；
+  「移动至分组」仅预留。**实施情况**：S1–S4 全部代码落地，debug 与 release（含 SignHap）均 `BUILD SUCCESSFUL`，
+  release 混淆产物重新生成且 §5.5 静态自查通过；**真机 D1–D21 已跑**（D10/D12/D14/D18 按用户决定跳过，D20 因书架书量不足仅部分验证）。
+- 以下是计划阶段的五轮审计轨迹（保留备查）：
+  **第一轮**：见 [`research/SHELF-EDIT-PLAN.md`](./research/SHELF-EDIT-PLAN.md)
+  （长按进编辑态 + 顶栏「全选 / 已选择 X 本书 / 完成」+ 底栏「删除」取代三 Tab；一并落实 `T-SHELF-1` 缓存清理；「移动至分组」仅预留）。
+  文档含**逐步实施计划与完整代码**（§8，S1–S4，11 个文件、约 4h）。复核时另外发现两个数据层缺陷并已立项：
+  `T-DATA-5`（`filesDir/tocs` 未纳入缓存统计）、`T-DATA-6`（`clearCache()` 不清 `tocs`，磁盘泄漏）—— 归入 S4。
+  **第二轮审计（对 SDK / 源码逐条对账）已回写进该文档**：§1 新增 8 条复核结论，修正 1 处真实缺陷
+  （`@Builder` 按值参数不保证刷新 → `editAction` 改为在 builder 内读状态，§5 K10）、新增 K11–K13 / R10–R12 / D17–D19，
+  并核对“按书状态清理清单”已完整（全仓 7 处 `Map<string,…>` 逐一定位）。
+  **第三轮审计（对真实源码逐行对账 + 官方 `@Builder` 参数刷新规则）同样已回写**：§1.2 新增 7 条（#14–#20）。
+  其中修掉一个**真 bug**：`entryKey` 只编码「选中位」时，长按进入编辑态后其余未选中的书 key 不变、不重建
+  → 看不到空角标 → 改为「编辑态 × 选中」三态（§5.1，S1 验证项 1 / D2 专门覆盖）；
+  并把 `editAction(icon,label,action)` 这类**多参数 builder**（官方规则明确「不会触发动态渲染 UI」）
+  换成 **0 参数的 `deleteAction()`**，在属性表达式里直读 `this.canDelete()`（§5.3 K10；与已验证可用的 `bottomBar()` 同形）。
+  另新增 R13（行重建可能重新解码封面）、S4-4「刻意不改」清单（`Settings.ets` / `EntryAbility` / UI-SPEC）。
+  **第四轮审计（拉官方 V2 状态管理文档正文核对 + 调用点/时序排查）已回写**：§1.3 新增 9 条（#21–#29），其中最大收获是
+  **关闭 R2** —— `arkts-new-param.md` 明确「类成员属性的观察依赖 `@ObservedV2` 和 `@Trace`」，其官方示例
+  （父 `@Local` → 子 `@Require @Param` → 写 `@Trace` 属性触发父子刷新）与本方案**同形**，因此“父组件不刷新”
+  不再是待验风险、不再阻塞 S1→S2（S1 保留冒烟项）；并新增 §5.4「V2 观测规则速查」（`@Trace` 只通知读到它的组件、
+  UI 要读的字段必须 `@Trace`、实例必须 `new` 且勿 `JSON.parse`、子组件可改 `@Param` 对象属性但不可整体赋值，
+  Array/Map/Set/Date 的 API 级观察清单）；另加固 `allSelected()`、新增 S1 验证项 13 与 D20。
+  同时核实了两个此前只算“待验”的点：① `BookCover(` 全仓 7 处调用，只有 `Shelf.ets` 2 处传 `dimmed` → 改动面确实锁在 11 文件；
+  ② 删正在听的书不会出现“晚到的 `persistProgress` 把已删书进度行写回”（`TtsController.stop()` 清三个定时器 +
+  `loadChapter` await 后有 `active` 守卫）。
+  **第五轮审计（攻前四轮未碰的空白：release 混淆面 / S1-S2 逐行对账 / 数据层一致性）已回写**：§1.4 新增 10 条（#30–#39）。
+  最大收获是**用本机 release 混淆产物直接取证**（比文档硬）：`.../release/obfuscation/fileWhiteLists.json` 里
+  **ArkUI struct 的成员被 ArkGuard 整列自动保留**（`Shelf.ets` 的 `structProperties` 列出了 `refreshToken`/`viewMode`/`entries`/`tts`
+  及全部方法），而同文件的 `TtsController.ets`（`@ObservedV2` **类**）是 `structProperties: []` 且 `active`/`playing`
+  在白名单 0 命中 → **类成员会被改名，struct 成员不会**（ArkGuard 白名单按名字全局生效）。
+  由此得出两条结论：① `obfuscation-rules.txt` 确认**不必改**（原“无新增 JSON 字段”的理由升级为产物实证）；
+  ② 新增硬约束 **K15 / §5.5「禁字符串式属性访问」**：对 `ShelfEditState` 禁止 `@Monitor('edit.x')`、`this.edit['x']`、
+  JSON 往返——这几种写法 **debug 全对、release 才静默失效**（新增 R14 风险行 + D21 release 混淆面 DoD）。
+  另修一处**计划缺口**：`ShelfRepository.ets:79-86` 的 doc comment 写着“删除功能尚未接线，将来要清 chapters/本地目录”
+  → S2-1 必须连注释一起替换（且那个 TODO 的清理范围恰是本方案的子集，反向佐证过滤范围完整）；`lastWriteAt.delete()`
+  的理由从“卫生”升为“必要”（`saveProgress` 守卫是单边 `last > incoming`）；S1/S2 逐行对账（`onBackPress` 可用
+  =`Index` 是 `@Entry`、`.scrollable(true)` 已是现有代码、a11y 有 `AppBackButton` 先例、`rmdirSync` 经 SDK 原文确认递归、
+  弹窗与 `BackupManage` 同形）→ **S1/S2 代码零修改**；R3 角标补**三级兜底**（首选 `selectBadge` 改单参数对象字面量）。
 - 目录分页 `nextTocUrl` / 卷 `isVolume` 已在引擎实现（真机 detect 覆盖当页路径），多页目录待复验。
 - 书源持久化仍用 `preferences` JSON（书籍/进度已用 `relationalStore`）；后续可迁移统一。
 - 规则「静默失败」诊断：`parseWithDiagnostics` 已可返回 regex/CSS/JS 诊断，调试器 UI 待 M6。

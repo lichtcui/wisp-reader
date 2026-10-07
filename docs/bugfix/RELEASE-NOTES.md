@@ -212,3 +212,51 @@ release 与 debug 两个包均验证；release 包**不输出 App 自身 `hilog`
 | Git 清理 | ⚠️ 已提交 `596f16a`；`build-profile.json5` 凭据边界待处理 |
 
 **最高发布状态：`SMOKE_TESTED`（仅限内部/开发渠道；公开发布仍受 Release 签名身份阻塞，未达 `READY_FOR_PUBLICATION`）。**
+---
+
+## 8. 增量（2026-10-07）：书架编辑模式（多选删除）+ 目录缓存统计
+
+> 计划与逐行代码见 [`../research/SHELF-EDIT-PLAN.md`](../research/SHELF-EDIT-PLAN.md)（§8 S1–S4）。
+> 本节为增量记录，§0–§7 仍描述 S10 快照。
+
+### 8.1 新功能
+
+- **书架长按多选删除**（用户确认交互 A–H）：
+  - 长按书籍 → 进编辑态并选中该书；编辑态内点按加/减选（不打开阅读页）、长按忽略。
+  - 顶栏改为「全选/取消全选 · 已选择 X 本书 · 完成」；底栏三 Tab 替换为「删除」（0 本时置灰）。
+  - 编辑态锁 Tab 滑动（`.scrollable(!edit.editing)`）、系统返回键退出编辑态（`onBackPress`）、隐藏听书 FAB。
+  - 删除走二次确认（`showAlertDialog`，红色「删除」）→ `BookRemoval.deleteBooks` → 退出编辑态 → 刷新书架 → Toast。
+  - 角标：编辑态**所有**书都有角标（选中=实心红+白勾+封面 72% 透明；未选中=半透黑底+白环）；列表模式角标在行尾。
+- **删除连带清理（T-SHELF-1）**：`books`/`progress` 行 → `chapters/{bookId}_*` → `tocs/{bookId}.json` → `local/{bookId}`（含内存层 evict）；删前 `tts.isActiveFor → stop()`。封面文件刻意不删（文件名是 Rust 侧 hash，ArkTS 无法定位）。
+
+### 8.2 顺带修复
+
+- **T-DATA-5**：`CacheStats` 增 `toc` 分类，「清理缓存」页新增「目录缓存」行（`isChapterFile` 改名为 `isJsonFile` 供 chapters/tocs 共用）。
+- **T-DATA-6**：`clearCache()` 增 `removeDir(filesDir/tocs)`（此前目录缓存永不被清 = 磁盘泄漏）。
+
+### 8.3 改动文件（9 改 + 2 新增）
+
+`model/ShelfEditState.ets`（新）、`model/BookRemoval.ets`（新）、`pages/Index.ets`、`pages/Shelf.ets`、`components/BookCover.ets`、`model/ShelfRepository.ets`、`model/ChapterCache.ets`、`model/TocCache.ets`、`model/LocalBook.ets`、`model/CacheRepository.ets`、`pages/CacheManage.ets`。
+`entry/obfuscation-rules.txt` **未改**（无新增 JSON 字段；且已按 §5.5 禁字符串式属性访问）。
+
+### 8.4 构建与混淆证据
+
+| 闸门 | 状态 |
+|---|---|
+| debug 构建（`assembleHap buildMode=debug`） | ✅ `BUILD SUCCESSFUL` |
+| release 构建（`assembleHap buildMode=release`，含 SignHap） | ✅ `BUILD SUCCESSFUL`（比 D21 要求的「跑到混淆阶段」更强） |
+| 混淆产物 | ✅ `.../release/obfuscation/{nameCache,fileWhiteLists,projectWhiteList}.json` 重新生成（2026-10-07） |
+| 混淆面静态自查（K15/§5.5） | ✅ 全仓无 `@Monitor('edit.x')` / `this.edit['x']` / `ShelfEditState` JSON 往返 |
+| 真机 DoD D1–D21 | ✅ **已验（2026-10-07，设备 `33Z0224424136564`）**：D1–D9 / D11 / D13 / D15–D17 / D19 / D21 全通过；D10 / D12 / D14 / D18 按用户决定跳过；D20 部分通过（书架书量不足）。逐条证据见 [`../research/SHELF-EDIT-PLAN.md`](../research/SHELF-EDIT-PLAN.md) §12.3 |
+
+### 8.5 真机验证与真机专属修复（2026-10-07）
+
+- **长按手势 bug（真机专属，计划外）**：计划 §8 的 `longPressToEdit(entry): GestureType` + `.gesture(...)` 写法在真机上**从不触发**——`.gesture()/.parallelGesture()` 只接受**内联手势字面量**，helper 返回的 gesture 被 ETS 编译器**静默丢弃**（转译产物退化为 `Gesture.create(GesturePriority.Parallel); Gesture.pop();`）；另 `.gesture()` 为 `GesturePriority.Low`，在 `Navigation` 下输掉竞争。
+  **修复**：改为 `.parallelGesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => this.onLongPress(entry)))`（grid/list 同形），helper 改名 `onLongPress(entry): void`（只留 `longPressFired` + `edit.enter`）。长按 +498ms 触发 ✅。已回写计划 §1.6 #42/#43、§5 K16/§5.2、`TASKS.md` `T-SHELF-4`。
+- **三个真机疑点关闭**：**R6** 500ms 手感 ✅（+498ms）；**R10** `Index.onBackPress` 生效、`EntryAbility.ets` **未改** ✅；**R12** 长按后不补送 click（`longPressFired` 兜底未依赖）、3s 慢滑不误进编辑态、编辑态慢滑不改选 ✅。
+- **删除链路端到端**：删「夜的命名术」（当时 TTS 在播）→ 书架 4→3 且重启仍 3；DB `books` 4→3 / `progress` 7→6；`chapters/` 13→6、`tocs/` 4→3；应用内章节缓存 125.2→28.6KB、目录缓存 235.5→**73.8KB**（与文件字节逐一对应）；点击「清理全部缓存」四类归零；TTS 停（无后续 `play para=`）+ 听书 FAB 消失；双击「删除」防重入只删一次。
+- **异常面**：`hilog` 全量扫描 **0 条** JS/ArkTS 错误 + **0 条**本应用 error 级日志（仅框架内部既有 `ImageSource` 等封面噪音）。
+- **未验完整项**：**D20**（编辑态滚动）—— 本机书架 3–4 本不足一屏、不可滚，且三条加书路径（搜索 onSubmit / 文件选择器 / 缩小窗口）均不可自动化 → 以「慢滑不误触 + 编辑态慢滑不改选 + 不阻断滚动」三项替代证据；**D10 / D12 / D14 / D18** 已跳过（用户决定：未授权删本地书 / 删空书架，并跳过深色模式与读屏项）。
+- **临时诊断已清理**：排查用的 3 条 `hilog('ShelfDiag')`（+ import）已移除，重新构建安装后复验 D1–D4/D6 通过。
+
+**已知限制**：本轮仅完成「编译 + release 混淆面」闭环，**未做真机验证**；§10 DoD 的 D1–D20 全部待设备接回后补测（重点 R10 返回键是否被 `Navigation` 吞、R12 长按是否补送 click/是否影响滚动、R6 500ms 手感、R3 角标刷新）。
