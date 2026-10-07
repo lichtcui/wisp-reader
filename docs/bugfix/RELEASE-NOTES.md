@@ -140,7 +140,7 @@
 
 - `T-SHELF-1` 删除书籍清理缓存：`removeBook` 无调用点（无删除 UI），待删除入口一并实现。
 - `T-SHELF-3` 进度三态在 `percent` 极小值时的反推边界：**2026-10-07 已修复并真机验证**（反推收敛到 `Format.deriveTotalChapters`，脏值降级「第N章」；见 §12）；当时登记的 `toc.length` ↔ `percent` 口径分歧已于同日修完（T-SHELF-6，见 §13）。
-- `T-READ-1` `Reader.sanitize` 与 `BookContent.sanitizeText` 合并（两份当前**逐字节一致**，纯重构）。
+- `T-READ-1` `Reader.sanitize` 与 `BookContent.sanitizeText` 合并：**2026-10-08 已完成**（纯重构；两份当时逐字节一致，合并后阅读页与听书跨章共用 `BookContent.sanitizeText`，真机复核段落下标一致，详见 [`TASKS.md`](./TASKS.md) §阅读）。
 - `T-READ-3` 章节预取 in-flight 去重（LRU 已降低重复写盘概率）。
 - `T-DATA-4` 缓存 LRU/上限策略（未开始，**M6 最后一项**）；`T-DATA-3` 备份/恢复已于 2026-10-07 release 真机验证通过（§9），其「全量覆盖」语义缺陷 `T-DATA-7` 已于同日修复并真机复验（§10）。
 - `T-VER-3` 真机闭环已完成（见 §5）；跨书串扰与后台任务结束的直接观测待条件复验。

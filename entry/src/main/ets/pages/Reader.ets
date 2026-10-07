@@ -3,7 +3,8 @@
 //   状态（@Local）：chapters / chapterIndex / paragraphs / paragraphIndex / pages / pageIndex / sliderValue
 //                   menuVisible / panel / tocDescending / fontSize / lineHeight / nightMode / oneHandMode / tts
 //   生命周期：aboutToAppear / aboutToDisappear / onTtsProgress（@Monitor 听书进度 → 高亮 + 跟随滚动）
-//   加载正文：loadToc / refreshToc / load / loadChapter / applyChapter / fetchContent / cachedContent / sanitize / warmNeighbors / prefetch
+//   加载正文：loadToc / refreshToc / load / loadChapter / applyChapter / fetchContent / cachedContent / warmNeighbors / prefetch
+//             （正文清洗不在本文件：统一走 model/BookContent.sanitizeText，见 T-READ-1）
 //   章内导航：isReadable / firstReadable / nextReadable / prevReadable / prevChapter / nextChapter / prevPage / nextPage / onPageChanged
 //   分页测算（横向分页核心）：availWidthPx / availHeightPx / measureOptions / measureHeight / maxCharsFit / paraMargin
 //                             paginateChapter / rebuildWindow / flatIndexOf / pageIdFor / indexOfPageId / PageSeg
@@ -47,6 +48,7 @@ import { ReaderTheme } from '../common/ReaderTheme';
 import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
 import { CachedToc, getCachedToc, isTocStale, putCachedToc } from '../model/TocCache';
 import { isLocalBook, loadLocalChapters, loadLocalContent } from '../model/LocalBook';
+import { sanitizeText } from '../model/BookContent';
 import { TtsController } from '../model/TtsController';
 import { FloatingListenButton } from '../ui/common/FloatingListenButton';
 import { AppBackButton } from '../ui/common/AppBackButton';
@@ -411,38 +413,6 @@ export struct ReaderPage {
     return cached !== undefined && cached.length > 0 ? cached : undefined;
   }
 
-  /**
-   * Some sources render the chapter body inside a container that also carries
-   * the site breadcrumb ("当前位置：/作者/书名/章节名") and repeats the title on
-   * every paginated sub-page. Keep exactly one title heading, drop the rest.
-   */
-  private sanitize(raw: string, title: string): string[] {
-    const text: string = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const target: string = title.trim().replace(/\s/g, '');
-    const out: string[] = [];
-    for (const rawLine of text.split('\n')) {
-      const line: string = rawLine.trim();
-      if (line.length === 0) {
-        continue;
-      }
-      if (line.indexOf('当前位置') >= 0) {
-        continue;
-      }
-      const compact: string = line.replace(/\s/g, '');
-      if (compact === '/' || line.endsWith('/')) {
-        continue;
-      }
-      if (target.length > 0 && compact === target) {
-        continue;
-      }
-      out.push(line);
-    }
-    if (title.trim().length > 0) {
-      out.unshift(title.trim());
-    }
-    return out;
-  }
-
   private async loadChapter(index: number, restoreParagraph: number = 0, restoreAtEnd: boolean = false): Promise<void> {
     if (!this.isReadable(index)) {
       return;
@@ -484,7 +454,7 @@ export struct ReaderPage {
   /** Commit a loaded chapter body to the reading surface. */
   private applyChapter(index: number, content: string, restoreParagraph: number, restoreAtEnd: boolean = false): void {
     const chapter: Chapter = this.chapters[index];
-    const paragraphs: string[] = this.sanitize(content, chapter.title);
+    const paragraphs: string[] = sanitizeText(content, chapter.title);
     this.chapterIndex = index;
     this.paragraphs = paragraphs;
     this.paraCache.set(index, paragraphs);
@@ -530,7 +500,7 @@ export struct ReaderPage {
         }
       }
       if (content !== undefined) {
-        this.paraCache.set(n, this.sanitize(content, chapter.title));
+        this.paraCache.set(n, sanitizeText(content, chapter.title));
       }
     }
     if (gen === this.loadGen && this.sized) {

@@ -20,7 +20,8 @@
 > 真机 8 项证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §13。
 > **2026-10-08 第九次同步**：⑧ T-SHELF-5（P2）已修并真机复验——不是「缓存文件损坏」或取用路径问题，而是**引擎把非图片正文（详情页 / 防盗链 HTML）写进了 `cover_*.img` 且命中缓存即早退**，中毒 slot 永不复检（封面永久占位 + 每次渲染刷 `ImageSource` 62980118）；
 > 现改为「写盘前嗅探图片签名 + 缓存命中先验头 64 B（旧毒文件则删除重下）+ ArkTS 解不开就删文件」。修复后启动 8s 内该组错误 **15 行 → 0 行**，真机证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §14。
-> 当前 open：**3 项 `[ ]`**（T-READ-1 / T-READ-3 顺延 · T-TTS-4 已登记暂不改）。
+> 当前 open：**2 项 `[ ]`**（T-READ-3 顺延 · T-TTS-4 已登记暂不改）。
+> **2026-10-08 第十次同步**：⑨ T-READ-1（R7）**统一正文清洗**已落地（纯重构、无行为变更）——`Reader` 的私有 `sanitize` 删除，阅读页与听书共用 `BookContent.sanitizeText`；真机复核段落下标一致（`start para=7` = 阅读页 `paragraphIndex`，`play para=8/9/10` 连续推进），详见条目内「验证」段。
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
 ---
@@ -127,9 +128,14 @@
 
 ## 阅读（Reader）
 
-- [ ] **T-READ-1（R7）统一正文清洗**：`Reader.sanitize` 与 `BookContent.sanitize` 合并为单一实现，保证 TTS 段落索引与阅读页一致。
-  - 状态（2026-10-07）：**顺延**（两处当前逐字节一致，属纯重构非缺陷），仍未开始。
-  - 证据：`pages/Reader.ets:185-210`、`model/BookContent.ets:12-37`
+- [x] **T-READ-1（R7）统一正文清洗**：`Reader.sanitize` 与 `BookContent.sanitize` 合并为单一实现，保证 TTS 段落索引与阅读页一致。
+  - 状态（2026-10-08）：**已完成**，**纯重构、无行为变更**（改动前先 `diff` 两处函数体：**逐字节一致**，只有上方注释换行不同）。
+  - 为什么值得顺手做：阅读页首章进听书时 TTS 直接用 `Reader.paragraphs`（`openListening` 传引用），但**跨章**走的是 `TtsController` → `loadChapterParagraphs` → `BookContent.sanitizeText`；两份副本一旦分头改（例如只给阅读页加一条噪音行过滤），跨章后的段落下标就会与阅读页错位。合并后该风险结构性消失，不必再靠「记得同步两份」。
+  - 修法：删除 `Reader.ets` 的 `private sanitize`（连重复注释），改 `import { sanitizeText } from '../model/BookContent'`，两个调用点（`applyChapter`、`warmNeighbors`）改调 `sanitizeText`；`BookContent.sanitizeText` 注释标明「**唯一实现**」及漂移后果；`Reader.ets` 顶部文件索引同步去掉 `sanitize`。
+  - 验证（2026-10-08 · 设备 `33Z0224424136564` · debug · `make run`）：① `make doctor` 无阻断项、`BUILD SUCCESSFUL`；② 打开《剑来》第三章：阅读页标题 + 6 条正文段落节点正常渲染（`uitest dumpLayout`）；③ 底栏「听书」→ `hilog`：`SourceReaderTts: start book=剑来 chapter=2 para=7` + `begin para=7`（= 阅读页 `paragraphIndex`，听书页显示第 8 段），随后 `play para=8/9/10/…` 连续推进，无加载失败；
+    ④ **跨章路径（本次改动真正覆盖的那条）**：本段播完后自然跳入下一章 —— `begin para=0` 后继续 `play para=1/2/…`（该章正文由 `loadChapterParagraphs` → 合并后的 `sanitizeText` 产出），回到阅读页 `uitest dumpLayout`：章名同为《第一卷 笼中雀 第四章 黄鸟》、页首 para 0 = 章名标题、正文段落与 TTS 正在读的第 3 段一致（段落下标两边同序）。
+  - 未覆盖：release 包未复跑；未单独构造「两份实现漂移」的对照实验（重构后已不存在第二份实现）。
+  - 证据：`entry/src/main/ets/model/BookContent.ets:6-19`、`entry/src/main/ets/pages/Reader.ets:51,457,503`
 - [x] **T-READ-2（R8）章节缓存内存上限**：为 `ChapterCache` 内存层加 LRU/上限；清理死代码 `hasCachedChapter`。
   - 证据：`model/ChapterCache.ets:18,92-94`、`plan.md:270`
 - [ ] **T-READ-3 预取去重**：频繁切章时避免对同一 `bookId#index` 重复预取/重复写盘。
@@ -252,7 +258,7 @@
 | T-SHELF-6 新章永不出现 | ✅ | 2026-10-07 真根因：TOC 缓存只比 `tocUrl`（`fetchedAt` 写了没人读）→ 事实上永久。修法：`TOC_REFRESH_AFTER_MS = 6h` + 打开书时**后台重爬**（失败静默回退缓存；章数变化则采新目录并用新分母重写 `percent` 让书架自愈）；顺带把 `buildTocItems` 改成 `setItems()`（LazyForEach 换实例不刷新）。真机 8 项证据（TTL=0 触发 / 插桩伪造新章 → 目录 29 章 + 书架 `28章/29章` / TTL=2000ms / 6h 不重爬 / 排序不回归 / 0 异常 / 插桩已还原）见 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §13 |
 | T-SEARCH-1 concurrency 透传 | ✅ | `BookEngineNapi.search` 现传 `concurrency`（`BookEngineNapi.ets:23-26`） |
 | T-SEARCH-2 搜索代次 guard | ✅ | S6 实现并真机验证；本轮静态复核无残影 |
-| T-READ-1 统一正文清洗 | ⏭ | 两处 `sanitize` 当前**逐字节一致**（非功能缺陷）；合并为纯重构，顺延 |
+| T-READ-1 统一正文清洗 | ✅ | **2026-10-08 落地**：`Reader.sanitize` 删除，阅读页与听书共用 `BookContent.sanitizeText`（改动前 `diff` 复核两副本逐字节一致 → 纯重构）；真机验证 `start para=7` = 阅读页 `paragraphIndex`、`play para=8/9/10` 连续推进 |
 | T-READ-2 缓存内存上限 + 死码 | ✅ | `ChapterCache` 加 24 条 LRU（`touchMemory`）；删除死码 `hasCachedChapter`；`BookCover` 加 64 条 PixelMap LRU |
 | T-READ-3 预取去重 | ⏭ | `ChapterCache` 内存 LRU 后重复写盘概率降低；in-flight 去重顺延 |
 | T-TTS-1 引擎释放 | ✅ | `stop()` 增 `engine.shutdown()` 并置空、复位日志位（`TtsController.ets:226-243`） |

@@ -8,6 +8,10 @@ import { isLocalBook, loadLocalContent } from './LocalBook';
  * Some sources render the chapter body inside a container that also carries the
  * site breadcrumb ("当前位置：/作者/书名/章节名") and repeats the title on every
  * paginated sub-page. Keep exactly one title heading, drop the rest.
+ *
+ * **正文清洗的唯一实现**（T-READ-1）：阅读页分页（`pages/Reader.ets`）与听书分段
+ * （`TtsController` → `loadChapterParagraphs`）都走这里。任一侧单独改清洗规则会让
+ * 两边段落/标题不一致，进而使 TTS 高亮与阅读页定位错位。
  */
 export function sanitizeText(raw: string, title: string): string[] {
   const text: string = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
