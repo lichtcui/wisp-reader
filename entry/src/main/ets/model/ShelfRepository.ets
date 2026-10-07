@@ -80,17 +80,26 @@ export async function upsertBook(book: Book): Promise<void> {
 }
 
 /**
- * Remove a book and its progress.
- * Reserved for the shelf "delete book" action (T-SHELF-1), which is not wired
- * yet; when it is, also purge `filesDir/chapters/{bookId}_*` and local-book dirs.
+ * Remove books from the shelf: their `books` row (source of truth, so the shelf
+ * stops showing them even if cache cleanup fails) and their `progress` row.
+ * Callers that own a context should use `BookRemoval.deleteBooks`, which also
+ * purges the chapter/toc/local caches.
+ *
+ * `lastWriteAt.delete()` is required, not cosmetic: `saveProgress()` rejects a
+ * write when the stored timestamp is newer (`last > incoming`), so a stale entry
+ * (clock skew / future timestamp) would swallow the progress of a book that is
+ * re-added later.
  */
-export async function removeBook(bookId: string): Promise<void> {
+export async function removeBooks(bookIds: string[]): Promise<void> {
   const s: relationalStore.RdbStore | undefined = db();
-  if (s === undefined) {
+  if (s === undefined || bookIds.length === 0) {
     return;
   }
-  await s.executeSql('DELETE FROM books WHERE book_id = ?', [bookId]);
-  await s.executeSql('DELETE FROM progress WHERE book_id = ?', [bookId]);
+  for (const bookId of bookIds) {
+    await s.executeSql('DELETE FROM books WHERE book_id = ?', [bookId]);
+    await s.executeSql('DELETE FROM progress WHERE book_id = ?', [bookId]);
+    lastWriteAt.delete(bookId);
+  }
 }
 
 export async function getBooks(): Promise<Book[]> {

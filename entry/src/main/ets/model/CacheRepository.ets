@@ -8,6 +8,7 @@ import { fileIo } from '@kit.CoreFileKit';
  * Scope (aligned with the actual writers; this module never writes cache):
  * - 图片缓存：`cacheDir/cover_<hash>.img` written by Rust `download_cover`.
  * - 章节内容缓存：`filesDir/chapters/<bookId>_<index>.json` written by `ChapterCache`.
+ * - 目录缓存：`filesDir/tocs/<bookId>.json` written by `TocCache`.
  * - TTS 音频缓存：`cacheDir/tts` — reserved for the on-device TTS PCM cache
  *   (TTS-PLAN); the current system-TTS pipeline is memory-only, so it is 0 B
  *   until a writer lands there.
@@ -20,18 +21,24 @@ export interface CacheCategory {
 export interface CacheStats {
   image: CacheCategory;
   chapter: CacheCategory;
+  toc: CacheCategory;
   tts: CacheCategory;
   totalBytes: number;
   totalCount: number;
 }
 
 const CHAPTER_DIR_NAME: string = 'chapters';
+const TOC_DIR_NAME: string = 'tocs';
 const TTS_DIR_NAME: string = 'tts';
 const COVER_PREFIX: string = 'cover_';
 const COVER_SUFFIX: string = '.img';
 
 function chapterDir(ctx: common.UIAbilityContext): string {
   return ctx.filesDir + '/' + CHAPTER_DIR_NAME;
+}
+
+function tocDir(ctx: common.UIAbilityContext): string {
+  return ctx.filesDir + '/' + TOC_DIR_NAME;
 }
 
 function ttsDir(ctx: common.UIAbilityContext): string {
@@ -75,21 +82,24 @@ function isCoverFile(name: string): boolean {
   return name.startsWith(COVER_PREFIX) && name.endsWith(COVER_SUFFIX);
 }
 
-function isChapterFile(name: string): boolean {
+/** Both chapter bodies and TOCs are stored as one JSON object per file. */
+function isJsonFile(name: string): boolean {
   return name.endsWith('.json');
 }
 
 /** Compute the current on-disk footprint of every managed cache. */
 export function getCacheStats(ctx: common.UIAbilityContext): CacheStats {
   const image: CacheCategory = sumDir(ctx.cacheDir, isCoverFile);
-  const chapter: CacheCategory = sumDir(chapterDir(ctx), isChapterFile);
+  const chapter: CacheCategory = sumDir(chapterDir(ctx), isJsonFile);
+  const toc: CacheCategory = sumDir(tocDir(ctx), isJsonFile);
   const tts: CacheCategory = sumDir(ttsDir(ctx), () => true);
   return {
     image: image,
     chapter: chapter,
+    toc: toc,
     tts: tts,
-    totalBytes: image.bytes + chapter.bytes + tts.bytes,
-    totalCount: image.count + chapter.count + tts.count
+    totalBytes: image.bytes + chapter.bytes + toc.bytes + tts.bytes,
+    totalCount: image.count + chapter.count + toc.count + tts.count
   };
 }
 
@@ -139,5 +149,6 @@ function removeDir(dir: string): void {
 export function clearCache(ctx: common.UIAbilityContext): void {
   clearCoverFiles(ctx.cacheDir);
   removeDir(chapterDir(ctx));
+  removeDir(tocDir(ctx));
   removeDir(ttsDir(ctx));
 }

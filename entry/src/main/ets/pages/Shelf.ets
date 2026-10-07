@@ -3,6 +3,7 @@ import { BookCover } from '../components/BookCover';
 import { EmptyView } from '../components/EmptyView';
 import { Book, BookSource, ReadProgress } from '../engine/types';
 import { getAllProgress, getBooks, initShelf } from '../model/ShelfRepository';
+import { ShelfEditState } from '../model/ShelfEditState';
 import { loadSources } from '../model/SourceRepository';
 import { isLocalBook, localSource } from '../model/LocalBook';
 import { shelfProgressText } from '../common/Format';
@@ -19,6 +20,8 @@ export interface ShelfBookItem {
 export struct ShelfPage {
   @Param refreshToken: number = 0;
   @Param viewMode: number = 0;
+  /** Owned by Index; shared so the top bar, the action bar and the rows stay in sync. */
+  @Param edit: ShelfEditState = new ShelfEditState();
   @Local entries: ShelfBookItem[] = [];
   @Local tts: TtsController = TtsController.instance();
   @Event onGoSearch: () => void = () => {};
@@ -34,7 +37,12 @@ export struct ShelfPage {
     this.reload();
   }
 
+  /** Monotonic guard: a slow earlier reload must not overwrite a newer shelf. */
+  private reloadGen: number = 0;
+
   private async reload(): Promise<void> {
+    this.reloadGen = this.reloadGen + 1;
+    const gen: number = this.reloadGen;
     const ctx: common.UIAbilityContext | undefined =
       this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
     if (ctx === undefined) {
@@ -57,7 +65,11 @@ export struct ShelfPage {
       }
       entries.push({ book: book, source: source, progress: progress });
     }
+    if (gen !== this.reloadGen) {
+      return; // 已被更新的刷新取代，丢弃本次结果
+    }
     this.entries = entries;
+    this.edit.setBooks(entries.map((entry: ShelfBookItem) => entry.book.bookId));
   }
 
   build() {
@@ -85,7 +97,7 @@ export struct ShelfPage {
       .height('100%')
       .backgroundColor($r('app.color.bg_page'))
 
-      if (this.tts.active) {
+      if (this.tts.active && !this.edit.editing) {
         FloatingListenButton({
           visible: true,
           onTap: () => this.onOpenListening()
@@ -103,14 +115,20 @@ export struct ShelfPage {
       ForEach(this.entries, (entry: ShelfBookItem) => {
         GridItem() {
           Column() {
-            BookCover({
-              source: entry.source,
-              coverUrl: entry.book.coverUrl,
-              name: entry.book.name,
-              coverWidth: 96,
-              coverHeight: 128,
-              radius: 8
-            })
+            Stack({ alignContent: Alignment.TopEnd }) {
+              BookCover({
+                source: entry.source,
+                coverUrl: entry.book.coverUrl,
+                name: entry.book.name,
+                coverWidth: 96,
+                coverHeight: 128,
+                radius: 8,
+                dimmed: this.edit.editing && this.edit.isSelected(entry.book.bookId)
+              })
+              if (this.edit.editing) {
+                this.selectBadge(this.edit.isSelected(entry.book.bookId), { top: 4, right: 4 })
+              }
+            }
             Text(entry.book.name)
               .fontSize(13)
               .fontColor($r('app.color.text_1'))
@@ -125,11 +143,13 @@ export struct ShelfPage {
               .margin({ top: 2 })
           }
           .width('100%')
-          .onClick(() => {
-            if (entry.source !== undefined) {
-              this.onOpenBook(entry.source, entry.book);
-            }
-          })
+          .accessibilityText(this.itemA11yText(entry))
+          .onClick(() => this.onItemTap(entry))
+          .onTouch((event: TouchEvent) => this.onItemTouch(event))
+          .parallelGesture(
+            LongPressGesture({ repeat: false, duration: 500 })
+              .onAction(() => this.onLongPress(entry))
+          )
         }
       }, (entry: ShelfBookItem) => this.entryKey(entry))
     }
@@ -154,7 +174,8 @@ export struct ShelfPage {
               name: entry.book.name,
               coverWidth: 56,
               coverHeight: 76,
-              radius: 6
+              radius: 6,
+              dimmed: this.edit.editing && this.edit.isSelected(entry.book.bookId)
             })
             Column({ space: 6 }) {
               Text(entry.book.name)
@@ -175,14 +196,19 @@ export struct ShelfPage {
             .justifyContent(FlexAlign.Start)
             .alignItems(HorizontalAlign.Start)
             .margin({ left: 12 })
+            if (this.edit.editing) {
+              this.selectBadge(this.edit.isSelected(entry.book.bookId), { left: 12 })
+            }
           }
           .width('100%')
           .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-          .onClick(() => {
-            if (entry.source !== undefined) {
-              this.onOpenBook(entry.source, entry.book);
-            }
-          })
+          .accessibilityText(this.itemA11yText(entry))
+          .onClick(() => this.onItemTap(entry))
+          .onTouch((event: TouchEvent) => this.onItemTouch(event))
+          .parallelGesture(
+            LongPressGesture({ repeat: false, duration: 500 })
+              .onAction(() => this.onLongPress(entry))
+          )
         }
       }, (entry: ShelfBookItem) => this.entryKey(entry))
     }
@@ -191,10 +217,86 @@ export struct ShelfPage {
     .scrollBar(BarState.Off)
   }
 
+  /**
+   * Long press opened edit mode for the current press; swallows the click that
+   * may follow it (K13). Plain field — no need to be reactive.
+   */
+  private longPressFired: boolean = false;
+
+  @Builder
+  selectBadge(selected: boolean, margin: Margin) {
+    // 计划 §8 S1-3e 写的是 `.justifyContent/.alignItems`，但 `StackAttribute` 在
+    // 本 SDK 没有这两个属性（居中只能用构造参数 `alignContent`）——照编译器修正。
+    Stack({ alignContent: Alignment.Center }) {
+      if (selected) {
+        SymbolGlyph($r('sys.symbol.checkmark'))
+          .fontSize(12)
+          .fontColor([$r('app.color.on_brand')])
+      }
+    }
+    .width(22)
+    .height(22)
+    .borderRadius(11)
+    .backgroundColor(selected ? $r('app.color.brand') : $r('app.color.mask'))
+    .border({ width: selected ? 0 : 1.5, color: $r('app.color.on_brand') })
+    .margin(margin)
+    // 纯装饰：真实语义由所在行/宫的 accessibilityText 承担。
+    .accessibilityLevel('no')
+  }
+
+  private onItemTap(entry: ShelfBookItem): void {
+    // 长按（已进入编辑态）后可能还会补送一次 click，用 onTouch(Down) 复位的标志吞掉它（见 K13）。
+    if (this.longPressFired) {
+      return;
+    }
+    if (this.edit.editing) {
+      this.edit.toggle(entry.book.bookId);
+      return;
+    }
+    if (entry.source !== undefined) {
+      this.onOpenBook(entry.source, entry.book);
+    }
+  }
+
+  /** 无障碍文本：编辑态下把选中情况并入行语义（角标自身对读屏不可见）。 */
+  private itemA11yText(entry: ShelfBookItem): string {
+    const base: string = entry.book.name + '，' + this.progressText(entry);
+    if (!this.edit.editing) {
+      return base;
+    }
+    return base + (this.edit.isSelected(entry.book.bookId) ? '，已选中' : '，未选中');
+  }
+
+  /** Long press opens edit mode; inside edit mode long press is a no-op (K13). */
+  private onLongPress(entry: ShelfBookItem): void {
+    this.longPressFired = true;
+    if (!this.edit.editing) {
+      this.edit.enter(entry.book.bookId);
+    }
+  }
+
+  /**
+   * 每次按下的 Down 都复位 `longPressFired`，保证标志不会泄漏到下一次点击：
+   * 同一根手指的长按（Down → 500ms 动作 → Up → 可能的 click）里，click 会被吞掉；
+   * 下一次点击先发 Down（置 false），再正常走 tap 分支。
+   */
+  private onItemTouch(event: TouchEvent): void {
+    if (event.type === TouchType.Down) {
+      this.longPressFired = false;
+    }
+  }
+
   private entryKey(entry: ShelfBookItem): string {
     const p: ReadProgress | undefined = entry.progress;
     const sig: string = p === undefined ? 'none' : `${p.chapterIndex}_${p.percent}`;
-    return entry.book.bookId + '#' + sig;
+    // 第三段三态：0 = 普通态，1 = 编辑态未选中，2 = 编辑态已选中。
+    // 必须含「编辑态」这一维：长按 A 进入编辑态时，A 的选中位 0→1 ✓，
+    // 但其余未选中的书选中位仍是 0；若 key 不含 editing，它们的 key 不变 →
+    // 不重建 → 那一行不会出现空角标（而 §3.1 要求编辑态所有书都有角标）。
+    const state: string = this.edit.editing
+      ? (this.edit.isSelected(entry.book.bookId) ? '2' : '1')
+      : '0';
+    return entry.book.bookId + '#' + sig + '#' + state;
   }
 
   private progressText(entry: ShelfBookItem): string {

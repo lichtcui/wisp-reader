@@ -121,6 +121,27 @@ export async function importLocalTxt(ctx: common.UIAbilityContext): Promise<Book
   return book;
 }
 
+/**
+ * Delete one local book's sandbox files (`filesDir/local/{bookId}`) and drop its
+ * decoded TOC/text from memory. Re-importing the same TXT recreates everything
+ * (`importLocalTxt` always rewrites `book.txt` / `toc.json`).
+ *
+ * `fileIo.rmdirSync` is recursive (SDK: "Removes a directory and all its
+ * subdirectories and files synchronously"), so one call clears the book dir.
+ */
+export function deleteLocalBookData(ctx: common.UIAbilityContext, bookId: string): void {
+  tocCache.delete(bookId);
+  textCache.delete(bookId);
+  const dir: string = bookDir(ctx, bookId);
+  try {
+    if (fileIo.accessSync(dir)) {
+      fileIo.rmdirSync(dir);
+    }
+  } catch (err) {
+    return;
+  }
+}
+
 // ── Loading ─────────────────────────────────────────────────────
 
 export function loadLocalChapters(ctx: common.UIAbilityContext, book: Book): Chapter[] {

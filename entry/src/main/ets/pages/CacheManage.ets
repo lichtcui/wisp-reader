@@ -38,6 +38,8 @@ export struct CacheManagePage {
   @Local imageCount: number = 0;
   @Local chapterBytes: number = 0;
   @Local chapterCount: number = 0;
+  @Local tocBytes: number = 0;
+  @Local tocCount: number = 0;
   @Local ttsBytes: number = 0;
   @Local ttsCount: number = 0;
   @Local totalBytes: number = 0;
@@ -61,6 +63,8 @@ export struct CacheManagePage {
     this.imageCount = stats.image.count;
     this.chapterBytes = stats.chapter.bytes;
     this.chapterCount = stats.chapter.count;
+    this.tocBytes = stats.toc.bytes;
+    this.tocCount = stats.toc.count;
     this.ttsBytes = stats.tts.bytes;
     this.ttsCount = stats.tts.count;
     this.totalBytes = stats.totalBytes;
@@ -82,6 +86,8 @@ export struct CacheManagePage {
     this.imageCount = 0;
     this.chapterBytes = 0;
     this.chapterCount = 0;
+    this.tocBytes = 0;
+    this.tocCount = 0;
     this.ttsBytes = 0;
     this.ttsCount = 0;
     this.totalBytes = 0;
@@ -97,11 +103,13 @@ export struct CacheManagePage {
           InsetDivider()
           CacheStatRow({ title: '章节内容缓存', bytes: this.chapterBytes, count: this.chapterCount })
           InsetDivider()
+          CacheStatRow({ title: '目录缓存', bytes: this.tocBytes, count: this.tocCount })
+          InsetDivider()
           CacheStatRow({ title: 'TTS 音频缓存', bytes: this.ttsBytes, count: this.ttsCount })
           InsetDivider()
           CacheStatRow({ title: '合计', bytes: this.totalBytes, count: this.totalCount })
 
-          Text('封面与章节在再次打开时会按需重新下载；TTS 音频当前仅内存缓存，不计入占用。')
+          Text('封面、章节与目录在再次打开时会按需重新下载；TTS 音频当前仅内存缓存，不计入占用。')
             .fontSize(12)
             .fontColor($r('app.color.text_4'))
             .lineHeight(18)

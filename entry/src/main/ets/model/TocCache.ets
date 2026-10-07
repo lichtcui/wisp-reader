@@ -103,3 +103,16 @@ export function putCachedToc(
     return;
   }
 }
+
+/** Drop one book's cached TOC (memory + `filesDir/tocs/{bookId}.json`). */
+export function deleteBookToc(ctx: common.UIAbilityContext, bookId: string): void {
+  memory.delete(memoryKey(bookId));
+  const path: string = filePath(ctx, bookId);
+  try {
+    if (fileIo.accessSync(path)) {
+      fileIo.unlinkSync(path);
+    }
+  } catch (err) {
+    return;
+  }
+}

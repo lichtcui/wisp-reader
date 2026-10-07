@@ -39,6 +39,8 @@ export struct BookCover {
   @Param coverWidth: number = 112;
   @Param coverHeight: number = 144;
   @Param radius: number = 8;
+  /** Shelf edit mode: dim the cover to 72% while selected. */
+  @Param dimmed: boolean = false;
 
   @Local pixmap: image.PixelMap | undefined = undefined;
 
@@ -105,5 +107,6 @@ export struct BookCover {
     .borderRadius(this.radius)
     .clip(true)
     .backgroundColor($r('app.color.bg_pill'))
+    .opacity(this.dimmed ? 0.72 : 1)
   }
 }

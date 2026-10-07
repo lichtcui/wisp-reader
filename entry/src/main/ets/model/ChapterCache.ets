@@ -107,3 +107,41 @@ export function putCachedChapter(
     return;
   }
 }
+
+/**
+ * Drop every cached body of one book: the in-memory entries and the
+ * `filesDir/chapters/{bookId}_{index}.json` files. Best-effort — a file that
+ * denies deletion is skipped; the caller has already removed the DB row.
+ *
+ * Prefix safety: `bookId` is hex (`computeBookId`) and the file prefix ends with
+ * `_`, so no other book's files can match.
+ */
+export function deleteBookChapters(ctx: common.UIAbilityContext, bookId: string): void {
+  const memPrefix: string = bookId + '#';
+  memory.forEach((_value: CachedChapter, key: string) => {
+    if (key.startsWith(memPrefix)) {
+      memory.delete(key);
+    }
+  });
+  const dir: string = cacheDir(ctx);
+  const prefix: string = bookId + '_';
+  let names: string[] = [];
+  try {
+    if (!fileIo.accessSync(dir)) {
+      return;
+    }
+    names = fileIo.listFileSync(dir);
+  } catch (err) {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith('.json')) {
+      continue;
+    }
+    try {
+      fileIo.unlinkSync(dir + '/' + name);
+    } catch (err) {
+      continue;
+    }
+  }
+}

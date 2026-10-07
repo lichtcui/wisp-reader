@@ -22,6 +22,8 @@ import {
 import { Book, BookSearchItem, BookSource } from '../engine/types';
 import { ReaderTheme } from '../common/ReaderTheme';
 import { importLocalTxt } from '../model/LocalBook';
+import { deleteBooks } from '../model/BookRemoval';
+import { ShelfEditState } from '../model/ShelfEditState';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 import { BookDetailPage } from './BookDetail';
 import { BookSourceManagePage } from './BookSourceManage';
@@ -44,6 +46,9 @@ struct Index {
   @Local shelfRefresh: number = 0;
   @Local settingsRefresh: number = 0;
   @Local shelfViewMode: number = 0;
+  @Local edit: ShelfEditState = new ShelfEditState();
+  /** Guards the delete flow against a double tap on the dialog button. */
+  @Local deleting: boolean = false;
   @Local pathStack: NavPathStack = new NavPathStack();
   private tabsController: TabsController = new TabsController();
 
@@ -102,6 +107,56 @@ struct Index {
     }
   }
 
+  private confirmDelete(): void {
+    const n: number = this.edit.count();
+    if (n === 0 || this.deleting) {
+      return;
+    }
+    const message: string = n === 1
+      ? '删除后，该书的阅读进度与缓存将一并清除，且不可恢复。'
+      : '删除后，这 ' + n.toString() + ' 本书的阅读进度与缓存将一并清除，且不可恢复。';
+    this.getUIContext().showAlertDialog({
+      title: '删除书籍',
+      message: message,
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        fontColor: $r('app.color.text_2'),
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '删除',
+        fontColor: $r('app.color.brand'),
+        action: () => {
+          this.doDelete();
+        }
+      }
+    });
+  }
+
+  private async doDelete(): Promise<void> {
+    const ctx: common.UIAbilityContext | undefined =
+      this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
+    const ids: string[] = this.edit.selected.slice();
+    if (ctx === undefined || ids.length === 0 || this.deleting) {
+      return;
+    }
+    this.deleting = true;
+    let ok: boolean = true;
+    try {
+      await deleteBooks(ctx, ids);
+    } catch (err) {
+      ok = false;
+    }
+    this.deleting = false;
+    this.edit.exit();
+    this.shelfRefresh = this.shelfRefresh + 1;
+    this.getUIContext().getPromptAction().showToast({
+      message: ok ? '已删除 ' + ids.length.toString() + ' 本书' : '删除失败，请重试'
+    });
+  }
+
   private shelfMenuItems(): MenuElement[] {
     return [
       {
@@ -123,6 +178,15 @@ struct Index {
 
   @Builder
   shelfHeader() {
+    if (this.edit.editing) {
+      this.shelfEditHeader()
+    } else {
+      this.shelfNormalHeader()
+    }
+  }
+
+  @Builder
+  shelfNormalHeader() {
     Row() {
       Text('书架')
         .fontSize(20)
@@ -130,6 +194,52 @@ struct Index {
         .fontColor($r('app.color.text_1'))
       Blank()
       MoreMenuButton({ items: this.shelfMenuItems() })
+    }
+    .width('100%')
+    .height(52)
+    .padding({ left: 16, right: 16 })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /** 编辑态顶栏：全选 / 已选择 X 本书 / 完成（左右等宽 76，保证中间真居中）。 */
+  @Builder
+  shelfEditHeader() {
+    Row() {
+      Row() {
+        Text(this.edit.allSelected() ? '取消全选' : '全选')
+          .fontSize(16)
+          .fontColor($r('app.color.brand'))
+          .maxLines(1)
+      }
+      .width(76)
+      .height(44)
+      .justifyContent(FlexAlign.Start)
+      .alignItems(VerticalAlign.Center)
+      .accessibilityText(this.edit.allSelected() ? '取消全选' : '全选')
+      .accessibilityLevel('yes')
+      .onClick(() => this.edit.toggleAll())
+
+      Text('已选择 ' + this.edit.count().toString() + ' 本书')
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_1'))
+        .maxLines(1)
+        .layoutWeight(1)
+        .textAlign(TextAlign.Center)
+
+      Row() {
+        Text('完成')
+          .fontSize(16)
+          .fontColor($r('app.color.brand'))
+          .maxLines(1)
+      }
+      .width(76)
+      .height(44)
+      .justifyContent(FlexAlign.End)
+      .alignItems(VerticalAlign.Center)
+      .accessibilityText('完成')
+      .accessibilityLevel('yes')
+      .onClick(() => this.edit.exit())
     }
     .width('100%')
     .height(52)
@@ -164,13 +274,18 @@ struct Index {
   // background into that area is what keeps the system navigation-bar strip (a
   // grey band) from showing up right below the page. The inner Row keeps the
   // 60vp tab height, so the icons stay exactly where they were.
-  @Builder
   bottomBar() {
     Column() {
       Row() {
-        this.bottomTab($r('sys.symbol.bookshelf'), '书架', TAB_SHELF)
-        this.bottomTab($r('sys.symbol.magnifyingglass'), '搜索', TAB_SEARCH)
-        this.bottomTab($r('sys.symbol.gearshape'), '设置', TAB_SETTINGS)
+        if (this.edit.editing) {
+          this.deleteAction()
+          // TODO(S3+): 「移动到分组」再加一个**同形的 0 参数 builder**（如 groupAction()）；
+          // 不要改成“带参数的通用 action builder”——多参数 builder 不会动态刷新（§5.3 K10）。
+        } else {
+          this.bottomTab($r('sys.symbol.bookshelf'), '书架', TAB_SHELF)
+          this.bottomTab($r('sys.symbol.magnifyingglass'), '搜索', TAB_SEARCH)
+          this.bottomTab($r('sys.symbol.gearshape'), '设置', TAB_SETTINGS)
+        }
       }
       .width('100%')
       .height(60)
@@ -179,6 +294,38 @@ struct Index {
     .backgroundColor($r('app.color.bg_page'))
     .border({ width: { top: 1 }, color: $r('app.color.divider') })
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+  }
+
+  /**
+   * 删除按钮是否可点。**只能在 0 参数 builder 的属性表达式里直接调用**。
+   * 官方限制：`@Builder` 传两个及以上参数就不会动态刷新，把 enabled 当形参传入
+   * 会在「已选择 0 本 ↔ N 本」之间不变色（见 §5.3）。
+   */
+  private canDelete(): boolean {
+    return !this.deleting && this.edit.count() > 0;
+  }
+
+  /** 编辑态 · 删除按钮。0 参数 + 状态直读 → 与已验证可用的 `bottomBar()` 同形。 */
+  @Builder
+  deleteAction() {
+    Column({ space: 2 }) {
+      SymbolGlyph($r('sys.symbol.trash'))
+        .fontSize(24)
+        .fontColor([this.canDelete() ? $r('app.color.brand') : $r('app.color.text_5')])
+      Text('删除')
+        .fontSize(11)
+        .fontColor(this.canDelete() ? $r('app.color.brand') : $r('app.color.text_5'))
+    }
+    .layoutWeight(1)
+    .height(60)
+    .justifyContent(FlexAlign.Center)
+    .accessibilityText('删除')
+    .accessibilityLevel('yes')
+    .onClick(() => {
+      if (this.canDelete()) {
+        this.confirmDelete();
+      }
+    })
   }
 
   @Builder
@@ -281,6 +428,15 @@ struct Index {
     }
   }
 
+  /** 编辑态内的系统返回：只退出编辑态，不退出页面。 */
+  onBackPress(): boolean {
+    if (this.edit.editing) {
+      this.edit.exit();
+      return true;
+    }
+    return false;
+  }
+
   build() {
     Navigation(this.pathStack) {
       Column() {
@@ -293,6 +449,7 @@ struct Index {
             ShelfPage({
               refreshToken: this.shelfRefresh,
               viewMode: this.shelfViewMode,
+              edit: this.edit,
               onGoSearch: () => {
                 this.activeTab = TAB_SEARCH;
                 this.tabsController.changeIndex(TAB_SEARCH);
@@ -320,8 +477,11 @@ struct Index {
         }
         .barMode(BarMode.Fixed)
         .barHeight(0)
-        .scrollable(true)
+        .scrollable(!this.edit.editing)
         .onChange((index: number) => {
+          if (this.edit.editing) {
+            this.edit.exit();
+          }
           this.activeTab = index;
           if (index === TAB_SHELF) {
             this.shelfRefresh = this.shelfRefresh + 1;
