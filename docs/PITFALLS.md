@@ -31,3 +31,5 @@
 | LRU 顺序乱：最旧的当成最新的 / 时间直接变 1970 或几万年 | **单位不一致**：`stat.mtime` 是**秒**，而 `fileIo.utimes(path, mtime)` 收的是**毫秒**（内部统一用毫秒比较） | `docs/research/CACHE-LIMIT-PLAN.md` §4 |
 | 给纯内存 interface 加了字段，`make check` 却要求进 keep 列表 | keep 扫描的判定范围是「**含 `JSON.parse(` / `JSON.stringify(` 的文件**里声明的 interface」——纯内存结构只要该文件不出现这两个调用就不会被扫；别为了打日志写 `JSON.stringify(err)`（用 `(err as BusinessError).message`） | `scripts/check-keep-props.sh` |
 | 页面跳转用了 `@ohos.router` 报废弃 | 统一 `Navigation` + `NavPathStack`，路由常量见 `common/Const.ets` 的 `ROUTE_*` | `docs/architecture.md` |
+| 连载书**永远看不到新章**：书架一直「已读到最新章」、目录少章，只有清缓存/换源才恢复 | TOC 缓存的失效条件**只有** `tocUrl` 变化，而 `CachedToc.fetchedAt` 写了却从没人读 → 事实上的**永久缓存**（`Reader.loadToc` 命中即返回）。现加 `TOC_REFRESH_AFTER_MS`（6h）新鲜期：过期 → 先返回缓存渲染，再**后台重爬**并重写 `percent` | `docs/bugfix/TASKS.md` §T-SHELF-6 |
+| 列表「计数变了、行数没变」（LazyForEach 换了 dataSource 实例也没刷新） | **LazyForEach 只在创建时读一次数据源**，换实例不会让已挂载列表重跑；要么复用同一实例 + `setItems()`（内部 `onDataReloaded`），要么重建组件（目录抽屉的 A/B 翻转就是后者的遗留写法）。别用 `this.dataSource = next` 指望刷新 | `docs/bugfix/TASKS.md` §T-SHELF-6 |

@@ -80,6 +80,17 @@ export const CACHE_FRESH_WINDOW_MS: number = 5 * 60 * 1000;
 /** 会话内两次整理的最小间隔（启动后的首次整理用 force，不受此限）。 */
 export const CACHE_TRIM_MIN_INTERVAL_MS: number = 30 * 60 * 1000;
 
+/**
+ * 目录缓存的「新鲜期」：打开书时若缓存目录的抓取时间（`TocCache.fetchedAt`）早于此值，
+ * 就在**后台**重爬一次目录。
+ *
+ * 为什么必须有：缓存命中时 `Reader.loadToc` 只认 `tocUrl`、没有别的过期条件，于是连载书
+ * 首次打开之后**新章再也不会出现**（书架也因此永远显示「已读到最新章」，见
+ * [`docs/bugfix/TASKS.md`] T-SHELF-6）。6 小时是「一天内读过就能看到新章」与
+ * 「每本书最多每 6 小时多爬一次目录」之间的折中；只影响网络开销，不影响首屏（异步）。
+ */
+export const TOC_REFRESH_AFTER_MS: number = 6 * 60 * 60 * 1000;
+
 /** Keyword used by the book-source availability detector. */
 export const DEFAULT_DETECT_KEYWORD: string = '重生';
 

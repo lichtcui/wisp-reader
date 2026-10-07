@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { Chapter } from '../engine/types';
+import { TOC_REFRESH_AFTER_MS } from '../common/Const';
 
 /**
  * Table-of-contents cache (mirrors ChapterCache): file cache under
@@ -8,11 +9,25 @@ import { Chapter } from '../engine/types';
  * session. A fetched TOC is valid until the book's `tocUrl` changes, so a
  * re-imported/re-sourced book invalidates its stale chapter list instead of
  * showing an outdated one.
+ *
+ * `tocUrl` is not the only expiry: the entry also carries `fetchedAt`, and the
+ * caller re-crawls a stale entry in the background (`isTocStale`) — otherwise a
+ * serialized book would keep the chapter list it had on its first open, forever.
  */
-interface CachedToc {
+export interface CachedToc {
   tocUrl: string;
   chapters: Chapter[];
   fetchedAt: number;
+}
+
+/**
+ * Is this cached TOC old enough to be re-crawled?
+ *
+ * A missing / non-positive `fetchedAt` (file written by an older build) counts as
+ * stale, so that first open refreshes it and stamps a real timestamp.
+ */
+export function isTocStale(entry: CachedToc): boolean {
+  return !(entry.fetchedAt > 0) || Date.now() - entry.fetchedAt >= TOC_REFRESH_AFTER_MS;
 }
 
 const memory: Map<string, CachedToc> = new Map();
@@ -43,17 +58,21 @@ function filePath(ctx: common.UIAbilityContext, bookId: string): string {
   return cacheDir(ctx) + '/' + bookId + '.json';
 }
 
-/** Return cached chapters if present and still matching `tocUrl`. */
+/**
+ * Return the cached entry (chapters + `fetchedAt`) if present and still matching
+ * `tocUrl`. The whole entry is returned rather than just the chapters so the
+ * caller can decide whether it has gone stale.
+ */
 export function getCachedToc(
   ctx: common.UIAbilityContext,
   bookId: string,
   tocUrl: string
-): Chapter[] | undefined {
+): CachedToc | undefined {
   const mem: CachedToc | undefined = memory.get(memoryKey(bookId));
   if (mem !== undefined) {
     if (mem.tocUrl === tocUrl) {
       touchMemory(memoryKey(bookId), mem);
-      return mem.chapters;
+      return mem;
     }
     memory.delete(memoryKey(bookId));
   }
@@ -68,7 +87,7 @@ export function getCachedToc(
       return undefined;
     }
     touchMemory(memoryKey(bookId), entry);
-    return entry.chapters;
+    return entry;
   } catch (err) {
     return undefined;
   }

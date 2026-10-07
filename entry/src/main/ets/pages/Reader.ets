@@ -3,7 +3,7 @@
 //   状态（@Local）：chapters / chapterIndex / paragraphs / paragraphIndex / pages / pageIndex / sliderValue
 //                   menuVisible / panel / tocDescending / fontSize / lineHeight / nightMode / oneHandMode / tts
 //   生命周期：aboutToAppear / aboutToDisappear / onTtsProgress（@Monitor 听书进度 → 高亮 + 跟随滚动）
-//   加载正文：loadToc / load / loadChapter / applyChapter / fetchContent / cachedContent / sanitize / warmNeighbors / prefetch
+//   加载正文：loadToc / refreshToc / load / loadChapter / applyChapter / fetchContent / cachedContent / sanitize / warmNeighbors / prefetch
 //   章内导航：isReadable / firstReadable / nextReadable / prevReadable / prevChapter / nextChapter / prevPage / nextPage / onPageChanged
 //   分页测算（横向分页核心）：availWidthPx / availHeightPx / measureOptions / measureHeight / maxCharsFit / paraMargin
 //                             paginateChapter / rebuildWindow / flatIndexOf / pageIdFor / indexOfPageId / PageSeg
@@ -16,6 +16,8 @@
 // ──────────────────────────────────────────────────────────────────────
 
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSource, Chapter, ReadProgress } from '../engine/types';
 import { ChapterDataSource } from '../common/ChapterDataSource';
@@ -43,7 +45,7 @@ import { ProgressWriter } from '../model/ProgressOwner';
 import { protectBook } from '../model/CacheTrim';
 import { ReaderTheme } from '../common/ReaderTheme';
 import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
-import { getCachedToc, putCachedToc } from '../model/TocCache';
+import { CachedToc, getCachedToc, isTocStale, putCachedToc } from '../model/TocCache';
 import { isLocalBook, loadLocalChapters, loadLocalContent } from '../model/LocalBook';
 import { TtsController } from '../model/TtsController';
 import { FloatingListenButton } from '../ui/common/FloatingListenButton';
@@ -53,6 +55,8 @@ import { MeasureOptions } from '@ohos.measure';
 
 const PANEL_NONE: string = '';
 const PANEL_TOC: string = 'toc';
+const DOMAIN: number = 0x0000;
+const TAG: string = 'SourceReaderReader';
 const PANEL_SETTINGS: string = 'settings';
 
 /** 一页中的一个段落片段：指向某章某段落的一段字符区间（段落可跨页拆分）。 */
@@ -111,6 +115,12 @@ export struct ReaderPage {
   @Local dataSource: ChapterDataSource = new ChapterDataSource();
   /** Monotonic token so a slow chapter fetch cannot overwrite a newer one. */
   private loadGen: number = 0;
+  /**
+   * Invalidation token for the background TOC re-crawl: bumped by every `load()`
+   * and by the page disappearing. Deliberately **not** `loadGen` — that one moves
+   * on every chapter load, which would cancel the re-crawl in nearly every case.
+   */
+  private tocSession: number = 0;
   /** 各章已 sanitize 的段落缓存（key=章节下标）。跨章连续页流需要同时分页上一章/本章/下一章。 */
   private paraCache: Map<number, string[]> = new Map();
   /** 当前可视页的身份（首段 chapterIndex@para@start）。重排窗口后用它对回同一页，
@@ -151,6 +161,8 @@ export struct ReaderPage {
   }
 
   aboutToDisappear(): void {
+    // 页面已离开：作废还在飞的目录重爬，避免它回来写已销毁组件的状态。
+    this.tocSession = this.tocSession + 1;
     setLayoutFullScreen(false);
     setWindowBackgroundColor(this.resolveColorHex($r('app.color.bg_page')));
     setStatusBarContentColor(this.systemDark() ? '#FFFFFF' : '#000000');
@@ -199,13 +211,21 @@ export struct ReaderPage {
    * Fetch the chapter list, serving a previously cached TOC when the book's
    * `tocUrl` is unchanged so re-opening a long book doesn't re-crawl every TOC
    * page over the network.
+   *
+   * The cache has no expiry of its own beyond `tocUrl`, so a serialized book would
+   * never show chapters published after its first open. A stale entry (older than
+   * `TOC_REFRESH_AFTER_MS`) is therefore also re-crawled — in the background, so
+   * the first paint is never blocked (see `refreshToc`).
    */
   private async loadToc(src: BookSource, book: Book): Promise<Chapter[]> {
     const ctx: common.UIAbilityContext | undefined = this.ctx();
     if (ctx !== undefined) {
-      const cached: Chapter[] | undefined = getCachedToc(ctx, book.bookId, book.tocUrl);
-      if (cached !== undefined && cached.length > 0) {
-        return cached;
+      const cached: CachedToc | undefined = getCachedToc(ctx, book.bookId, book.tocUrl);
+      if (cached !== undefined && cached.chapters.length > 0) {
+        if (isTocStale(cached)) {
+          this.refreshToc(src, book, this.tocSession);
+        }
+        return cached.chapters;
       }
     }
     const chapters: Chapter[] = await bookEngine.toc(src, book.tocUrl);
@@ -213,6 +233,54 @@ export struct ReaderPage {
       putCachedToc(ctx, book.bookId, book.tocUrl, chapters);
     }
     return chapters;
+  }
+
+  /**
+   * Re-crawl a stale cached TOC in the background and adopt the result when the
+   * chapter count changed. Never blocks the first paint; failures are silent (the
+   * cached list keeps working and the next open retries).
+   *
+   * Adopting matters beyond the new chapters themselves: `percent` is written as
+   * `(chapterIndex + 1) / chapters.length` and the shelf reverse-derives its
+   * 「{i+1}章/{total}章」 / 「已读到最新章」 from it, so a stale denominator means a
+   * stale shelf label until the book is opened again. Rewriting the progress row
+   * here with the fresh denominator is what heals it (T-SHELF-6) — the shelf still
+   * does no I/O of its own.
+   *
+   * 已知边界：听书（`TtsController`）持有开启听书那一刻的 `chapters` **引用**（没有 setter），
+   * 重爬结果不会同步给它；且播放中阅读页的进度写会被 `ProgressOwner` 丢弃（音频独占），
+   * 所以听书期间书架不会自愈 —— 停播后的下一次进度写入自愈。
+   */
+  private async refreshToc(src: BookSource, book: Book, session: number): Promise<void> {
+    let chapters: Chapter[] = [];
+    try {
+      chapters = await bookEngine.toc(src, book.tocUrl);
+    } catch (err) {
+      // 静默（只记一条日志）：缓存目录继续用，下次打开再试。
+      hilog.warn(DOMAIN, TAG, 'toc refresh failed: %{public}s', (err as BusinessError).message);
+      return;
+    }
+    if (session !== this.tocSession || chapters.length === 0) {
+      return;
+    }
+    if (this.chapterIndex >= chapters.length) {
+      // 目录变短到不含当前章：可能源只返回了不完整目录。宁可继续用（可能陈旧的）
+      // 缓存，也不能让下一次打开按更短的目录定位而丢掉阅读位置 —— 连缓存都不覆盖。
+      return;
+    }
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx !== undefined) {
+      putCachedToc(ctx, book.bookId, book.tocUrl, chapters);
+    }
+    // 每次成功重爬都记一行（含「章数未变」），否则无法区分「没重爬」与「重爬了没变化」。
+    hilog.info(DOMAIN, TAG, 'toc refresh: %{public}d chapters (cached %{public}d, book=%{public}s)',
+      chapters.length, this.chapters.length, book.name);
+    if (chapters.length === this.chapters.length) {
+      return; // 章数未变：不动列表，避免打断正在读的页（标题变化靠下次打开生效）
+    }
+    this.chapters = chapters;
+    this.buildTocItems();
+    this.persistProgress();
   }
 
   private async load(): Promise<void> {
@@ -223,6 +291,8 @@ export struct ReaderPage {
       this.loading = false;
       return;
     }
+    // 本次加载的目录重爬令牌（作废上一次页面停留期间还在飞的刷新）。
+    this.tocSession = this.tocSession + 1;
     // 缓存整理时保护这本书的章节文件（会话级，30 分钟未更新自动失效）。
     protectBook(book.bookId);
     try {
@@ -897,9 +967,10 @@ export struct ReaderPage {
       const pos: number = this.tocDescending ? total - 1 - i : i;
       ordered.push(this.chapters[pos]);
     }
-    const next: ChapterDataSource = new ChapterDataSource();
-    next.setItems(ordered);
-    this.dataSource = next;
+    // 复用同一个实例 + `setItems`（内部 `onDataReloaded`）而不是换新实例：LazyForEach
+    // 只在创建时读一次数据源，换实例**不会**让已挂载的目录抽屉重渲染——那会出现
+    // 「目录 · N 章」计数已变、列表却还是旧章数（T-SHELF-6 后台重爬时踩到）。
+    this.dataSource.setItems(ordered);
   }
 
   private readableCount(): number {

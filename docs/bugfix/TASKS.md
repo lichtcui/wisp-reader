@@ -15,7 +15,10 @@
 > **2026-10-07 第七次同步**：⑥ T-SHELF-3（P2）边界加固落地——反推收敛到 `Format.deriveTotalChapters`，脏值/退化值不再编造总数；
 > 真机取证：三态（含新加一本书看到的「未读过」）+ 沙箱 DB 对账 + **临时插桩的脏值旁排对照**（修复前「已读到最新章」误报 / 「28章/28000000000章」→ 修复后「第153章」/「第28章」），插桩已还原、测试书已删、DB 逐字节复原；
 > 证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §12。并登记 T-SHELF-6（`toc.length` ↔ `percent` 反推的口径分歧）。
-> 当前 open：**5 项 `[ ]`**（T-READ-1 / T-READ-3 / T-SHELF-6 顺延 · T-SHELF-5 / T-TTS-4 未开始）。
+> **2026-10-07 第八次同步**：⑦ T-SHELF-6（P2）已修**真根因**——不是文档口径问题，而是 TOC 缓存**事实上永久**（`CachedToc.fetchedAt` 写了从没人读）→ 连载书新章永不出现；
+> 现加 6h 新鲜期 + 打开书时**后台重爬**（失败静默回退缓存，章数变化时用新分母重写 `percent` 让书架自愈）。文档口径同步改为「快照」；
+> 真机 8 项证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §13。
+> 当前 open：**4 项 `[ ]`**（T-READ-1 / T-READ-3 顺延 · T-SHELF-5 / T-TTS-4 未开始）。
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
 ---
@@ -77,12 +80,18 @@
   - 数据复原：测试用第 4 本「赘婿」经编辑模式删除；沙箱 DB 回到 `books 3 / progress 7`，三行 `percent`/`chapter_index` 与验证前逐字节一致。
   - 未覆盖：无法用**真实脏行**验证（沙箱写不进、备份导入=全量覆盖），脏值分支靠临时插桩；`make check` 通过（无新增 JSON 字段）。
   - 证据：`common/Format.ets:1-40`（新增 `MAX_DERIVED_CHAPTERS` + `deriveTotalChapters`）、`pages/Shelf.ets:302-310`（原 `:307` 内联反推已删除）。
-- [ ] **T-SHELF-6 进度总数口径分歧（登记 · 未开始）**：`docs/architecture.md:51` 与 `plan.md:163` 写的是「`chapterIndex >= toc.length-1` → 已读到最新章」，
-  实现是**不读目录**、由 `percent` 反推总数（T-SHELF-3 加固后仍如此）。可复现后果：用户读完后源又发新章时，陈旧快照 `percent = 1` 仍判「已读到最新章」，
-  直到重新打开该书（刷新并缓存目录）才更新。
-  - 方向（未选）：① 书架 `reload` 用**已在内存**的 `TocCache` 章数覆盖反推值（零额外 I/O，顺带修陈旧误报，但 `MEMORY_LIMIT=6` 只惠及刚读过的书）；
-    ② 磁盘 toc 也读（书架加载路径新增 N 次同步 `JSON.parse`，冷启动有卡顿风险）；③ `totalChapters` 入库（`books` 加列或 `ReadProgress` 加字段 → 动 Rust struct 与混淆 keep）。
-  - 两项文档已在原位加了指向本条的注记。
+- [x] **T-SHELF-6 进度总数口径分歧 → 真根因：新章永不出现**：原登记为「文档写 `chapterIndex >= toc.length-1`、实现走 `percent` 反推」的口径分歧；
+  逐路径核代码后发现**真正的问题是 TOC 缓存没有过期条件**：`TocCache` 只比 `tocUrl`（`CachedToc.fetchedAt` 有写入、**全仓库从未被读**）→ 缓存事实上永久，
+  而 `Reader.loadToc` 命中即返回、全仓库无刷新入口 ⇒ `tocUrl` 不变的连载书**首次打开之后新章永远不出现**（目录少章 + 书架永远「已读到最新章」），
+  只有清缓存 / 配额驱逐 / 换源才重爬。原登记里「重新打开即刷新」的前提不成立（打开会重写 `percent`，但用的是同一份陈旧目录）。
+  - 处置（用户选定「修根因 + 后台异步刷新」）：`common/Const.ets::TOC_REFRESH_AFTER_MS = 6h`；`TocCache` 导出 `CachedToc` + 新增 `isTocStale`（`fetchedAt` 缺失/≤0 视为过期，老文件首次打开即补时间戳）；
+    `Reader.loadToc` 命中缓存**先返回**、过期则 fire-and-forget `refreshToc`（失败静默；独立会话令牌 `tocSession` 防换书/销毁后写状态；目录为空或短到不含当前章→**连缓存都不覆盖**；
+    章数未变不动列表，变化则重绑 + `buildTocItems()` + `persistProgress()` **用新分母重写 `percent` → 书架下次加载自愈**）；本地书不联网。
+  - 附带修：`buildTocItems` 的 `this.dataSource = next` 改为复用同一实例 `setItems()` —— **LazyForEach 只在创建时读一次数据源**，换实例不会让已挂载的目录抽屉重渲染（真机曾观察到「目录 · 29 章」但列表仍 28 行）。
+  - 文档口径同步：「书架三态」改为**快照口径**（`architecture.md` §领域模型、`plan.md` §进度语义）；`PITFALLS.md` 增两条（永久缓存 / LazyForEach 换实例不刷新）；`CACHE-LIMIT-PLAN.md` §2 注明 toc 另有新鲜期。
+  - 验证（2026-10-07 真机 `33Z0224424136564`，debug 包 + `uitest dumpLayout`）：基线（28 章 / 书架「已读到最新章」）→ ① TTL=0 → 日志 `toc refreshed 28 → 29 chapters` → ② 插桩伪造新章：目录「· 29 章」+ 末行 `【临时插桩】新章`，阅读位置不动 → ③ 返回书架 `28章/29章`（**自愈**）→ ④ TTL=2000ms（正值 + 时间流逝）→ 日志 `toc refresh: 28 chapters (cached 28)` → ⑤ 还原 6h：无任何 toc 日志（新鲜期不重爬）、目录回 28 章 → ⑥ 正序/倒序仍生效 → ⑦ 应用侧 0 条 error → ⑧ `rg TEMP` 无残留、沙箱 toc 缓存未插桩污染（伪造章在 `putCachedToc` 之后只进内存）。
+  - 证据：`common/Const.ets`、`model/TocCache.ets`、`pages/Reader.ets`（`loadToc`/`refreshToc`/`tocSession`/`buildTocItems`）；完整表见 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §13；`make check` / `make doctor` 均 ✓。
+  - 未覆盖：release 包；「源返回不完整目录」未构造真实场景（仅代码守卫）；6h 未长跑（只验 TTL = 0 / 2s / 6h 三档）。
 - [x] **T-SHELF-4（真机）长按手势被静默丢弃**：`Shelf.ets` 按计划 §8 S1-3e 写成 helper 返回 gesture（`longPressToEdit(entry): GestureType`）+ `.gesture(this.longPressToEdit(entry))` → **真机长按从不触发**（编译无错、无告警）。
   - 证据（转译产物）：`entry/build/.../esmodule/debug/entry/src/main/ets/pages/Shelf.ts` 里该参数位退化为 `globalThis.Gesture.create(GesturePriority.Parallel); globalThis.Gesture.pop();`（**空手势**）；真机 `uinput -T -d x y -i 900 -u x y` 实测 Down/Up 间隔 935ms 但无任何 gesture 回调。
   - **处置（2026-10-07）**：改为内联手势字面量 `.parallelGesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => this.onLongPress(entry)))`（grid/list 两分支同形），helper 改名 `onLongPress(entry): void`（只留 `longPressFired=true` + `edit.enter`）。理由：`.gesture()/.parallelGesture()` **只接受内联手势字面量**；且 `.gesture()` = `GesturePriority.Low` 会输给祖先识别器。
@@ -221,7 +230,8 @@
 | T-SHELF-1 删除书籍清缓存 | ✅ | 2026-10-07 落地：`removeBooks` + `ChapterCache.deleteBookChapters` / `TocCache.deleteBookToc` / `LocalBook.deleteLocalBookData` + 新增 `model/BookRemoval.ets` 编排；`Index` 二次确认弹窗 + `deleting` 防重入。**真机已验证（D6–D9/D11/D13/D17）**：书架 4→3 且重启仍 3、DB 4/7→3/6 行、`chapters/` 13→6、`tocs/` 4→3、TTS 播放中删除即停播 + FAB 消失；D10/D12 经用户同意跳过 |
 | T-SHELF-4 长按手势被编译成空手势 | ✅ | 2026-10-07 真机发现：helper 返回 gesture + `.gesture()` → 转译为 `Gesture.create; Gesture.pop();` 空手势，真机永不触发 → 改内联 `.parallelGesture(LongPressGesture(...))` + helper 只留业务（`onLongPress`）。计划 §1.6 #42/#43、K16 |
 | T-SHELF-2 数据层懒初始化 | ✅ | `EntryAbility.onCreate` 预调 `initShelf`，搜索直达阅读也能落进度（`EntryAbility.ets:14-19`） |
-| T-SHELF-3 进度三态 | ✅ | 2026-10-07 边界加固（`Format.deriveTotalChapters`）：`percent` ≤0 / NaN / Infinity / >1 / 极小值 → 回 0，降级「第N章」；正常区间 `len ≤ 20000` 全枚举 0 误差。**主机复算 + debug 构建 + 真机三态 + 真机脏值对照均已通过**（插桩已还原、DB 已复原）；文档口径分歧另登记 T-SHELF-6（[`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §12） |
+| T-SHELF-3 进度三态 | ✅ | 2026-10-07 边界加固（`Format.deriveTotalChapters`）：`percent` ≤0 / NaN / Infinity / >1 / 极小值 → 回 0，降级「第N章」；正常区间 `len ≤ 20000` 全枚举 0 误差。**主机复算 + debug 构建 + 真机三态 + 真机脏值对照均已通过**（插桩已还原、DB 已复原）；当时顺带登记的口径分歧已由 T-SHELF-6 修完（[`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §12 / §13） |
+| T-SHELF-6 新章永不出现 | ✅ | 2026-10-07 真根因：TOC 缓存只比 `tocUrl`（`fetchedAt` 写了没人读）→ 事实上永久。修法：`TOC_REFRESH_AFTER_MS = 6h` + 打开书时**后台重爬**（失败静默回退缓存；章数变化则采新目录并用新分母重写 `percent` 让书架自愈）；顺带把 `buildTocItems` 改成 `setItems()`（LazyForEach 换实例不刷新）。真机 8 项证据（TTL=0 触发 / 插桩伪造新章 → 目录 29 章 + 书架 `28章/29章` / TTL=2000ms / 6h 不重爬 / 排序不回归 / 0 异常 / 插桩已还原）见 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §13 |
 | T-SEARCH-1 concurrency 透传 | ✅ | `BookEngineNapi.search` 现传 `concurrency`（`BookEngineNapi.ets:23-26`） |
 | T-SEARCH-2 搜索代次 guard | ✅ | S6 实现并真机验证；本轮静态复核无残影 |
 | T-READ-1 统一正文清洗 | ⏭ | 两处 `sanitize` 当前**逐字节一致**（非功能缺陷）；合并为纯重构，顺延 |

@@ -15,7 +15,7 @@
 - M5 结果（2026-09-25，真机验证） — L37
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
 - 未决 / 风险 — L111
-- 交接备忘 — L145
+- 交接备忘 — L151
 <!-- TOC:END -->
 
 ---
@@ -125,6 +125,12 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   起播 claim / 停播先落盘再 release），并顺带修 `Reader.onTtsProgress` 跨章跟随缺段落锚点（原来会落到章首并写库）。
   真机四场景 + **修复前对照**（含反向取证：修复前同一操作库确实被覆盖）→ [`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §11、
   [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-CROSS-3。
+- **T-SHELF-6 TOC 缓存新鲜期 + 后台重爬（2026-10-07）**：登记的「文档↔实现口径分歧」逐路径核对后是**更大的产品缺陷** ——
+  TOC 缓存只比 `tocUrl`（`CachedToc.fetchedAt` 写了没人读）→ 缓存事实上的**永久**，`tocUrl` 不变的连载书**新章永不出现**（目录少章 + 书架永远「已读到最新章」），
+  只有清缓存 / 配额驱逐 / 换源才重爬。修法：`TOC_REFRESH_AFTER_MS = 6h` 新鲜期 + 打开书时**后台异步重爬**（先渲染缓存；失败静默回退；章数变化则采新目录
+  并用新分母重写 `percent` 让书架自愈），顺带把 `buildTocItems` 改用 `setItems()`（**LazyForEach 只在创建时读一次数据源**，换实例不刷新已挂载列表）；
+  书架三态文档口径同步改为「快照」。真机 8 项证据（含插桩伪造新章 → 目录 29 章 + 书架 `28章/29章`；TTL = 0 / 2000ms / 6h 三档）→
+  [`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §13、[`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-SHELF-6。
 - **书架编辑模式（多选删除）**：已实施并真机验证（2026-10-07，D1–D21）—— 见上文同名节；
   计划 / 逐步代码 / DoD 逐条证据见 [`archive/SHELF-EDIT-PLAN.md`](./archive/SHELF-EDIT-PLAN.md)（§7 / §8 / §10 / §12.3），
   五轮审计轨迹原文见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §附。

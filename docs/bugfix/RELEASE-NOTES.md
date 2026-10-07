@@ -139,7 +139,7 @@
 ### 4.2 顺延的 TASKS（非本轮范围）
 
 - `T-SHELF-1` 删除书籍清理缓存：`removeBook` 无调用点（无删除 UI），待删除入口一并实现。
-- `T-SHELF-3` 进度三态在 `percent` 极小值时的反推边界：**2026-10-07 已修复并真机验证**（反推收敛到 `Format.deriveTotalChapters`，脏值降级「第N章」；见 §12）；`toc.length` ↔ `percent` 反推的口径分歧登记为 `T-SHELF-6`。
+- `T-SHELF-3` 进度三态在 `percent` 极小值时的反推边界：**2026-10-07 已修复并真机验证**（反推收敛到 `Format.deriveTotalChapters`，脏值降级「第N章」；见 §12）；当时登记的 `toc.length` ↔ `percent` 口径分歧已于同日修完（T-SHELF-6，见 §13）。
 - `T-READ-1` `Reader.sanitize` 与 `BookContent.sanitizeText` 合并（两份当前**逐字节一致**，纯重构）。
 - `T-READ-3` 章节预取 in-flight 去重（LRU 已降低重复写盘概率）。
 - `T-DATA-4` 缓存 LRU/上限策略（未开始，**M6 最后一项**）；`T-DATA-3` 备份/恢复已于 2026-10-07 release 真机验证通过（§9），其「全量覆盖」语义缺陷 `T-DATA-7` 已于同日修复并真机复验（§10）。
@@ -409,4 +409,49 @@ UI 用 `uitest dumpLayout` + `uitest uiInput click` 驱动。为让「阅读页�
 **未覆盖**：真机未跑 release 包（未改混淆相关项）；「已读到最新章」的陈旧快照副作用见 T-SHELF-6。
 
 **附带登记**：`docs/architecture.md:51` / `plan.md:163` 写的是「`chapterIndex >= toc.length-1`」，实现一直走 `percent` 反推 →
-两文档原位加注记，差异与后果（源加新章后 `percent = 1` 仍判「已读到最新章」）登记为 **T-SHELF-6**。
+两文档原位加注记，差异与后果（源加新章后 `percent = 1` 仍判「已读到最新章」）登记为 **T-SHELF-6**（**同日已修：真正根因是 TOC 缓存无过期条件，见 §13**）。
+
+---
+
+## 13. 增量（2026-10-07）：TOC 缓存新鲜期 + 后台重爬（T-SHELF-6）
+
+**根因（比原登记更大）**：`TocCache` 的失效条件**只有** `tocUrl` 变化 —— `CachedToc.fetchedAt` 有写入、**全仓库从未被读**，
+目录缓存事实上永久；`Reader.loadToc` 命中缓存即返回，全仓库也没有「刷新目录」入口。后果：`tocUrl` 不变的连载书，
+**首次打开之后新章永远不出现**（目录少章、书架一直「已读到最新章」），只有清缓存 / 配额驱逐 / 换源才会重爬。
+原登记里「重新打开该书即刷新」的前提**不成立**：打开确实会重写 `percent`，但用的是同一份陈旧目录。
+
+**处理**（用户选定：修根因 + **后台异步**刷新）
+
+- `common/Const.ets` 新增 `TOC_REFRESH_AFTER_MS = 6h`（只影响网络开销，不影响首屏）。
+- `model/TocCache.ets`：导出 `CachedToc`；`getCachedToc` 改为返回整条 entry（原来只回 `chapters`；调用点只有 Reader，无破坏面）；
+  新增 `isTocStale(entry)` —— `fetchedAt` 缺失 / ≤ 0（老版本写的文件）视为过期，首次打开即刷新并补时间戳。
+- `pages/Reader.ets`：`loadToc` 命中缓存**先返回**（不阻塞渲染），过期则 fire-and-forget 调 `refreshToc(src, book, session)`：
+  - 抓取失败**静默**（仅 `hilog.warn` 一条），缓存目录继续用，下次打开再试；
+  - 用**独立会话令牌** `tocSession`（不能用 `loadGen` —— 每次翻章都会 +1）保证换书 / 页面销毁后不写状态；
+  - `chapters.length === 0` 或 `chapterIndex >= chapters.length`（源可能只返回不完整目录）→ **连缓存都不覆盖**，宁可继续用（可能陈旧的）目录，也不让下次打开按更短目录定位而丢阅读位置；
+  - 成功则 `putCachedToc` 刷新内容与 `fetchedAt`；章数未变不动列表（只记一行 log），章数变化则重绑新数组 + `buildTocItems()` + `persistProgress()`
+    —— **用新分母重写 `percent`** 是书架自愈的关键（书架本身仍不读目录、不联网）。
+  - 本地书走 `isLocalBook` 分支，不联网。
+- 附带修 `buildTocItems`：`this.dataSource = next` → 复用同一实例的 `setItems()`（内部 `onDataReloaded`）。
+  原因：**LazyForEach 只在创建时读一次数据源**，换实例不会让**已挂载**的目录抽屉重渲染 —— 不修就会出现「目录 · 29 章」但列表仍是 28 行（真机已观察到）。
+- 已知边界（写在代码注释里）：听书 `TtsController` 持有开启听书那一刻的 `chapters` **引用**（无 setter），后台重爬**不同步**给它；
+  播放中阅读页的进度写被 `ProgressOwner` 仲裁丢弃，故听书期间书架不自愈（停播后下一次写入自愈）。目录源若重排章节，按 `index` 位移属已知限制。
+
+**验证（2026-10-07 · 设备 `33Z0224424136564` · `make run` debug 包 · `uitest dumpLayout` + `hilog -T SourceReaderReader`）**
+
+| 断言 | 真机证据 |
+|---|---|
+| 基线 | 天堂向左：目录 28 章、章号 28（`percent = 28/28 = 1.0`）、书架「已读到最新章」 |
+| ① 过期即重爬 | 临时 `TOC_REFRESH_AFTER_MS = 0` → 打开书后日志 `toc refreshed 28 → 29 chapters (book=天堂向左 深圳往右)` |
+| ② 采用新目录（插桩伪造新章） | 目录计数「· 29 章」；滚到底最后一行 = `【临时插桩】新章`；**阅读位置不动**（仍第二十八章） |
+| ③ 书架自愈 | 返回书架 → `28章/29章`（若不修，该快照会永远停在「已读到最新章」） |
+| ④ TTL 正值 + 时间流逝 | 临时 `TOC_REFRESH_AFTER_MS = 2000` → 打开书日志 `toc refresh: 28 chapters (cached 28, …)`（重爬了、章数未变、列表不动） |
+| ⑤ 新鲜期内不重爬 | 常量还原 6h 后打开同一本书：该 tag **无任何日志**；目录仍 28 章、无插桩行 |
+| ⑥ 排序不回归 | 目录抽屉「正序 → 倒序」：`第一章/第二章…` → `第二十八章/第二十七章…`（`buildTocItems` 改动后仍生效） |
+| ⑦ 无异常 | 应用侧 hilog 0 条 error / exception（`ImageSource` 封面噪音、系统 `PARAM_WATCHER`/`AceTheme`/`Plugin` 为既有） |
+| ⑧ 复原 | `rg TEMP` 无残留；沙箱 toc 缓存**未被插桩污染**（伪造章在 `putCachedToc` **之后**只进内存），复验后书架回到「已读到最新章」，`make doctor` ✓ |
+
+`make check` ✅（145 个 keep 名字覆盖全部 JSON 字段；`tocUrl` / `chapters` / `fetchedAt` 均已在 `obfuscation-rules.txt`，无需新增）。
+
+**未覆盖**：真机未跑 release 包（未动混淆相关项）；「源返回不完整目录」只做了代码守卫、未构造真实场景；
+6h 数值本身没有长跑验证（只验证了 TTL = 0 / 2000ms / 6h 三档下的行为）。

@@ -48,9 +48,10 @@ legado-core（规则解析 / HTML·JSON 提取 / HTTP / Cookie / 限速 / 正文
 `BookSource` / `Book` / `Chapter` / `ReadProgress` / `ChapterCache`。
 - `Book.bookId = hash(normalize(sourceUrl + bookUrl))`。
 - 进度用 `paragraphIndex + charOffset`（与字号无关）。
-- 书架进度三态：无进度→「未读过」；`chapterIndex >= toc.length-1`→「已读到最新章」；否则 `{i+1}章/{total}章`。
-  （实现**不读目录**，`total` 由 `percent = (chapterIndex+1)/toc.length` 反推——与 `toc.length` 直读的差异、以及陈旧快照的后果见
-  [`bugfix/TASKS.md`](./bugfix/TASKS.md) T-SHELF-6；反推的边界口径见 `common/Format.ets::deriveTotalChapters`。）
+- 书架进度三态（**快照口径**）：无进度→「未读过」；`percent >= 1`（写入时即 `chapterIndex >= toc.length-1`）→「已读到最新章」；否则 `{i+1}章/{total}章`。
+  （书架**不读目录、不联网**：`total` 由 `percent = (chapterIndex+1)/toc.length` 反推，边界口径见 `common/Format.ets::deriveTotalChapters`。
+  所以书架上的总数是**上次写入进度时**的章数快照；目录缓存另有 6h 新鲜期（`common/Const.ets::TOC_REFRESH_AFTER_MS`），
+  打开书时过期即**后台重爬**并按新分母重写 `percent`（失败回退缓存），书架下一次加载随之自愈——见 [`bugfix/TASKS.md`](./bugfix/TASKS.md) T-SHELF-6。）
 
 ## 页面与路由
 

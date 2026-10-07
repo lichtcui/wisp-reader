@@ -17,7 +17,7 @@
 | 位置 | 预算常量 | 处置 |
 |---|---|---|
 | `filesDir/chapters/<bookId>_<index>.json` | `CACHE_CHAPTER_QUOTA` 200MB | 配额 + TTL（主战场） |
-| `filesDir/tocs/<bookId>.json` | `CACHE_TOC_QUOTA` 16MB | 配额兜底 + 「章被删空的书」连带删 |
+| `filesDir/tocs/<bookId>.json` | `CACHE_TOC_QUOTA` 16MB | 配额兜底 + 「章被删空的书」连带删；**此外另有 6h 新鲜期**（`TOC_REFRESH_AFTER_MS`，见 §8 之后的 `T-SHELF-6`）——配额/驱逐只管「空间」，不管「陈旧」 |
 | `cacheDir/cover_*.img` | `CACHE_COVER_QUOTA` 64MB | 仅按 mtime 最旧驱逐（见 §5） |
 | `cacheDir/tts` | — | 今天 0 B（系统 TTS 链路纯内存）；有写入者时挂同一套策略 |
 | `filesDir/local/`、DB、书源 prefs、备份文件 | — | **永不动**（用户数据不是缓存） |
