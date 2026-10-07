@@ -1,6 +1,7 @@
 import { relationalStore } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { Book, ReadProgress } from '../engine/types';
+import { canWriteProgress, forgetProgressOwner, ProgressWriter } from './ProgressOwner';
 
 const DB_NAME: string = 'shelf.db';
 
@@ -99,6 +100,7 @@ export async function removeBooks(bookIds: string[]): Promise<void> {
     await s.executeSql('DELETE FROM books WHERE book_id = ?', [bookId]);
     await s.executeSql('DELETE FROM progress WHERE book_id = ?', [bookId]);
     lastWriteAt.delete(bookId);
+    forgetProgressOwner(bookId);
   }
 }
 
@@ -113,6 +115,12 @@ export async function removeBooks(bookIds: string[]): Promise<void> {
  * `saveProgress()` rejects a write older than the last one *this session*, and
  * the map still holds pre-import timestamps — without the clear, an imported
  * progress row with an older `updatedAt` is silently dropped.
+ *
+ * The `ProgressOwner` claim is deliberately **not** cleared: a restore must not
+ * hijack a live listening session. Writing as `ProgressWriter.RESTORE` bypasses
+ * the arbitration instead, and if the restored book happens to be playing, the
+ * audio clock overwrites the restored (stale) row on its next tick — which is the
+ * intended outcome.
  *
  * Callers must validate the payload **before** calling this: the delete is
  * already applied when the first insert runs.
@@ -129,7 +137,7 @@ export async function replaceShelf(books: Book[], progress: ReadProgress[]): Pro
     await upsertBook(b);
   }
   for (const p of progress) {
-    await saveProgress(p);
+    await saveProgress(p, ProgressWriter.RESTORE);
   }
 }
 
@@ -160,9 +168,22 @@ export async function isInShelf(name: string, author: string): Promise<boolean> 
   return hit;
 }
 
-export async function saveProgress(p: ReadProgress): Promise<void> {
+/**
+ * Write one book's reading position.
+ *
+ * `writer` is part of the contract, not decoration: while the TTS is playing a
+ * book it owns that book's position and every other writer is dropped here — see
+ * `model/ProgressOwner.ets` for why (the audio clock is authoritative, the Reader
+ * would stamp the first paragraph of its visible page, which may be a chapter it
+ * loaded *before* the audio moved on). The check runs **before** the timestamp
+ * guard so a rejected write cannot poison `lastWriteAt` with a future timestamp.
+ */
+export async function saveProgress(p: ReadProgress, writer: ProgressWriter): Promise<void> {
   const s: relationalStore.RdbStore | undefined = db();
   if (s === undefined) {
+    return;
+  }
+  if (!canWriteProgress(p.bookId, writer)) {
     return;
   }
   const incoming: number = p.updatedAt > 0 ? p.updatedAt : Date.now();

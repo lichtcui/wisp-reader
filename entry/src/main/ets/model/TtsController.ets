@@ -2,6 +2,7 @@
 // 下面只列**成员名**，不列行号（行号会漂）；定位用 `grep -n "<名字>" entry/src/main/ets/model/TtsController.ets`。
 //   @ObservedV2 单例（供 Reader / Listening / Shelf FAB 共用）：
 //   单例与查询： instance（static）/ isActiveFor / currentSource / currentBook / currentChapters / loadPrefs
+//   进度归属：   setPlaying（playing 的唯一写入口，绑定 ProgressOwner 仲裁，见 model/ProgressOwner.ets）
 //   对外控制：   start / stop / pause / resume / toggle / next / prev / seekParagraph / jumpChapter /
 //                setSpeed / setVoice / setRemoteVoice / setTimer / setVoice 相关的参数持久化走 common/Prefs
 //   引擎：       ensureEngine / ensureRenderer / startRenderer / releaseRenderer / remoteSynth / fallbackToSystem
@@ -27,6 +28,7 @@ import { isReadable, nextReadable, prevReadable } from '../common/ChapterUtil';
 import { loadChapterParagraphs } from './BookContent';
 import { protectBook } from './CacheTrim';
 import { saveProgress } from './ShelfRepository';
+import { claimProgress, releaseProgress, ProgressWriter } from './ProgressOwner';
 import { getNumber, putNumber, getString, putString } from '../common/Prefs';
 import {
   KEY_TTS_SPEED,
@@ -263,7 +265,7 @@ export class TtsController {
       this.error = '听书初始化失败';
       this.loading = false;
       this.active = false;
-      this.playing = false;
+      this.setPlaying(false);
       return;
     }
     this.loading = false;
@@ -280,7 +282,7 @@ export class TtsController {
     this.clearTimer();
     this.stopFlushTimer();
     this.stopProgressTimer();
-    this.playing = false;
+    this.setPlaying(false);
     this.active = false;
     if (this.engine !== undefined) {
       try {
@@ -305,6 +307,33 @@ export class TtsController {
       }
       this.session = undefined;
     }
+  }
+
+  /**
+   * The single write path for `playing` — every state flip goes through here so the
+   * position claim cannot drift out of sync with playback.
+   *
+   * Starting to play takes the claim for this book: from then on the audio clock is
+   * the only writer, and the Reader's writes are dropped in `saveProgress`
+   * (`model/ProgressOwner.ets`). Stopping play (pause / natural end / error / stop)
+   * writes the final position **before** releasing, because the 1 s progress tick may
+   * be up to a second behind and `stop()` also runs on app exit.
+   */
+  private setPlaying(value: boolean): void {
+    if (this.playing === value) {
+      return;
+    }
+    this.playing = value;
+    const book: Book | undefined = this.book;
+    if (book === undefined) {
+      return;
+    }
+    if (value) {
+      claimProgress(book.bookId, ProgressWriter.TTS);
+      return;
+    }
+    this.persistProgress();
+    releaseProgress(book.bookId, ProgressWriter.TTS);
   }
 
   // ── Engine / renderer / session ───────────────────────────────
@@ -552,7 +581,7 @@ export class TtsController {
 
   private async loadChapter(index: number, startAtEnd: boolean, autoplay: boolean): Promise<void> {
     if (!isReadable(this.chapters, index)) {
-      this.playing = false;
+      this.setPlaying(false);
       return;
     }
     this.loading = true;
@@ -578,7 +607,7 @@ export class TtsController {
     } catch (err) {
       this.error = '正文加载失败';
       this.loading = false;
-      this.playing = false;
+      this.setPlaying(false);
     }
   }
 
@@ -605,7 +634,7 @@ export class TtsController {
 
   private beginFrom(index: number): void {
     if (this.paragraphs.length === 0) {
-      this.playing = false;
+      this.setPlaying(false);
       return;
     }
     const target: number = Math.min(Math.max(index, 0), this.paragraphs.length - 1);
@@ -620,7 +649,7 @@ export class TtsController {
     this.paragraphIndex = target;
     this.issuedIndex = target;
     this.flushIndex = target;
-    this.playing = true;
+    this.setPlaying(true);
     this.startBackground();
     this.persistProgress();
     hilog.info(DOMAIN, TAG, 'begin para=%{public}d', target);
@@ -665,7 +694,7 @@ export class TtsController {
         engine.speak(this.paragraphs[idx], params);
       } catch (err) {
         this.error = '播报请求失败';
-        this.playing = false;
+        this.setPlaying(false);
         break;
       }
       this.issuedIndex++;
@@ -768,7 +797,7 @@ export class TtsController {
   private onError(errorCode: number, errorMessage: string): void {
     hilog.error(DOMAIN, TAG, 'tts error code=%{public}d msg=%{public}s', errorCode, errorMessage);
     this.error = '播报失败（' + errorCode.toString() + '）';
-    this.playing = false;
+    this.setPlaying(false);
     // Drop in-flight requests and stop the timers so a later resume() can
     // re-issue the failed paragraph instead of waiting on a stuck buffer.
     this.clearInflight();
@@ -967,7 +996,7 @@ export class TtsController {
     }
     const next: number = nextReadable(this.chapters, this.chapterIndex);
     if (next < 0) {
-      this.playing = false;
+      this.setPlaying(false);
       this.clearTimer();
       this.stopFlushTimer();
       this.stopProgressTimer();
@@ -989,7 +1018,7 @@ export class TtsController {
       return;
     }
     hilog.info(DOMAIN, TAG, 'pause');
-    this.playing = false;
+    this.setPlaying(false);
     if (this.engine !== undefined) {
       try {
         this.engine.stop();
@@ -1022,7 +1051,7 @@ export class TtsController {
     }
     hilog.info(DOMAIN, TAG, 'resume');
     this.error = '';
-    this.playing = true;
+    this.setPlaying(true);
     this.playStartWallMs = Date.now() - this.elapsedMs;
     this.startBackground();
     this.ensureSynthesized();
@@ -1296,6 +1325,6 @@ export class TtsController {
       charOffset: 0,
       percent: (this.chapterIndex + 1) / this.chapters.length,
       updatedAt: Date.now()
-    });
+    }, ProgressWriter.TTS);
   }
 }

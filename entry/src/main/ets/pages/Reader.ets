@@ -39,6 +39,7 @@ import {
   setWindowBackgroundColor
 } from '../common/Window';
 import { getProgress, saveProgress } from '../model/ShelfRepository';
+import { ProgressWriter } from '../model/ProgressOwner';
 import { protectBook } from '../model/CacheTrim';
 import { ReaderTheme } from '../common/ReaderTheme';
 import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
@@ -123,7 +124,9 @@ export struct ReaderPage {
       return;
     }
     if (this.tts.chapterIndex !== this.chapterIndex) {
-      this.loadChapter(this.tts.chapterIndex);
+      // 带上段落锚点：不传就会落到章首（paragraphIndex=0），而音频还在本章第 N 段；
+      // 音频下一次推进段落前，高亮/进度都会停在章首（T-CROSS-3）。
+      this.loadChapter(this.tts.chapterIndex, this.tts.paragraphIndex);
       return;
     }
     const page: number = this.flatIndexOf(this.chapterIndex, this.tts.paragraphIndex);
@@ -477,6 +480,12 @@ export struct ReaderPage {
     }
   }
 
+  /**
+   * Persist the visible-page position. Writes as `ProgressWriter.READER`: while the
+   * TTS plays this book the audio clock owns the position and this write is dropped
+   * by `saveProgress` (`model/ProgressOwner.ets`) — the page turn below only moves
+   * the view, never the stored position, while listening.
+   */
   private async persistProgress(): Promise<void> {
     const book: Book | undefined = this.book;
     if (book === undefined || this.chapterIndex < 0 || this.chapterIndex >= this.chapters.length) {
@@ -490,7 +499,7 @@ export struct ReaderPage {
       charOffset: 0,
       percent: (this.chapterIndex + 1) / this.chapters.length,
       updatedAt: Date.now()
-    });
+    }, ProgressWriter.READER);
   }
 
   private prevChapter(): void {

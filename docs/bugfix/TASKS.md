@@ -10,8 +10,9 @@
 > 口径、算法与验证步骤见 [`../research/CACHE-LIMIT-PLAN.md`](../research/CACHE-LIMIT-PLAN.md)。
 > **2026-10-07 第五次同步**：④ T-DATA-4 已**真机六项压测通过**（含未读先删 / 软保护降级 / toc 连带删 / 新鲜窗口 / 会话保护集 / TTL / 封面水位，逐字节与沙箱对账，常量已还原）；
 > 证据见条目内「验证」段与 [`../research/CACHE-LIMIT-PLAN.md`](../research/CACHE-LIMIT-PLAN.md) §8。
-> 当前 open：**5 项 `[ ]`**（T-SHELF-3 / T-READ-1 / T-READ-3 顺延 · T-SHELF-5 / T-TTS-4 未开始）
-> + **1 项 `[~]`**（T-CROSS-3 仅缓解）。
+> **2026-10-07 第六次同步**：⑤ T-CROSS-3（R3）不再是「仅缓解」——改为「**播放中音频独占进度写**」归属仲裁（新增 `model/ProgressOwner.ets`），
+> 并顺带修 `Reader.onTtsProgress` 跨章缺段落锚点；真机四场景（含**修复前对照**）验证通过，证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §11。
+> 当前 open：**5 项 `[ ]`**（T-SHELF-3 / T-READ-1 / T-READ-3 顺延 · T-SHELF-5 / T-TTS-4 未开始）。
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
 ---
@@ -24,11 +25,19 @@
 - [x] **T-CROSS-2（R2）听书后台任务泄漏**：`pause()` 与自然播完（`onParagraphEnd` 末章）时调用 `stopBackground()`；恢复播放再 `startBackground()`。
   - 证据：`entry/src/main/ets/model/TtsController.ets:203`（仅 stop 调）、`:705-721`、`:725-744`、`:429-437`
   - 验证：播完/暂停后 `hidumper` 或任务列表确认 `AUDIO_PLAYBACK` 长时任务已结束。
-- [~] **T-CROSS-3（R3）进度写竞争**：为 `progress` 写入加归属/`updatedAt` 防覆盖（如仅当前活动模块可写，或写入前比较 `updatedAt`）。
-  - 状态（2026-10-07）：**部分缓解**——`saveProgress` 已加 `lastWriteAt` 单调时间戳挡旧写覆盖（`model/ShelfRepository.ets:138-142`）；
-    「按归属模块可写」未做，阅读/听书交替写同一本书的真机复验仍未覆盖（文末 S10 表记 ➖）。
-  - 证据：`Reader.ets:762-764`+`:257-271`、`TtsController.ets:973-987`、`model/ShelfRepository.ets:130-145`
-  - 验证：阅读与听书交替操作同一本书，重启后进度不跳变。
+- [x] **T-CROSS-3（R3）进度写竞争**：为 `progress` 写入加归属/`updatedAt` 防覆盖（如仅当前活动模块可写，或写入前比较 `updatedAt`）。
+  - 状态（2026-10-07）：**已修复**——口径为「**播放中音频独占，阅读页只读**」（用户选定）。新增 `model/ProgressOwner.ets`（纯状态、无 import，避免循环依赖）：
+    `ProgressWriter{NONE,READER,TTS,RESTORE}` + `claimProgress` / `releaseProgress` / `canWriteProgress` / `forgetProgressOwner`；
+    `saveProgress(p, writer)` 的 `writer` 为**必填**参数，归属检查在 `lastWriteAt` 时间戳守卫**之前**（被拒的写不得污染时间戳）；
+    `TtsController.setPlaying` 成为 `playing` 的**唯一**写入口：起播 `claim`，暂停/播完/出错 `persistProgress()` 后 `release`；
+    `removeBooks` 连带 `forgetProgressOwner`；`replaceShelf` 以 `RESTORE` 绕过仲裁且**不**清归属（导入不得劫持进行中的听书会话）。
+  - 归属绑 `playing` 而非 `active`：`active` 含「暂停 / 播完」，那两种状态下 TTS 已不再写，绑它会静默吞掉阅读页写入。
+  - **顺带修复**：`Reader.onTtsProgress` 跨章跟随缺段落锚点（`loadChapter(tts.chapterIndex)` 默认 `paragraphIndex=0`）——音频在本章第 N 段时阅读页会落到章首，修复前还会把章首写进库；现传 `this.tts.paragraphIndex`。
+  - 证据：`model/ProgressOwner.ets`（新增）、`model/ShelfRepository.ets:181-200`、`model/TtsController.ets:322-338`（`setPlaying`）、`pages/Reader.ets:121-131`
+  - 验证（2026-10-07 真机 `33Z0224424136564`，debug 包，含**修复前对照**）：逐场景证据见 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §11——
+    ① 修复前：音频在 ch0 播放时阅读页点「下一章」→ 库被写成 ch1（复现覆盖）；修复后同一操作库仍留音频章，阅读页在音频下一次推进段落时被拉回音频段（含长段落所在页，非第 1 页）；
+    ② 播放中暂停 → 立即落盘（`STATE_PUSH_MS` 临时抬到 60s 仍见写入，证明走的是新 `setPlaying(false)` 路径；常量已还原 1000）；
+    ③ 暂停后阅读页跳章写入恢复（归属已释放）；④ 无 TTS 会话的书照常写进度。
 
 ---
 
@@ -101,7 +110,7 @@
     （否则启停后 key 不变、ForEach 不重建该行、开关显示旧值，见 `596f16a`），补 `index` 以区分同 URL 的两条。
     搜索侧同族问题已修：`SearchResult.ets` 的 `StatusRow.id`（见 `docs/progress.md` §「源状态抽屉内容整改」）
     与搜索前 `SourceRepository.dedupeByUrl()`（见 §「选择来源抽屉整改」）。
-  - 验证：导入两条同 URL 不同名的书源 → 列表显示两行、各自可启停/删除。**真机复验待补**（设备当时 Offline）。
+  - 验证：导入两条同 URL 不同名的书源 → 列表显示两行、各自可启停/删除。**2026-10-07 release 真机复验通过**：同 URL 两条（`bbiquge8` / `笔趣阁8`）分别渲染，列表头计数与备份 JSON 逐条对账一致（[`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §9）（原先记「待补」是设备离线时快照，已更正）。
   - 残留语义（非缺陷）：一键「关闭/删除全部不可用」仍按 `bookSourceUrl` 聚合，同 URL 的两条会一起处理。
   - 证据：`pages/BookSourceManage.ets:65-70,175-198,343-386`、`model/SourceRepository.ets:39-47`
 - [x] **T-SRC-2 检测并发/超时**：确认 `detect`（并发 4）无源级串扰，`busy` 态防重入。
@@ -183,7 +192,7 @@
 |---|---|---|
 | T-CROSS-1 阅读↔听书串扰 | ✅ | `Reader.onTtsProgress` / `isSpeaking` 增加 `tts.isActiveFor(bookId)` 守卫（`Reader.ets:65-77`、`:450-457`） |
 | T-CROSS-2 后台任务泄漏 | ✅ | `pause()` 与自然播完末章分支调用 `stopBackground()`，恢复播放再 `startBackground()`（`TtsController.ets:855`、`:825-838`） |
-| T-CROSS-3 进度写竞争 | ➖ | `saveProgress` 加 `lastWriteAt` 时间戳防旧写覆盖；叠加 T-CROSS-1 消除跨书污染（`ShelfRepository.ets:132-152`） |
+| T-CROSS-3 进度写竞争 | ✅ | 2026-10-07 落地「播放中音频独占」仲裁：新增 `model/ProgressOwner.ets`，`saveProgress(p, writer)` 归属检查**先于**时间戳守卫，`TtsController.setPlaying` 为 `playing` 唯一写入口（claim / release），`replaceShelf` 以 `RESTORE` 绕过、`removeBooks` 连带 `forgetProgressOwner`；顺带修 `Reader.onTtsProgress` 跨章缺段落锚点。真机四场景 + 修复前对照见 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §11（旧 `lastWriteAt` 守卫保留，作为第二道防线） |
 | T-SHELF-1 删除书籍清缓存 | ✅ | 2026-10-07 落地：`removeBooks` + `ChapterCache.deleteBookChapters` / `TocCache.deleteBookToc` / `LocalBook.deleteLocalBookData` + 新增 `model/BookRemoval.ets` 编排；`Index` 二次确认弹窗 + `deleting` 防重入。**真机已验证（D6–D9/D11/D13/D17）**：书架 4→3 且重启仍 3、DB 4/7→3/6 行、`chapters/` 13→6、`tocs/` 4→3、TTS 播放中删除即停播 + FAB 消失；D10/D12 经用户同意跳过 |
 | T-SHELF-4 长按手势被编译成空手势 | ✅ | 2026-10-07 真机发现：helper 返回 gesture + `.gesture()` → 转译为 `Gesture.create; Gesture.pop();` 空手势，真机永不触发 → 改内联 `.parallelGesture(LongPressGesture(...))` + helper 只留业务（`onLongPress`）。计划 §1.6 #42/#43、K16 |
 | T-SHELF-2 数据层懒初始化 | ✅ | `EntryAbility.onCreate` 预调 `initShelf`，搜索直达阅读也能落进度（`EntryAbility.ets:14-19`） |

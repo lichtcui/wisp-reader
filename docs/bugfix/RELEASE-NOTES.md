@@ -25,7 +25,7 @@
 |---|---|---|
 | R1 / T-CROSS-1 | 听 A 书时打开 B 书，B 会被 A 的 TTS 进度驱动跳章、且把 A 的章节号写进 B 进度 | `Reader.onTtsProgress` / `isSpeaking` 增加 `tts.isActiveFor(bookId)` 守卫（`Reader.ets:65-77`、`:450-457`） |
 | R2 / T-CROSS-2 | 暂停 / 整本播完后 `AUDIO_PLAYBACK` 长时任务不结束（耗电、后台任务泄漏） | `pause()` 与末章自然结束分支调用 `stopBackground()`；恢复播放经 `startBackground()` 重启（`TtsController.ets:855`、`:825-838`） |
-| R3 / T-CROSS-3 | 阅读与听书对同一本书的无条件进度写互相覆盖 | `saveProgress` 增加 `lastWriteAt` 时间戳防旧写覆盖（`ShelfRepository.ets:132-152`）；叠加 R1 消除跨书污染 |
+| R3 / T-CROSS-3 | 阅读与听书对同一本书的无条件进度写互相覆盖 | 首轮：`saveProgress` 加 `lastWriteAt` 时间戳防旧写覆盖；**2026-10-07 完整修复**：新增 `model/ProgressOwner.ets` 归属仲裁（播放中音频独占、阅读页只读），详见 §11 |
 | R6 / T-TTS-1 | `stop()` 从不 `shutdown()` TTS 引擎、引擎单例资源不释放 | `stop()` 增 `engine.shutdown()` 并置 `engine=undefined`、复位日志位（`TtsController.ets:226-243`） |
 | R7 | `onError` 后残留 in-flight 缓冲，`resume()` 可能永久卡在 flushIndex | `onError` 清 in-flight、停 flush/progress 定时器、停后台 |
 | R8 | 整章播完后点「播放」无声（队列已排空） | 新增 `queueExhausted()`，`resume()` 检测到播完后从章首重播 |
@@ -314,3 +314,49 @@ release 与 debug 两个包均验证；release 包**不输出 App 自身 `hilog`
 验证后已导回全量备份（13 / 3 / 7），设备状态复原；测试 fixture 已从设备删除。
 
 **附带更正**：「孤儿进度行」不能全局 GC——详情页「立即阅读」不要求已上架也能写进度（`BookDetail.ets:233`），「`progress` 有行而 `books` 无行」有合法来源；已记入 [`../PITFALLS.md`](../PITFALLS.md)。
+
+---
+
+## 11. 增量（2026-10-07）：进度写归属仲裁（T-CROSS-3 / R3 完整修复）
+
+**问题**（首轮只做了缓解）：阅读页与听书都无条件写同一行 `progress`，但位置含义不同 —— 阅读页写「**可见页第一段**」
+（`Reader.persistProgress`），听书写「**音频时钟所在段**」（`TtsController.tickProgress`，每 1s）。后写者胜，于是听书过程中
+阅读页的翻页/跟随路径会把陈旧位置盖到实时位置上；`lastWriteAt` 单调时间戳挡不住它（陈旧写在墙钟上**更新**）。
+
+**口径（用户选定）**：**播放中音频独占，阅读页只读** —— 同一本书听书正在播放时，只有音频时钟可写该书的 `progress`；
+暂停 / 播完 / 未播放时归属释放，阅读页照常写。（阅读页「视图」在播放中仍可自由浏览，只有**落库位置**受管。）
+
+**实现**
+
+- 新增 `model/ProgressOwner.ets`（纯状态、无 import，避免循环依赖）：`ProgressWriter{NONE,READER,TTS,RESTORE}` +
+  `claimProgress` / `releaseProgress`（只在仍持有时释放）/ `canWriteProgress` / `forgetProgressOwner`。
+- `model/ShelfRepository.ets`：`saveProgress(p, writer)` 的 `writer` 为**必填**；`canWriteProgress` 检查放在 `lastWriteAt` 守卫**之前**
+  （被拒的写不得污染时间戳）；`removeBooks` 连带 `forgetProgressOwner`（否则重新加回的书会被残留归属静默吞写）。
+- `model/TtsController.ets`：`setPlaying(value)` 成为 `playing` 的**唯一**写入口（12 处赋值全部改道）—— 起播 `claimProgress(bookId, TTS)`；
+  停播先 `persistProgress()` 再 `releaseProgress(...)`（1s tick 最多滞后 1s，且 `stop()` 也会在退出时跑）。
+  **归属绑 `playing` 而非 `active`**：`active` 含「暂停 / 播完」，那两种状态下 TTS 已不再写，绑 `active` 会静默吞掉阅读页写入。
+- `pages/Reader.ets`：`persistProgress` 以 `READER` 写；**顺带修** `onTtsProgress` 跨章跟随缺段落锚点
+  （`loadChapter(this.tts.chapterIndex)` 默认 `paragraphIndex=0` → 音频在章内第 N 段时阅读页落到章首，且修复前会把章首写进库），
+  现传 `this.tts.paragraphIndex`。
+- `replaceShelf`（备份导入 / 全量覆盖）以 `ProgressWriter.RESTORE` 绕过仲裁，且**不**清归属映射：导入不得劫持正在进行的听书会话；
+  若导入的正是正在播的书，音频下一次 tick 会覆盖回实时位置（预期行为）。
+- 无新增 JSON 字段，未改 `obfuscation-rules.txt`（`make check` 通过：145 个 keep 名全覆盖）。
+
+**真机验证（2026-10-07，设备 `33Z0224424136564`，`make run` debug 包；含修复前对照）**
+
+方法：从沙箱拉 `shelf.db`（`/data/app/el2/100/database/com.lichtcui.sourcereader/entry/rdb/`，含 `-wal`）后用本地 `sqlite3` 查 `progress` 行；
+UI 用 `uitest dumpLayout` + `uitest uiInput click` 驱动。为让「阅读页写入」与「1s tick 写入」可区分，验证期间把 `STATE_PUSH_MS`
+临时抬到 `60000`（**验证后已还原 1000**），并在归属拒绝分支临时加了一条 `hilog`（**已删除**）；最终包在常量还原后复验。
+
+| 场景 | 操作 | 修复前（对照：仲裁临时关闭） | 修复后 | 结论 |
+|---|---|---|---|---|
+| ① 播放中阅读页跳章 | 音频播 ch0（剑来·第一章），阅读页点「下一章」 | 库被写成 ch1 / `updatedAt` 前进（**复现覆盖缺陷**） | 库仍为音频位置（仅 1s tick 在写）+ 拒绝日志 `writer=1 owner=2` | 归属生效 |
+| ② 音频推进时阅读页锚定 | 音频升到 ch0 para10–12（长段落，位于第 3 页） | — | 阅读页自动跟回音频章，可见页 = 音频所在段所在页（**非第 1 页**），库 = 音频段 | 锚点修复生效 |
+| ③ 暂停即释放 | 注入媒体键 `keyCode 10`（AVSession `pause`） | — | 暂停瞬间 `updatedAt` 前进（抬到 60s 的 tick 解释不了）+ 日志 `SourceReaderTts: pause`；随后阅读页点「下一章」写入**被接受**（ch2），无拒绝日志 | 释放路径生效 |
+| ④ 无 TTS 会话的书 | 天堂向左（从未听书）点「下一章」 | — | 库 ch26 → ch27，无拒绝日志 | 无回归 |
+
+**构建/静态**：`make run`（debug）与 `make hap-release`（release + 属性混淆）均 `BUILD SUCCESSFUL`；`make check` 通过；
+最终包（常量还原、临时日志删除）复验：播放中 tick 仍每秒落盘 + 播放中阅读页跳章库不动 + 音频推进后阅读页跟回音频章。
+
+**未覆盖 / 残留**：`removeBooks` 的 `forgetProgressOwner` 只在代码层复核（真机删书链路已在 T-SHELF-1 验过，未单测「删正在播的书后重加」）；
+归属是**进程内**状态，App 重启后自然清空（重启时也没有活跃播放会话，符合预期）。

@@ -91,7 +91,7 @@ entry/
     engine/        IBookEngine（端口）+ BookEngineNapi + types
     model/         SourceRepository / ShelfRepository / CacheRepository / SourceConfidence /
                    BookContent / ChapterCache / TocCache / LocalBook / BookRemoval /
-                   ShelfEditState / TtsController / RemoteTtsClient
+                   ShelfEditState / ProgressOwner / TtsController / RemoteTtsClient
     common/        Const（含 ROUTE_*）/ Format / Prefs / Theme / ReaderTheme / Window /
                    ChapterUtil / ChapterDataSource / SourceListDataSource
     components/    EmptyView / ListCells / BookCover
@@ -114,6 +114,7 @@ rust/legado-core/    薄 NAPI 层（cdylib），依赖 legado-engine
 | 听书 / 播放 / 锁屏卡片 / 后台 / 音色 | `model/TtsController.ets`（顶部有文件索引）、`pages/Listening.ets`、`pages/ListeningSettings.ets`、`model/RemoteTtsClient.ets`、`model/BookContent.ets`、`entryability/EntryAbility.ets`（退出释放）、`src/main/module.json5`（`backgroundModes`） |
 | 搜索结果页 / 来源抽屉 / 书源置信度 | `pages/SearchResult.ets`（顶部有文件索引）、`model/SourceConfidence.ets`、`common/SourceListDataSource.ets` |
 | 书架 / 编辑模式（多选删除）/ 进度 | `pages/Shelf.ets`、`model/ShelfRepository.ets`、`model/ShelfEditState.ets`、`model/BookRemoval.ets`、`components/BookCover.ets` |
+| 进度写归属（阅读 ↔ 听书互不覆盖） | `model/ProgressOwner.ets`（纯状态仲裁：`claim/release/canWrite/forget`）、`model/ShelfRepository.ets`（`saveProgress(p, writer)` 唯一写口）、`model/TtsController.ets`（`setPlaying` 起播 claim / 停播 release） |
 | 路由 / 页面注册 / 顶栏底栏 | `pages/Index.ets`、`common/Const.ets`（`ROUTE_*`） |
 | 书源导入 / 能力门禁（非文字/禁用/登录/JS） | `rust/legado-engine/src/gate.rs`、`pages/BookSourceManage.ets`、`model/SourceRepository.ets`、`src/main/resources/rawfile/bundled-sources.json` |
 | 规则 DSL / HTML·JSON 提取 | `rust/legado-engine/src/rule_dsl/*`、`rust/legado-engine/examples/bundled_gen.rs` |

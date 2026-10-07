@@ -15,7 +15,7 @@
 - M5 结果（2026-09-25，真机验证） — L37
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
 - 未决 / 风险 — L111
-- 交接备忘 — L140
+- 交接备忘 — L145
 <!-- TOC:END -->
 
 ---
@@ -120,6 +120,11 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   **顺带更正**：`f898a23`（2026-10-02）已实现规则调试器 UI 与备份/恢复，M6 因此从「未开始」改为「大部分已落地」，
   并新登记 T-DATA-7（导入并非全量覆盖）+ 三条坑进 [`PITFALLS.md`](./PITFALLS.md)。
 - **T-DATA-7 备份导入改为真「全量覆盖」（2026-10-07）**：`replaceShelf` 先清 `books` / `progress` 再写 + `lastWriteAt.clear()`；真机实测 3 本 / 7 条 → 导入 1 书 1 进度的 fixture → 1 本 / 1 条，重启不复现。证据 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-DATA-7。
+- **T-CROSS-3 进度写竞争完整修复（2026-10-07）**：口径从「时间戳缓解」改为「**播放中音频独占，阅读页只读**」——
+  新增 `model/ProgressOwner.ets` 归属仲裁（`saveProgress(p, writer)` 检查先于 `lastWriteAt` 守卫；`TtsController.setPlaying` 为 `playing` 唯一写入口，
+  起播 claim / 停播先落盘再 release），并顺带修 `Reader.onTtsProgress` 跨章跟随缺段落锚点（原来会落到章首并写库）。
+  真机四场景 + **修复前对照**（含反向取证：修复前同一操作库确实被覆盖）→ [`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §11、
+  [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-CROSS-3。
 - **书架编辑模式（多选删除）**：已实施并真机验证（2026-10-07，D1–D21）—— 见上文同名节；
   计划 / 逐步代码 / DoD 逐条证据见 [`archive/SHELF-EDIT-PLAN.md`](./archive/SHELF-EDIT-PLAN.md)（§7 / §8 / §10 / §12.3），
   五轮审计轨迹原文见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §附。
@@ -135,7 +140,7 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 - 搜索排序已改为 Legado 分桶 + 同名同作者跨源合并 + 源 `weight`（见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §搜索结果页整改）；
   另加**书源置信度**（失败扣分/成功回分/持久化）决定**搜索调度顺序**（同文件 §书源置信度 + 搜索滑动窗口调度）。
 - **同 URL 重复书源**（用户库内确有两例：`bbiquge8` / `笔趣阁8` → `http://m.bbiquge8.net`）是「URL 当主键」
-  这一类缺陷的共同诱因。搜索侧已修两处：源状态抽屉 key 改序号（[`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §源状态抽屉内容整改）+ 搜索前 `dedupeByUrl`（同文件 §选择来源抽屉整改）；书源管理列表 key 也已改为 `url#index#enabled`（见 [`bugfix/TASKS.md`](./bugfix/TASKS.md) T-SRC-1，真机复验待补）。
+  这一类缺陷的共同诱因。搜索侧已修两处：源状态抽屉 key 改序号（[`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §源状态抽屉内容整改）+ 搜索前 `dedupeByUrl`（同文件 §选择来源抽屉整改）；书源管理列表 key 也已改为 `url#index#enabled`（见 [`bugfix/TASKS.md`](./bugfix/TASKS.md) T-SRC-1，已 release 真机复验通过）。
 
 ## 交接备忘
 
