@@ -4,6 +4,7 @@
 # 用法：
 #   scripts/docs-toc.sh                  # 重建下面 FILES 里列出的全部文档（= make docs-toc）
 #   scripts/docs-toc.sh docs/plan.md     # 只重建指定文档
+#   scripts/docs-toc.sh --check          # 只检查目录是否过期（不改任何文件，过期则退出码 1）
 #
 # 约定：
 #   - 目录内容必须夹在 `<!-- TOC:BEGIN -->` 与 `<!-- TOC:END -->` 两行之间（这两行本身不动）。
@@ -16,6 +17,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+CHECK=0
+if [ "${1:-}" = "--check" ]; then
+  CHECK=1
+  shift
+fi
+BAD=0
 
 # 需要重建目录的文档。ARCHIVE-S3-S8.md 不在内（用手写固定索引，见下）。
 FILES=(
@@ -59,7 +67,23 @@ for f in "${FILES[@]}"; do
     { print }
   ' "$f" > "$f.tmp"
 
-  mv "$f.tmp" "$f"
-  rm -f "$toc"
-  echo "✓ ${f}（${n} 条）"
+  if [ "$CHECK" = "1" ]; then
+    if diff -u "$f" "$f.tmp" > /tmp/docs-toc-diff.txt 2>&1; then
+      echo "✓ ${f}（目录最新）"
+    else
+      echo "✗ ${f} 目录已过期（跑 make docs-toc 重建）：" >&2
+      sed -n '3,14p' /tmp/docs-toc-diff.txt >&2
+      BAD=1
+    fi
+    rm -f "$f.tmp"
+  else
+    mv "$f.tmp" "$f"
+    rm -f "$toc"
+    echo "✓ ${f}（${n} 条）"
+  fi
 done
+
+if [ "$CHECK" = "1" ] && [ "$BAD" = "0" ]; then
+  echo "全部目录都是最新的"
+fi
+exit "$BAD"

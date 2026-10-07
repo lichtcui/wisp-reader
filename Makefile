@@ -27,7 +27,7 @@ export OHOS_NDK_HOME   := $(NDK_HOME)
 export PATH := $(DEVECO)/Contents/tools/node/bin:$(DEVECO)/Contents/tools/ohpm/bin:$(PATH)
 
 .DEFAULT_GOAL := help
-.PHONY: help rust test hap hap-release install restart run log devices docs-toc
+.PHONY: help rust test probe hap hap-release install restart run run-release log devices doctor check docs-toc
 
 help: ## 显示所有可用命令
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -43,6 +43,9 @@ rust: ## 交叉编译 .so 并拷进 entry/libs（首次约 10–15 分钟）
 
 test: ## 主机上跑引擎单测（cargo test，不碰真机）
 	cd rust/legado-engine && cargo test
+
+probe: ## 主机上直接跑引擎，不上设备（例：make probe ARGS='源.json search 剑来'）
+	cd rust/legado-engine && cargo run --release --example probe -- $(ARGS)
 
 ## ── HAP ─────────────────────────────────────────────────────────────────────
 
@@ -67,9 +70,22 @@ restart: ## 只 force-stop + 启动（不重装）；改 ArkTS 后必须走这�
 run: hap install restart ## 编译 → 安装 → force-stop → 启动（真机验证闭环）
 	@echo "已启动。抓日志： make log"
 
-log: ## 清空日志后实时过滤本应用日志（Ctrl-C 退出）
+run-release: hap-release install restart ## 同上但用 release 包（验证混淆 / 备份等只在 release 现形的问题）
+	@echo "已启动（release）。抓日志： make log"
+
+log: ## 清日志后实时过滤本应用日志（Ctrl-C 退出；可再用 Q=关键词 筛，如 make log Q=Backup）
 	$(HDC) shell hilog -r
-	$(HDC) shell hilog -x -T $(LOG_TAG)
+	$(HDC) shell hilog -x -T $(LOG_TAG) $(if $(Q),| grep --line-buffered "$(Q)")
+
+## ── 自检 ────────────────────────────────────────────────────────────────────
+
+doctor: ## 自检：.so / index.d.ts / HAP 是否落后于源码 + 设备是否连着
+	@scripts/doctor.sh
+
+check: ## 自检文档与契约（行号目录是否过期 / md 失效链接 / JSON 字段是否都进 keep 列表）
+	@scripts/docs-toc.sh --check
+	@scripts/check-docs-links.sh
+	@scripts/check-keep-props.sh
 
 ## ── 文档 ────────────────────────────────────────────────────────────────────
 
