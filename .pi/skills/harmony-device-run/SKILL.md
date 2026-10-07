@@ -56,7 +56,8 @@ $HDC shell "uitest uiInput inputText <x> <y> <text>"
 
 - 通用 harmony skill（API/离线文档查询 `harmony-next`、构建诊断 `harmonyos-build-doctor`、
   项目基线审计 `harmonyos-project-audit`、发布签名与门禁 `harmonyos-release-*`）：
-  真源在 `~/Documents/skills.harmony/`，由本仓库 `.pi/settings.json` 按项目声明。
+  真源在 `~/Documents/skills.harmony/`；**默认只声明 `harmonyos-build-doctor`**（省 token），
+  其余三个用到时临时加进本仓库 `.pi/settings.json` 的 `skills` 数组（详见 `docs/development.md` § Skill 来源）。
   若未加载，先查该文件与「项目信任」（详见 `docs/development.md` § Skill 来源）。
 - 症状对不上先查：[`docs/PITFALLS.md`](../../../docs/PITFALLS.md)
 - 环境 / 构建 / 签名细节：[`docs/development.md`](../../../docs/development.md)

@@ -1,9 +1,5 @@
 {
   "skills": [
-    "~/Documents/skills.harmony/harmony-next",
-    "~/Documents/skills.harmony/harmonyos-build-doctor",
-    "~/Documents/skills.harmony/harmonyos-project-audit",
-    "~/Documents/skills.harmony/harmonyos-release-check",
-    "~/Documents/skills.harmony/harmonyos-release-signing"
+    "~/Documents/skills.harmony/harmonyos-build-doctor"
   ]
 }

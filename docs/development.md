@@ -76,10 +76,18 @@ $HDC shell hilog -x | grep SourceReaderPoC
 | 类型 | 位置 | 加载方式 |
 |---|---|---|
 | **项目专属**（`harmony-device-run`：真机验证闭环） | 仓库内 `.pi/skills/harmony-device-run/` | `.pi/skills/` 自动发现；**随仓库 git 走**（`.gitignore` 里 `!/.pi/skills/**` 例外） |
-| **通用 harmony**（`harmony-next`、`harmonyos-build-doctor`、`harmonyos-project-audit`、`harmonyos-release-*`） | `~/Documents/skills.harmony/`（中央库，唯一真源） | 本仓库 `.pi/settings.json` 的 `skills` 数组按项目声明 |
+| **通用 harmony**（`~/Documents/skills.harmony/` 里的 `harmonyos-build-doctor`、`harmony-next`、`harmonyos-project-audit`、`harmonyos-release-*`） | `~/Documents/skills.harmony/`（中央库，唯一真源） | 本仓库 `.pi/settings.json` 的 `skills` 数组按项目声明 |
 
 为什么不全放全局 `~/.pi/agent/skills/`：那是**全局**目录，非 harmony 项目也会加载，
 每个 skill 白付 name+description（约 50–100 tokens/会话）。
+
+**只常驻 `harmonyos-build-doctor`**（高频：构建报错必查）。其余四个（`harmony-next` API/文档查询、
+`harmonyos-project-audit`、`harmonyos-release-check`、`harmonyos-release-signing`）**用到时再临时加进
+`.pi/settings.json` 的 `skills` 数组**，用完可以删——skill 只广告 name+description 也要每轮付 token，
+而本项目实际把 6 个 skill 的 description（3.5KB/轮）当成常数成本。
+
+常用场景的完整数组（整段拷回 `skills` 即可）：构建/发布只加 `harmonyos-build-doctor`（已是默认）、
+`harmonyos-release-signing`；查 ArkTS/ArkUI/NDK 接口加 `harmony-next`；发布门禁加 `harmonyos-release-check`。
 
 **skill 没加载时的排查顺序**：
 
