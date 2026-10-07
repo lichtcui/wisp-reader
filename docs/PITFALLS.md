@@ -23,6 +23,8 @@
 | Rust 侧规则改动后不确定有没有回归 | 先在主机跑 `make test`（`cargo test`，54 项含 mock 端到端），再上真机 | `docs/engine.md` |
 | `hilog -x` 刷屏找不到自己的日志 | 用 `hdc shell hilog -x -T <tag>` + 行数上限；tag 约定 `SourceReaderPoC`（先 `hilog -r` 清） | `docs/development.md` |
 | **release 包里死活看不到应用自己的 hilog**（`hilog -T SourceReaderTts` 恒为空） | 第三方应用在 release 包下日志被系统过滤（domain `0x0000` 不落 buffer）——**不是没跑/没生效**。看日志用 `make run`（debug）；release 冒烟改用系统侧证据：`hidumper -s AVSessionService -a '-show_session_info'`、`AudioLogUtils` 音频帧日志、`uitest dumpLayout` | `docs/bugfix/RELEASE-NOTES.md` §9 |
+| 导入备份后书架/进度计数**只增不减**，与「全量覆盖」文案不符 | 导入必须**整体替换**：`books` / `progress` 先清表再写（`replaceShelf`），且必须 `lastWriteAt.clear()`——那个单调守卫是**会话级**的，不清会静默丢弃备份里 `updatedAt` 更旧的进度（表现为「导入了但进度没变」） | `docs/bugfix/TASKS.md` §T-DATA-7 |
+| 想给 `progress` 表做「孤儿行」GC（`book_id` 不在 `books` 里） | **不要做**：详情页「立即阅读」不要求已上架也能写进度（`BookDetail.ets:233`），孤儿行有合法来源，全局 GC 会删掉用户真实阅读位置 | `docs/bugfix/TASKS.md` §T-DATA-7 |
 | 无 GUI 下点不动 UI：`TextInput` 提交不了 / 长按不进编辑态 | ① `uitest uiInput inputText <x> <y> <text>` 可注入文本，但 `onSubmit` 不会自己触发 → 再发 `uitest uiInput keyEvent 2054`（Enter）；② 长按命令是 **`longClick`**（不是 `longPress`）；③ 文件选择器（保存/打开）用 `uitest uiInput click` 点右上/右下确认钮 + 目录行逐层进入 | skill `harmony-device-run` §4 |
 | 编辑器/构建报 ArkTS 严格模式错误 | 不用 `any`；`getHostContext()` 返回 `Context \| undefined` 需判空 | `docs/development.md` |
 | 页面跳转用了 `@ohos.router` 报废弃 | 统一 `Navigation` + `NavPathStack`，路由常量见 `common/Const.ets` 的 `ROUTE_*` | `docs/architecture.md` |

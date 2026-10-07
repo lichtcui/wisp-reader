@@ -142,7 +142,7 @@
 - `T-SHELF-3` 进度三态在 `percent` 极小值时的反推边界，待真机复验。
 - `T-READ-1` `Reader.sanitize` 与 `BookContent.sanitizeText` 合并（两份当前**逐字节一致**，纯重构）。
 - `T-READ-3` 章节预取 in-flight 去重（LRU 已降低重复写盘概率）。
-- `T-DATA-4` 缓存 LRU/上限策略（未开始）；`T-DATA-3` 备份/恢复已于 2026-10-07 release 真机验证通过（§9），另新立 `T-DATA-7`（导入非「全量覆盖」）。
+- `T-DATA-4` 缓存 LRU/上限策略（未开始，**M6 最后一项**）；`T-DATA-3` 备份/恢复已于 2026-10-07 release 真机验证通过（§9），其「全量覆盖」语义缺陷 `T-DATA-7` 已于同日修复并真机复验（§10）。
 - `T-VER-3` 真机闭环已完成（见 §5）；跨书串扰与后台任务结束的直接观测待条件复验。
 - 规则调试器与备份/恢复**并非未开始**：随 `f898a23`（2026-10-02）落地（`pages/RuleDebugger.ets`、`pages/BackupManage.ets`），本轮记错。
 
@@ -287,3 +287,30 @@ release 与 debug 两个包均验证；release 包**不输出 App 自身 `hilog`
 3. 启动即出现的 `ImageSource` / `62980118` 封面噪音在 release 同样复现（T-SHELF-5，仍未定位，暂按噪音对待）。
 
 **未跑**：规则调试器页（不在冒烟范围；页面确实已存在，见 `pages/RuleDebugger.ets`）。
+
+---
+
+## 10. 增量（2026-10-07）：备份导入改为真「全量覆盖」（T-DATA-7）
+
+**问题**：页面说明与确认弹窗都承诺「覆盖当前书源、书架与阅读进度」，但 `doImport` 只 `saveSources` + `upsertBook` / `saveProgress`（只增不减）——删书残留的孤儿进度行在导入后继续存活，落库数据与备份文件不一致。
+
+**处理**（用户选「真覆盖」口径）
+
+- `model/ShelfRepository.ets` 新增 `replaceShelf(books, progress)`：`DELETE FROM books` / `DELETE FROM progress` → `lastWriteAt.clear()` → 复用既有 `upsertBook` / `saveProgress` 写入。
+  `lastWriteAt.clear()` 不是装饰：该单调守卫是**会话级**的，不清就会让备份里 `updatedAt` 更旧的进度被静默丢掉。
+- `pages/BackupManage.ets`：`doImport` 改为 `saveSources` + `replaceShelf`（全部格式校验仍在清表之前）；确认弹窗与页面说明补明「备份中不存在的书源、书籍与进度不会被保留 / 将被删除」；恢复后 toast 显示实际计数（书源 / 书架 / 进度）。
+- 书源无需改动：`saveSources` 走 `putString` 整体替换，本来就是覆盖语义。
+- 不新增混淆 keep 字段（无新增 JSON 字段，`make check` 不受影响）。
+
+**验证（debug 包，`make run`，设备 `33Z0224424136564`）**
+
+| 步骤 | 结果 |
+|---|---|
+| 当前 13 源 / 3 本 / 7 条 → 导入「1 书 1 进度」fixture | ✅ 1 本 / 1 条（修复前会保持 3 本 / 7 条） |
+| `aa force-stop` + 重启 | ✅ 仍 1 本 / 1 条（确认落盘，非内存态） |
+| 同会话先导入 `updatedAt = now+1 天`（书架 6章/300章）再导入旧时间戳 fixture（1章） | ✅ 书架回到 1章/50章（证明 `lastWriteAt.clear()` 生效） |
+| JS 错误 / 崩溃 | ✅ 0 条 |
+
+验证后已导回全量备份（13 / 3 / 7），设备状态复原；测试 fixture 已从设备删除。
+
+**附带更正**：「孤儿进度行」不能全局 GC——详情页「立即阅读」不要求已上架也能写进度（`BookDetail.ets:233`），「`progress` 有行而 `books` 无行」有合法来源；已记入 [`../PITFALLS.md`](../PITFALLS.md)。

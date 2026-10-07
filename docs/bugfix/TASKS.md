@@ -5,7 +5,8 @@
 > **2026-10-07 两次同步**：① 与文末「S10 回归验收状态」表对齐（21 项已修但仍标 `[ ]`，一并更正）；
 > ② release 包首次真机冒烟（T-VER-6）+ 逐项核代码：T-SRC-1 真机复验通过、T-DATA-3 备份往返验证通过（原记「M6 未开始」有误）。
 > 行的 `证据` 行号多为审计时快照，可能已漂移。
-> 当前 open：**7 项 `[ ]`**（T-SHELF-3 / T-READ-1 / T-READ-3 顺延 · T-SHELF-5 / T-TTS-4 未开始 · T-DATA-4 / T-DATA-7 未开始）
+> **2026-10-07 第三次同步**：③ T-DATA-7（导入非「全量覆盖」）已修复并真机复验 —— 导入改为真覆盖（`replaceShelf`）。
+> 当前 open：**6 项 `[ ]`**（T-SHELF-3 / T-READ-1 / T-READ-3 顺延 · T-SHELF-5 / T-TTS-4 未开始 · T-DATA-4 未开始）
 > + **1 项 `[~]`**（T-CROSS-3 仅缓解）。
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
@@ -123,11 +124,14 @@
   - **处置（2026-10-07）**：`clearCache()` 增 `removeDir(tocDir(ctx))`（`CacheRepository.ets`）。真机见 §10 D15（设备离线，待补）。
   - 证据：`model/CacheRepository.ets:128-132`、`model/TocCache.ets:37-45`
   - 方案：`clearCache()` 增 `removeDir(tocDir(ctx))` → 同上 §8 S4
-- [ ] **T-DATA-7 导入不是「全量覆盖」**：页面文案与确认弹窗都写「将从备份文件覆盖当前书源、书架与阅读进度」，但 `doImport` 只做 `saveSources` + `upsertBook` / `saveProgress`，**不删除备份中不存在的行**。
+- [x] **T-DATA-7 导入不是「全量覆盖」**：页面文案与确认弹窗都写「将从备份文件覆盖当前书源、书架与阅读进度」，但 `doImport` 只做 `saveSources` + `upsertBook` / `saveProgress`，**不删除备份中不存在的行**。
   - 证据（2026-10-07 release 真机）：导入前书架 0 本 / 进度 4 条（删书后残留的孤儿行），导入「3 本 / 7 条」的备份后 = 3 本 / **7 条**（4 + 3）——孤儿行未清，与文案不符。
-  - 证据：`pages/BackupManage.ets`（`doImport` 的 upsert 循环、`confirmImport` 文案）
-  - 验证：造 2 条孤儿进度 → 导入只含 1 条的备份 → 期望「1 条」而实际「2 条」。
-  - 顺带发现（同一现象另一面）：`removeBooks` 会清掉被删书的进度行，但**历史遗留的孤儿进度行不会被 GC**（本次导入前实测 4 条）。
+  - **处置（2026-10-07，用户选「真覆盖」口径）**：`ShelfRepository` 新增 `replaceShelf(books, progress)`——`DELETE FROM books` / `DELETE FROM progress` 后再复用既有 `upsertBook` / `saveProgress` 写入；`doImport` 改为 `saveSources` + `replaceShelf`，**全部格式校验仍在清表之前**。
+    其中 **`lastWriteAt.clear()` 是必需的**：`saveProgress` 的单调守卫是**会话级**的，不清会让备份里 `updatedAt` 更旧的进度被静默丢弃。
+    书源无需改动（`saveSources` 走 `putString` 整体替换，本来就是覆盖语义）；文案保留「覆盖」并补明「备份中不存在的书源、书籍与进度将被删除」，恢复后 toast 带实际计数。
+  - **真机证据（2026-10-07，debug 包，`make run`，设备 `33Z0224424136564`）**：13 源 / 3 本 / 7 条 → 导入「1 书 1 进度」fixture → **1 本 / 1 条**（修复前会保持 3 / 7）；`aa force-stop` 重启后仍 1 本 / 1 条（确认落盘）；同会话内先导入 `updatedAt = now+1 天`（书架 6章/300章）再导入旧时间戳 fixture → 书架回到 **1章/50章**（证明 `lastWriteAt.clear()` 生效，否则该写会被拒绝）；0 条 JS 错误。验证后已导回全量备份，设备状态复原，fixture 已删。
+  - **更正原「顺带发现」**：孤儿进度行**不能**做全局 GC。`BookDetail` 的「立即阅读」不要求已上架（`pages/BookDetail.ets:233` 常驻可点），`Reader.persistProgress()` 会为**未上架**的书写进度 → 「`progress` 有行而 `books` 无行」有合法来源；`DELETE FROM progress WHERE book_id NOT IN books` 会删掉用户真实阅读位置。改真覆盖后 DB 与备份已自洽，无需 GC。
+  - 证据：`model/ShelfRepository.ets`（`replaceShelf`）、`pages/BackupManage.ets`（`doImport` / `confirmImport` 文案）
 
 ---
 
@@ -208,7 +212,7 @@
 | 异常面 | — | ✅ 全量 `hilog -x` 扫描：0 条 JS/ArkTS 错误、0 崩溃；应用级 error 仅 `AceStateMgmt: No views to update` / `PARAM_WATCHER: Read result failed`（框架噪音） |
 
 **未覆盖 / 新发现**
-1. 备份「全量覆盖」语义与文案不符 → 新立 **T-DATA-7**。
+1. 备份「全量覆盖」语义与文案不符 → 新立 **T-DATA-7**（已于同日修复并真机复验，见该条目）。
 2. release 包下应用自己的 `hilog`（domain 0x0000）被系统过滤，`hilog -T SourceReaderTts` 恒为空 → release 冒烟只能靠系统侧日志 + `dumpLayout`（已记入 [`../PITFALLS.md`](../PITFALLS.md)）。
 3. 启动即出现的 `ImageSource` / `62980118` 噪音在 release 同样复现（T-SHELF-5，仍未定位）。
 4. 规则调试器页本轮未跑（不在冒烟范围；该页确实已存在，见 `pages/RuleDebugger.ets`）。

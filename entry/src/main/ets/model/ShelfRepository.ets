@@ -102,6 +102,37 @@ export async function removeBooks(bookIds: string[]): Promise<void> {
   }
 }
 
+/**
+ * Replace the whole shelf (every `books` and `progress` row) with the given rows.
+ *
+ * Used by 备份恢复, whose UI promises 「全量覆盖」: `upsertBook` / `saveProgress`
+ * alone only add/update, so rows absent from the backup (orphan progress left
+ * behind by older deletes) would survive and the data would not match the file.
+ *
+ * `lastWriteAt.clear()` is required, not cosmetic: the monotonic guard in
+ * `saveProgress()` rejects a write older than the last one *this session*, and
+ * the map still holds pre-import timestamps — without the clear, an imported
+ * progress row with an older `updatedAt` is silently dropped.
+ *
+ * Callers must validate the payload **before** calling this: the delete is
+ * already applied when the first insert runs.
+ */
+export async function replaceShelf(books: Book[], progress: ReadProgress[]): Promise<void> {
+  const s: relationalStore.RdbStore | undefined = db();
+  if (s === undefined) {
+    return;
+  }
+  await s.executeSql('DELETE FROM books');
+  await s.executeSql('DELETE FROM progress');
+  lastWriteAt.clear();
+  for (const b of books) {
+    await upsertBook(b);
+  }
+  for (const p of progress) {
+    await saveProgress(p);
+  }
+}
+
 export async function getBooks(): Promise<Book[]> {
   const s: relationalStore.RdbStore | undefined = db();
   if (s === undefined) {

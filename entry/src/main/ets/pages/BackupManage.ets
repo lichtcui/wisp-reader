@@ -3,7 +3,7 @@ import { fileIo, picker } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { Book, BookSource, ReadProgress } from '../engine/types';
 import { loadSources, saveSources } from '../model/SourceRepository';
-import { getAllProgress, getBooks, initShelf, saveProgress, upsertBook } from '../model/ShelfRepository';
+import { getAllProgress, getBooks, initShelf, replaceShelf } from '../model/ShelfRepository';
 import { GroupTitle } from '../components/ListCells';
 
 const BACKUP_SCHEMA_VERSION: number = 1;
@@ -143,15 +143,11 @@ export struct BackupManagePage {
         return;
       }
       await initShelf(ctx);
+      // 全量覆盖：书源整体替换（saveSources 写的就是整段 JSON），书架/进度先清表再写。
       saveSources(ctx, sources);
-      for (const b of books) {
-        await upsertBook(b);
-      }
-      for (const p of progress) {
-        await saveProgress(p);
-      }
+      await replaceShelf(books, progress);
       await this.reload();
-      this.toast('已恢复备份');
+      this.toast('已恢复：书源 ' + this.sourceCount + ' / 书架 ' + this.bookCount + ' / 进度 ' + this.progressCount);
     } catch (err) {
       this.toast('导入失败：文件无效或格式错误');
     }
@@ -160,7 +156,8 @@ export struct BackupManagePage {
   private confirmImport(): void {
     this.getUIContext().showAlertDialog({
       title: '确认恢复备份',
-      message: '将从备份文件覆盖当前书源、书架与阅读进度，现有数据可能被替换。是否继续？',
+      message: '将用备份文件全量覆盖当前书源、书架与阅读进度：现有数据会被清除，' +
+        '备份中不存在的书源、书籍与进度不会被保留。是否继续？',
       autoCancel: true,
       primaryButton: {
         value: '取消',
@@ -251,7 +248,7 @@ export struct BackupManagePage {
           .width('100%')
           .padding({ left: 16, right: 16, top: 6 })
 
-          Text('备份为单一 JSON 文件，包含书源、书架书籍与阅读进度；导入会全量覆盖现有数据。')
+          Text('备份为单一 JSON 文件，包含书源、书架书籍与阅读进度；导入会全量覆盖现有数据（备份中不存在的书源、书籍与进度将被删除）。')
             .fontSize(12)
             .fontColor($r('app.color.text_4'))
             .lineHeight(18)

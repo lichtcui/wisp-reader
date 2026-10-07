@@ -15,7 +15,7 @@
 - M5 结果（2026-09-25，真机验证） — L37
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
 - 未决 / 风险 — L111
-- 交接备忘 — L137
+- 交接备忘 — L138
 <!-- TOC:END -->
 
 ---
@@ -30,7 +30,7 @@
 | M3 | 搜索聚合 + 详情 + 加入书架 + 持久化 | ✅ 已完成（真机验证：加入书架重启仍在） |
 | M4 | 阅读页（横向分页翻页）+ 目录（含分页）+ 进度 + 阅读设置 | ✅ 已完成（真机验证：目录/跳转/字号/进度重启恢复；修 bindSheet + 正文清洗；**收尾项已补**）|
 | M5 | 听书 + 系统 TTS + 后台播放 + AVSession | ✅ 已完成（真机验证：PCM→AudioRenderer→AVSession 成为 top session，锁屏控件/媒体键可控，切后台不断，定时关闭，段落高亮/进度同步）|
-| M6 | 规则调试器 + 缓存清理 + 备份恢复 | 🟡 大部分已落地：规则调试器 UI（`pages/RuleDebugger.ets`）、备份/恢复（`pages/BackupManage.ets`）、目录缓存统计/清理均已实现，且 2026-10-07 已过 release 冒烟；仅剩缓存上限策略与导入「覆盖」语义 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) T-DATA-4 / T-DATA-7 |
+| M6 | 规则调试器 + 缓存清理 + 备份恢复 | 🟡 仅剩倒数一项：规则调试器 UI（`pages/RuleDebugger.ets`）、备份/恢复（`pages/BackupManage.ets`，含 2026-10-07 修的真「全量覆盖」）、目录缓存统计/清理均已实现并通过真机验证；仅剩缓存上限策略 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) T-DATA-4 |
 | v2 | QuickJS/Boa JS 引擎、换源、在线 TTS、真分页 | ⏳ |
 
 
@@ -119,6 +119,7 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   逐项证据 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §「release 冒烟结果（T-VER-6）」、[`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §9；
   **顺带更正**：`f898a23`（2026-10-02）已实现规则调试器 UI 与备份/恢复，M6 因此从「未开始」改为「大部分已落地」，
   并新登记 T-DATA-7（导入并非全量覆盖）+ 三条坑进 [`PITFALLS.md`](./PITFALLS.md)。
+- **T-DATA-7 备份导入改为真「全量覆盖」（2026-10-07）**：`replaceShelf` 先清 `books` / `progress` 再写 + `lastWriteAt.clear()`；真机实测 3 本 / 7 条 → 导入 1 书 1 进度的 fixture → 1 本 / 1 条，重启不复现。证据 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-DATA-7。
 - **书架编辑模式（多选删除）**：已实施并真机验证（2026-10-07，D1–D21）—— 见上文同名节；
   计划 / 逐步代码 / DoD 逐条证据见 [`archive/SHELF-EDIT-PLAN.md`](./archive/SHELF-EDIT-PLAN.md)（§7 / §8 / §10 / §12.3），
   五轮审计轨迹原文见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §附。
