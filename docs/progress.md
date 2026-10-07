@@ -15,7 +15,7 @@
 - M5 结果（2026-09-25，真机验证） — L37
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
 - 未决 / 风险 — L111
-- 交接备忘 — L130
+- 交接备忘 — L137
 <!-- TOC:END -->
 
 ---
@@ -30,7 +30,7 @@
 | M3 | 搜索聚合 + 详情 + 加入书架 + 持久化 | ✅ 已完成（真机验证：加入书架重启仍在） |
 | M4 | 阅读页（横向分页翻页）+ 目录（含分页）+ 进度 + 阅读设置 | ✅ 已完成（真机验证：目录/跳转/字号/进度重启恢复；修 bindSheet + 正文清洗；**收尾项已补**）|
 | M5 | 听书 + 系统 TTS + 后台播放 + AVSession | ✅ 已完成（真机验证：PCM→AudioRenderer→AVSession 成为 top session，锁屏控件/媒体键可控，切后台不断，定时关闭，段落高亮/进度同步）|
-| M6 | 规则调试器 + 缓存清理 + 备份恢复 | ⏳ 未开始 |
+| M6 | 规则调试器 + 缓存清理 + 备份恢复 | 🟡 大部分已落地：规则调试器 UI（`pages/RuleDebugger.ets`）、备份/恢复（`pages/BackupManage.ets`）、目录缓存统计/清理均已实现，且 2026-10-07 已过 release 冒烟；仅剩缓存上限策略与导入「覆盖」语义 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) T-DATA-4 / T-DATA-7 |
 | v2 | QuickJS/Boa JS 引擎、换源、在线 TTS、真分页 | ⏳ |
 
 
@@ -115,6 +115,10 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 
 **近期已关闭**（详细信息看指针，不在本文件重复）
 
+- **release 包首次真机冒烟（T-VER-6，2026-10-07）**：搜索 / 详情 / 阅读 / 听书 / 备份导出→清库→导入 / 重启复读 / 书源列表全通过，**0 条 JS 错误 + 0 崩溃，未发现混淆类缺陷**。
+  逐项证据 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §「release 冒烟结果（T-VER-6）」、[`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §9；
+  **顺带更正**：`f898a23`（2026-10-02）已实现规则调试器 UI 与备份/恢复，M6 因此从「未开始」改为「大部分已落地」，
+  并新登记 T-DATA-7（导入并非全量覆盖）+ 三条坑进 [`PITFALLS.md`](./PITFALLS.md)。
 - **书架编辑模式（多选删除）**：已实施并真机验证（2026-10-07，D1–D21）—— 见上文同名节；
   计划 / 逐步代码 / DoD 逐条证据见 [`archive/SHELF-EDIT-PLAN.md`](./archive/SHELF-EDIT-PLAN.md)（§7 / §8 / §10 / §12.3），
   五轮审计轨迹原文见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §附。
@@ -123,7 +127,7 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 
 - 目录分页 `nextTocUrl` / 卷 `isVolume` 已在引擎实现（真机 detect 覆盖当页路径），多页目录待复验。
 - 书源持久化仍用 `preferences` JSON（书籍/进度已用 `relationalStore`）；后续可迁移统一。
-- 规则「静默失败」诊断：`parseWithDiagnostics` 已可返回 regex/CSS/JS 诊断，调试器 UI 待 M6。
+- 规则「静默失败」诊断：`parseWithDiagnostics` 已可返回 regex/CSS/JS 诊断，调试器 UI 也已存在（`pages/RuleDebugger.ets`，随 `f898a23` 落地）——该页尚未真机验收，仅在 release 冒烟中确认入口可达。
 - 文件导入/剪贴板导入：URL 导入已真机复验（成功 1 / 排除 2：需 JS 1、需登录 1）；文件/剪贴板走同一门禁函数。
 - 搜索排序已改为 Legado 分桶 + 同名同作者跨源合并 + 源 `weight`（见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §搜索结果页整改）；
   另加**书源置信度**（失败扣分/成功回分/持久化）决定**搜索调度顺序**（同文件 §书源置信度 + 搜索滑动窗口调度）。

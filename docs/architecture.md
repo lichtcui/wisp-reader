@@ -122,7 +122,7 @@ rust/legado-core/    薄 NAPI 层（cdylib），依赖 legado-engine
 | **NAPI 接口（增删函数/改返回 JSON）** | `rust/legado-core/src/lib.rs`（签名 + `///` doc comment → 生成 `index.d.ts`）；ArkTS 侧 `engine/IBookEngine.ets`、`engine/BookEngineNapi.ets`、`engine/types.ets` |
 | 缓存（章节/目录/清理） | `model/ChapterCache.ets`、`model/TocCache.ets`、`model/CacheRepository.ets`、`pages/CacheManage.ets` |
 | 备份恢复 / 本地书 | `pages/BackupManage.ets`、`model/LocalBook.ets` |
-| 规则调试器（**M6 未开始**） | `pages/RuleDebugger.ets` |
+| 规则调试器（已实现） | `pages/RuleDebugger.ets` |
 | 颜色 / Design Token | `src/main/resources/{base,dark}/element/color.json`；规范见 [`plan.md`](./plan.md) §2 |
 | 权限 / SDK 版本 / bundle / 混淆 | `src/main/module.json5`、`AppScope/app.json5`、`build-profile.json5`、`entry/obfuscation-rules.txt` |
 

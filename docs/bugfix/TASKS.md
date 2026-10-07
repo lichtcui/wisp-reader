@@ -1,20 +1,27 @@
 # TASKS.md — 跨模块 Bug 修复任务清单
 
 > 由早期只读审计（原 `AUDIT.md`，已归档删除）派生；按模块分组。
-> 状态：`[ ]` 未开始 · `[~]` 进行中 · `[x]` 完成。修复须另获授权（Gate B），审计阶段不改代码。
+> 状态：`[ ]` 未开始（含显式顺延）· `[~]` 已实现待复验 / 部分缓解 · `[x]` 完成。
+> **2026-10-07 两次同步**：① 与文末「S10 回归验收状态」表对齐（21 项已修但仍标 `[ ]`，一并更正）；
+> ② release 包首次真机冒烟（T-VER-6）+ 逐项核代码：T-SRC-1 真机复验通过、T-DATA-3 备份往返验证通过（原记「M6 未开始」有误）。
+> 行的 `证据` 行号多为审计时快照，可能已漂移。
+> 当前 open：**7 项 `[ ]`**（T-SHELF-3 / T-READ-1 / T-READ-3 顺延 · T-SHELF-5 / T-TTS-4 未开始 · T-DATA-4 / T-DATA-7 未开始）
+> + **1 项 `[~]`**（T-CROSS-3 仅缓解）。
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
 ---
 
 ## 跨模块 / 高优先（P0）
 
-- [ ] **T-CROSS-1（R1）阅读 ↔ 听书跨书串扰**：`Reader.onTtsProgress` 与 `isSpeaking` 增加 `bookId` 守卫，仅同书才滚动/高亮。
+- [x] **T-CROSS-1（R1）阅读 ↔ 听书跨书串扰**：`Reader.onTtsProgress` 与 `isSpeaking` 增加 `bookId` 守卫，仅同书才滚动/高亮。
   - 证据：`entry/src/main/ets/pages/Reader.ets:53-66`、`:348-352`
   - 验证：真机「听书 A 时打开 B」→ B 不跳章、B 进度不被写成 A 的章节号。
-- [ ] **T-CROSS-2（R2）听书后台任务泄漏**：`pause()` 与自然播完（`onParagraphEnd` 末章）时调用 `stopBackground()`；恢复播放再 `startBackground()`。
+- [x] **T-CROSS-2（R2）听书后台任务泄漏**：`pause()` 与自然播完（`onParagraphEnd` 末章）时调用 `stopBackground()`；恢复播放再 `startBackground()`。
   - 证据：`entry/src/main/ets/model/TtsController.ets:203`（仅 stop 调）、`:705-721`、`:725-744`、`:429-437`
   - 验证：播完/暂停后 `hidumper` 或任务列表确认 `AUDIO_PLAYBACK` 长时任务已结束。
-- [ ] **T-CROSS-3（R3）进度写竞争**：为 `progress` 写入加归属/`updatedAt` 防覆盖（如仅当前活动模块可写，或写入前比较 `updatedAt`）。
+- [~] **T-CROSS-3（R3）进度写竞争**：为 `progress` 写入加归属/`updatedAt` 防覆盖（如仅当前活动模块可写，或写入前比较 `updatedAt`）。
+  - 状态（2026-10-07）：**部分缓解**——`saveProgress` 已加 `lastWriteAt` 单调时间戳挡旧写覆盖（`model/ShelfRepository.ets:138-142`）；
+    「按归属模块可写」未做，阅读/听书交替写同一本书的真机复验仍未覆盖（文末 S10 表记 ➖）。
   - 证据：`Reader.ets:762-764`+`:257-271`、`TtsController.ets:973-987`、`model/ShelfRepository.ets:130-145`
   - 验证：阅读与听书交替操作同一本书，重启后进度不跳变。
 
@@ -32,9 +39,10 @@
     ArkUI struct 成员被自动保留、`@ObservedV2` 类成员会被改名 → 新增 K15/§5.5「禁字符串式属性访问」约束（`obfuscation-rules.txt` 不必改）；
     另修一处计划缺口（`ShelfRepository.ets:79-86` 的过时 TODO 注释需在 S2-1 连注释一起替换）；S1/S2 逐行对账通过 = **代码零修改**。
     带完整代码与逐步验证清单，可直接按 §8 S1 开工。
-- [ ] **T-SHELF-2（R10）数据层懒初始化**：`ShelfRepository` 在 `store===undefined` 时补初始化，避免书架 Tab 初始化前进度丢写。
+- [x] **T-SHELF-2（R10）数据层懒初始化**：`ShelfRepository` 在 `store===undefined` 时补初始化，避免书架 Tab 初始化前进度丢写。
   - 证据：`model/ShelfRepository.ets:20-36,130-145`、`pages/Shelf.ets:42`
 - [ ] **T-SHELF-3 进度三态**：核对 `progressText` 的 `total` 反推在 `percent` 为 0/极小值时是否正确。
+  - 状态（2026-10-07）：**顺延**（S10 判定低风险、不在 D1–D21 DoD 内），仍未开始。
   - 证据：`pages/Shelf.ets:225-232`
 - [x] **T-SHELF-4（真机）长按手势被静默丢弃**：`Shelf.ets` 按计划 §8 S1-3e 写成 helper 返回 gesture（`longPressToEdit(entry): GestureType`）+ `.gesture(this.longPressToEdit(entry))` → **真机长按从不触发**（编译无错、无告警）。
   - 证据（转译产物）：`entry/build/.../esmodule/debug/entry/src/main/ets/pages/Shelf.ts` 里该参数位退化为 `globalThis.Gesture.create(GesturePriority.Parallel); globalThis.Gesture.pop();`（**空手势**）；真机 `uinput -T -d x y -i 900 -u x y` 实测 Down/Up 间隔 935ms 但无任何 gesture 回调。
@@ -42,32 +50,35 @@
   - 验证：✅ 真机长按 +498ms 进编辑态（D1/D19）；已回写计划 §1.6 #42/#43、§5 K16、§5.2。
 - [ ] **T-SHELF-5（R12）封面解码失败日志**：真机启动时反复出现 `ImageSource: failed to create decoder object` / `image decode error, ret:[62980118]` / `ImageSourceNapi: Create PixelMap error`，未定位是缓存封面文件损坏、还是 `BookCover`/`pixelMap` 取用路径问题。仅日志噪音还是用户可见空封面，待确认。
   - 证据：2026-10-07 真机 `hilog -x`（启动即出现，pid 17846 子线程）；`components/BookCover.ets`。与远端 TTS 改动无关。
+  - 复现条件（2026-10-07 release 冒烟）：release 包启动时同样出现同一组 `ImageSource` / `62980118` 错误 → 与 debug/release 无关；封面显示本身正常，暂按日志噪音对待。
 
 ## 搜索（Search）
 
-- [ ] **T-SEARCH-1（R9）引擎边界参数透传**：确认 `opts.concurrency` 是否需要传给 native（当前被丢弃）。
+- [x] **T-SEARCH-1（R9）引擎边界参数透传**：确认 `opts.concurrency` 是否需要传给 native（当前被丢弃）。
   - 证据：`entry/src/main/ets/engine/BookEngineNapi.ets:19-24`
-- [ ] **T-SEARCH-2 搜索代次 guard 回归**：核对连续重搜/返回时的 `searchGen` 与 `pending` 计数无残影。
+- [x] **T-SEARCH-2 搜索代次 guard 回归**：核对连续重搜/返回时的 `searchGen` 与 `pending` 计数无残影。
   - 证据：`pages/SearchResult.ets:64-135`
 
 ## 阅读（Reader）
 
 - [ ] **T-READ-1（R7）统一正文清洗**：`Reader.sanitize` 与 `BookContent.sanitize` 合并为单一实现，保证 TTS 段落索引与阅读页一致。
+  - 状态（2026-10-07）：**顺延**（两处当前逐字节一致，属纯重构非缺陷），仍未开始。
   - 证据：`pages/Reader.ets:185-210`、`model/BookContent.ets:12-37`
-- [ ] **T-READ-2（R8）章节缓存内存上限**：为 `ChapterCache` 内存层加 LRU/上限；清理死代码 `hasCachedChapter`。
+- [x] **T-READ-2（R8）章节缓存内存上限**：为 `ChapterCache` 内存层加 LRU/上限；清理死代码 `hasCachedChapter`。
   - 证据：`model/ChapterCache.ets:18,92-94`、`plan.md:270`
 - [ ] **T-READ-3 预取去重**：频繁切章时避免对同一 `bookId#index` 重复预取/重复写盘。
+  - 状态（2026-10-07）：**顺延**（内存 LRU 后重复写盘概率已降，in-flight 去重未做），仍未开始。
   - 证据：`pages/Reader.ets:245-255`、`:212-243`
 
 ## 听书（Listening / TTS）
 
-- [ ] **T-TTS-1（R6）单例与引擎释放**：`stop()` 释放 `engine`（`shutdown`）并考虑重置单例；`onDestroy` 后不复用失效 `ctx`。
+- [x] **T-TTS-1（R6）单例与引擎释放**：`stop()` 释放 `engine`（`shutdown`）并考虑重置单例；`onDestroy` 后不复用失效 `ctx`。
   - 证据：`model/TtsController.ets:68-75,190-212`、`entryability/EntryAbility.ets:17-20`
-- [ ] **T-TTS-2 定时器与自然结束**：自然播完时 `clearTimer()`，避免定时器空转。
+- [x] **T-TTS-2 定时器与自然结束**：自然播完时 `clearTimer()`，避免定时器空转。
   - 证据：`model/TtsController.ets:705-721`、`:880-907`
-- [ ] **T-TTS-3 错误态恢复**：`onError` 后 `playing=false`，确认 UI 与 `AVSession` 状态一致、可重试。
+- [x] **T-TTS-3 错误态恢复**：`onError` 后 `playing=false`，确认 UI 与 `AVSession` 状态一致、可重试。
   - 证据：`model/TtsController.ets:585-590`、`pages/Listening.ets:359-374`
-- [ ] **T-TTS-4（R11）远端 TTS 并发预取导致 VPS RTF 劣化**：`AHEAD_REMOTE=3` 使 VPS 同时跑 3 个 ZipVoice 请求，而服务端固定 `num_threads=4` → 12 线程挤 4 核，RTF 由单请求的 **0.767/0.784** 涨到 **1.655 / 1.753 / 2.580 / 6.428**（2026-10-07 真机实测）。当前靠 3 段预取缓冲仍能实时不断流（60s 墙钟推进 60s 音频，`play para=1…8` 连续），但余量很薄，网络或负载稍差即可能欠载。
+- [ ] **T-TTS-4（R11）远端 TTS 并发预取导致 VPS RTF 劣化**（未开始 · 已登记）：`AHEAD_REMOTE=3` 使 VPS 同时跑 3 个 ZipVoice 请求，而服务端固定 `num_threads=4` → 12 线程挤 4 核，RTF 由单请求的 **0.767/0.784** 涨到 **1.655 / 1.753 / 2.580 / 6.428**（2026-10-07 真机实测）。当前靠 3 段预取缓冲仍能实时不断流（60s 墙钟推进 60s 音频，`play para=1…8` 连续），但余量很薄，网络或负载稍差即可能欠载。
   - 证据：VPS `journalctl -u tts | grep 'remote-tts synth'`（对比并发期与停 App 后单请求）；`common/Const.ets`（`AHEAD_REMOTE`）、`model/TtsController.ets`（`ensureRemoteSynthesized` 的 `issuedIndex - flushIndex < AHEAD_REMOTE`）。
   - 可选方向（二选一，均需重新部署/真机复测）：① 服务端 `app.py` 加并发锁串行化 → RTF 稳定 ≈0.77，代价是首段等待变长；② 下调 `AHEAD_REMOTE` → 并发降低但预取缓冲变薄、欠载风险上升。
   - 文档缺口：`docs/remote-tts-deploy.md` §3 现写「RTF≈0.92 仍 <1」，**只对单请求成立**，需补注并发场景。
@@ -75,7 +86,10 @@
 
 ## 书源管理（BookSourceManage）
 
-- [ ] **T-SRC-1 导入持久化回归**：核对「启停/删除/恢复内置」后的 `preferences` 落盘与列表 key 稳定性。
+- [x] **T-SRC-1 导入持久化回归**：核对「启停/删除/恢复内置」后的 `preferences` 落盘与列表 key 稳定性。
+  - 状态（2026-10-07）：**已实现 + release 真机复验通过**——key = `bookSourceUrl#index#enabled`（`pages/BookSourceManage.ets:661`）。
+    取证：先从本机 release 导出的备份 JSON 确认库内确有同 URL 两条（`bbiquge8` / `笔趣阁8` → `http://m.bbiquge8.net`，均 `enabled`），
+    再在 release 包「设置 → 书源管理」滚动确认**两行分别渲染**（修复前 ForEach 同 key 会静默少一行）；列表头「书源（7/13 启用）」与备份 JSON 逐条对账一致。
   - 证据（2026-10-06 补充，已确认真实触发）：`:657` 原用 `source.bookSourceUrl + '#' + enabled` 作 ForEach key，
     用户库内 `bbiquge8` / `笔趣阁8` 指向同一 URL → 同 key 被静默去重，**列表少显示一行**，且启停/删除可能误伤另一条。
   - **修法（已实施 2026-10-06）**：key 改为 `bookSourceUrl + '#' + index + '#' + enabled` —— 保留 `enabled`
@@ -85,18 +99,21 @@
   - 验证：导入两条同 URL 不同名的书源 → 列表显示两行、各自可启停/删除。**真机复验待补**（设备当时 Offline）。
   - 残留语义（非缺陷）：一键「关闭/删除全部不可用」仍按 `bookSourceUrl` 聚合，同 URL 的两条会一起处理。
   - 证据：`pages/BookSourceManage.ets:65-70,175-198,343-386`、`model/SourceRepository.ets:39-47`
-- [ ] **T-SRC-2 检测并发/超时**：确认 `detect`（并发 4）无源级串扰，`busy` 态防重入。
+- [x] **T-SRC-2 检测并发/超时**：确认 `detect`（并发 4）无源级串扰，`busy` 态防重入。
   - 证据：`pages/BookSourceManage.ets:200-222`
 
 ## 数据管理（缓存 / 备份，M6）
 
-- [ ] **T-DATA-1（R4/R5）封面缓存读穿**：`BookCover.load` 先查 `ctx.cacheDir/cover_{hash}` 是否已存在（或加内存 PixelMap 缓存），避免重复下载。
+- [x] **T-DATA-1（R4/R5）封面缓存读穿**：`BookCover.load` 先查 `ctx.cacheDir/cover_{hash}` 是否已存在（或加内存 PixelMap 缓存），避免重复下载。
   - 证据：`components/BookCover.ets:22-39`、`rust/legado-engine/src/runtime.rs:653-658`
-- [ ] **T-DATA-2（R5）清理缓存页实现**：统计并清理 `filesDir/chapters`、`filesDir/local`（可选）、`ctx.cacheDir/cover_*`；设置页用 `formatBytes` 展示真实占用。
+- [x] **T-DATA-2（R5）清理缓存页实现**：统计并清理 `filesDir/chapters`、`filesDir/local`（可选）、`ctx.cacheDir/cover_*`；设置页用 `formatBytes` 展示真实占用。
   - 证据：`pages/Settings.ets:82-86`、`common/Format.ets:48-61`、`pages/Index.ets:62-64`
-- [ ] **T-DATA-3（R5）备份/恢复**：导出 JSON（书源 + 书架 + 进度，带 `schemaVersion`）并支持导入恢复。
+- [x] **T-DATA-3（R5）备份/恢复**：导出 JSON（书源 + 书架 + 进度，带 `schemaVersion`）并支持导入恢复。
+  - 状态（2026-10-07 更正）：**已实现**——原记「M6 未开始」有误，页面 `entry/src/main/ets/pages/BackupManage.ets`（271 行）随 `f898a23`（2026-10-02）落地；
+    **release 真机导出 → 清库 → 导入 → 重启复读已验**（详见 T-VER-6）。残留「覆盖」语义另立 T-DATA-7。
   - 证据：`plan.md:272`、`pages/Settings.ets:88-93`
 - [ ] **T-DATA-4 缓存上限策略**：落实 plan §7「已读永久保留、未读超 N 天清理 / LRU ~200MB」。
+  - 状态（2026-10-07）：**未开始**（原记「M6 范围」，但 M6 其余项均已落地；此项仍无实现）。
   - 证据：`plan.md:270-271`
 - [x] **T-DATA-5 目录缓存未纳入统计**：`filesDir/tocs/<bookId>.json`（`TocCache` 写入）不在 `CacheStats` 任何分类内，「清理缓存」页显示的数字偏小。
   - **处置（2026-10-07）**：`CacheStats` 增 `toc` 分类；`isChapterFile` **改名**为 `isJsonFile`（chapters 与 tocs 共用，未新增重复函数）；`getCacheStats()` 计入 `toc` 并加入合计；`CacheManage` 增「目录缓存」行 + 文案补「目录」（`CacheRepository.ets`、`CacheManage.ets`）。真机数字比对见 §10 D15（设备离线，待补）。
@@ -106,19 +123,26 @@
   - **处置（2026-10-07）**：`clearCache()` 增 `removeDir(tocDir(ctx))`（`CacheRepository.ets`）。真机见 §10 D15（设备离线，待补）。
   - 证据：`model/CacheRepository.ets:128-132`、`model/TocCache.ets:37-45`
   - 方案：`clearCache()` 增 `removeDir(tocDir(ctx))` → 同上 §8 S4
+- [ ] **T-DATA-7 导入不是「全量覆盖」**：页面文案与确认弹窗都写「将从备份文件覆盖当前书源、书架与阅读进度」，但 `doImport` 只做 `saveSources` + `upsertBook` / `saveProgress`，**不删除备份中不存在的行**。
+  - 证据（2026-10-07 release 真机）：导入前书架 0 本 / 进度 4 条（删书后残留的孤儿行），导入「3 本 / 7 条」的备份后 = 3 本 / **7 条**（4 + 3）——孤儿行未清，与文案不符。
+  - 证据：`pages/BackupManage.ets`（`doImport` 的 upsert 循环、`confirmImport` 文案）
+  - 验证：造 2 条孤儿进度 → 导入只含 1 条的备份 → 期望「1 条」而实际「2 条」。
+  - 顺带发现（同一现象另一面）：`removeBooks` 会清掉被删书的进度行，但**历史遗留的孤儿进度行不会被 GC**（本次导入前实测 4 条）。
 
 ---
 
 ## 验证 / 构建（横切）
 
-- [ ] **T-VER-1 clean 构建复验**：执行一次非增量的 `hvigorw assembleHap ... --no-daemon`，确认冷构建可复现。
-- [ ] **T-VER-2 Rust 回归**：若改动引擎，`cd rust/legado-engine && cargo test`（当前记录 54 passed）并重出 `.so`。
-- [ ] **T-VER-3 真机闭环**：每个修复按 `docs/development.md` 走「编译 → 安装 → `aa force-stop` → 重启 → hilog `SourceReaderTts`/`SourceReaderPoC` 观察」（流程清单见 skill `harmony-device-run`）。
-- [ ] **T-VER-4 混淆确认**：已机械化为 `make check`（`scripts/check-keep-props.sh` 扫描 `types.ets` + 所有含 `JSON.parse/stringify` 的 `.ets` 的 interface 字段 ↔ keep 列表）。
+- [x] **T-VER-1 clean 构建复验**：执行一次非增量的 `hvigorw assembleHap ... --no-daemon`，确认冷构建可复现。
+- [x] **T-VER-2 Rust 回归**：若改动引擎，`cd rust/legado-engine && cargo test`（当前记录 54 passed）并重出 `.so`。
+- [x] **T-VER-3 真机闭环**：每个修复按 `docs/development.md` 走「编译 → 安装 → `aa force-stop` → 重启 → hilog `SourceReaderTts`/`SourceReaderPoC` 观察」（流程清单见 skill `harmony-device-run`）。
+- [x] **T-VER-4 混淆确认**：已机械化为 `make check`（`scripts/check-keep-props.sh` 扫描 `types.ets` + 所有含 `JSON.parse/stringify` 的 `.ets` 的 interface 字段 ↔ keep 列表）。
   - 2026-10-07 补齐漏掉的 9 个：`Book.addedAt/bookId/inShelf`、`ReadProgress.chapterIndex/chapterTitle/charOffset/paragraphIndex/percent/updatedAt`——这些字段会经备份 JSON 往返，漏 keep 会让 release 写出的备份键名与格式不符（跨版本读不回）。
-- [ ] **T-VER-6 release 包真机 smoke（首次）**：`make run-release` 装上 release 包，跑一遍搜索 / 阅读 / 听书 / **备份导出 → 清库 → 导入**（混淆类问题只在这里现形）。
-  - 静态证据（2026-10-07）：release HAP 的 `modules.abc` 里 `addedAt` **完全不出现**（被改名）、`bookSourceUrl` 保留 → `-enable-property-obfuscation` 确实在这些模型字段上生效，非理论风险。
-- [ ] **T-VER-5 文档补齐**：补 `docs/bug.md`（progress.md 引用但缺失）或在 progress.md 去除引用。
+- [x] **T-VER-6 release 包真机 smoke（首次）**：`make run-release` 装上 release 包，跑一遍搜索 / 阅读 / 听书 / **备份导出 → 清库 → 导入**（混淆类问题只在这里现形）。
+  - 静态证据（2026-10-07 早先）：release HAP 的 `modules.abc` 里 `addedAt` **完全不出现**（被改名）、`bookSourceUrl` 保留 → `-enable-property-obfuscation` 确实在这些模型字段上生效，非理论风险。
+  - 静态复测（`e660a3b` 补齐 9 个 keep 字段之后）：`addedAt` / `paragraphIndex` / `schemaVersion` **已保留**（= keep 生效），`isActiveFor`（方法，未进 keep）仍被改名。
+  - **动态结果（2026-10-07，设备 `33Z0224424136564`，release HAP 17:58 构建、混淆开启）**：见文末「release 冒烟结果（T-VER-6）」。
+- [x] **T-VER-5 文档补齐**：补 `docs/bug.md`（progress.md 引用但缺失）或在 progress.md 去除引用。
 
 ---
 
@@ -144,16 +168,47 @@
 | T-TTS-1 引擎释放 | ✅ | `stop()` 增 `engine.shutdown()` 并置空、复位日志位（`TtsController.ets:226-243`） |
 | T-TTS-2 定时器自然结束 | ✅ | 末章播完 `clearTimer()`，避免 1s 定时器空转（`TtsController.ets:825-830`） |
 | T-TTS-3 错误态恢复 | ✅ | `onError` 清 in-flight、停 flush/progress 定时器、停后台；新增 `queueExhausted()`，播完后 `resume()` 可从章首重播 |
-| T-SRC-1 导入持久化回归 | ✅ | 列表 key 改为 `bookSourceUrl#enabled`（去 index），启停/一键清理即时刷新；**2026-10-06 补**：同 URL 重复源会撞 key → 再改为 `bookSourceUrl#index#enabled`（`BookSourceManage.ets:657`），真机复验待补 |
+| T-SRC-1 导入持久化回归 | ✅ | 列表 key 改为 `bookSourceUrl#enabled`（去 index），启停/一键清理即时刷新；**2026-10-06 补**：同 URL 重复源会撞 key → 再改为 `bookSourceUrl#index#enabled`（`BookSourceManage.ets:657`）；**2026-10-07 release 真机复验通过**：`bbiquge8` / `笔趣阁8`（同 `m.bbiquge8.net`）两行分别渲染 |
 | T-SRC-2 检测并发/超时 | ✅ | `runDetect` 加 `busy` 重入守卫并复位 `statusVisible`（`BookSourceManage.ets:292-308`）；引擎每源独立 Client（复核） |
 | T-DATA-1 封面读穿 | ✅ | S3 已实现：`pathCache` + `accessSync` 校验，命中不重下（`BookCover.ets:58-62`） |
 | T-DATA-2 清理缓存页 | ✅ | S9 已实现并真机核对（`CacheManage.ets`、`CacheRepository.ets`）；本轮增 `cover_*.img` 后缀精确匹配 |
-| T-DATA-3 备份/恢复 | ⏭ | M6 范围，未开始 |
-| T-DATA-4 缓存上限策略 | ⏭ | M6 范围，未开始 |
+| T-DATA-3 备份/恢复 | ✅ | **2026-10-07 首次 release 真机往返**：导出 31.83KB（键名全未混淆）→ 清库 → 导入 → 书源 13 / 书架 3 本 / 进度 7 条，重启仍对（见下方「release 冒烟结果」）；原记「M6 未开始」有误（`f898a23`） |
+| T-DATA-4 缓存上限策略 | ⏭ | 未开始（原记 M6 范围；M6 其余项已落地） |
 | T-DATA-5 目录缓存未统计 | ✅ | 2026-10-07：`CacheStats.toc` + `CacheManage`「目录缓存」行（`isChapterFile`→`isJsonFile` 改名） |
 | T-DATA-6 清理缓存漏 `tocs` | ✅ | 2026-10-07：`clearCache()` 增 `removeDir(filesDir/tocs)` |
 | T-VER-1 clean 构建 | ✅ | `hvigorw clean` + `assembleHap debug --no-daemon` → `BUILD SUCCESSFUL`（全量任务） |
 | T-VER-2 Rust 回归 | ✅ | `cargo test` → `54 passed; 0 failed`（无 Rust 改动，未重出 `.so`） |
 | T-VER-3 真机闭环 | ✅ | 设备已连接（`33Z0224424136564`）：release + debug 安装/启动、书架→阅读→目录→听书全链路冒烟通过，无 `JSCRASH`/`CPPCRASH`。详见 `RELEASE-NOTES.md` §5；跨书串扰因设备仅一本本地书可读未覆盖 |
 | T-VER-4 混淆确认 | ✅ | 本轮未新增 JSON 字段，`obfuscation-rules.txt` 无需变更 |
+| T-VER-6 release 冒烟 | ✅ | 2026-10-07 首次：装包/书架/搜索/详情/阅读/听书/备份导出→清库→导入/重启复读/书源列表全通过；0 JS 错误 + 0 崩溃。详见下方同名节与 `RELEASE-NOTES.md` §9 |
 | T-VER-5 文档补齐 | ✅ | 移除 `docs/progress.md` 对不存在的 `docs/bug.md` 的引用 |
+
+---
+
+## release 冒烟结果（T-VER-6，2026-10-07）
+
+包：`entry/build/default/outputs/default/entry-default-signed.hap`（17:58 构建，`buildMode=release` + 属性混淆；`modules.abc` 内 `addedAt`/`paragraphIndex`/`schemaVersion` 保留、`isActiveFor` 被改名）。
+设备：`33Z0224424136564`。全程用 `uitest dumpLayout` + `hilog -x` 取证（无 GUI）。
+
+| 环节 | 边界类型 | 结果 |
+|---|---|---|
+| 装包 / 启动 | — | ✅ `hdc install -r` + `aa force-stop` → `aa start`；无 JSCRASH / CPPCRASH |
+| 书架列表 | relationalStore 读 | ✅ 3 本 + 进度文字 `153章/1441章`、`27章/28章` 正确 |
+| 搜索 | NAPI JSON（`BookSearchItem`） | ✅ 「剑来」→ 57 条结果、可见 5 条含 书名/作者·最新章节/来源数；状态栏「源 2/7 成功」 |
+| 选择来源抽屉 | 抽屉 + 列表 key | ✅ 「选择来源 · 2」两行（`bbiquge8` / `m.bbiquge8.net`） |
+| 详情页 | NAPI JSON（`bookInfo`） | ✅ 书名/作者/来源(只读)/目录「最新：第83章 今日无事」/简介 |
+| 加入书架 | relationalStore 写 | ✅ 备份页计数 2 本 → 3 本 |
+| 阅读页 | NAPI JSON（`content`）+ 分页 | ✅ 章节名 + 正文 + `(第1/3页)` |
+| 听书 | TTS → PCM → `AudioRenderer` → AVSession | ✅ 听书页 `00:12 / 03:39` 持续推进、`远端音色 · 流萤`；`hidumper AVSessionService` → `is the topsession: true`；系统日志可见本应用 `AudioLogUtils` 音频帧 |
+| 长按进编辑态 | 手势 + DB 删 | ✅ `已选择 1 本书` → 全选 3 → 确认弹窗 → 删除 → 书架空，且 AVSession top session 让出（删正在播的书即停 TTS） |
+| 备份导出 | JSON.stringify（**keep 面**） | ✅ `sourcereader_backup_2026-10-07.json` 31.83 KB 落到 `Docs/Download/`；**键名全部未混淆**：sources 23 / books 13 / progress 7 字段 + `schemaVersion`/`exportedAt` 全对 |
+| 清库 → 导入 | JSON.parse（**keep 面**） | ✅ 3 本 → 0 本；导入该文件后回到 书源 13 / 书架 **3 本** / 进度 **7 条**，书架显示值与备份前一致 |
+| 重启复读 | DB 读写跨进程 | ✅ force-stop + 重启后仍 3 本、进度文字不变（混淆进程写 → 新进程读） |
+| 书源管理 | preferences JSON | ✅ 「书源（7/13 启用）」+ 同 URL 两条分别渲染（T-SRC-1 复验通过） |
+| 异常面 | — | ✅ 全量 `hilog -x` 扫描：0 条 JS/ArkTS 错误、0 崩溃；应用级 error 仅 `AceStateMgmt: No views to update` / `PARAM_WATCHER: Read result failed`（框架噪音） |
+
+**未覆盖 / 新发现**
+1. 备份「全量覆盖」语义与文案不符 → 新立 **T-DATA-7**。
+2. release 包下应用自己的 `hilog`（domain 0x0000）被系统过滤，`hilog -T SourceReaderTts` 恒为空 → release 冒烟只能靠系统侧日志 + `dumpLayout`（已记入 [`../PITFALLS.md`](../PITFALLS.md)）。
+3. 启动即出现的 `ImageSource` / `62980118` 噪音在 release 同样复现（T-SHELF-5，仍未定位）。
+4. 规则调试器页本轮未跑（不在冒烟范围；该页确实已存在，见 `pages/RuleDebugger.ets`）。

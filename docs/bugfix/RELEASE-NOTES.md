@@ -142,9 +142,9 @@
 - `T-SHELF-3` 进度三态在 `percent` 极小值时的反推边界，待真机复验。
 - `T-READ-1` `Reader.sanitize` 与 `BookContent.sanitizeText` 合并（两份当前**逐字节一致**，纯重构）。
 - `T-READ-3` 章节预取 in-flight 去重（LRU 已降低重复写盘概率）。
-- `T-DATA-3` 备份/恢复、`T-DATA-4` 缓存 LRU/上限策略（M6）。
+- `T-DATA-4` 缓存 LRU/上限策略（未开始）；`T-DATA-3` 备份/恢复已于 2026-10-07 release 真机验证通过（§9），另新立 `T-DATA-7`（导入非「全量覆盖」）。
 - `T-VER-3` 真机闭环已完成（见 §5）；跨书串扰与后台任务结束的直接观测待条件复验。
-- M6 规则调试器整体未开始。
+- 规则调试器与备份/恢复**并非未开始**：随 `f898a23`（2026-10-02）落地（`pages/RuleDebugger.ets`、`pages/BackupManage.ets`），本轮记错。
 
 ### 4.3 保留的工作文档（未纳入版本控制）
 
@@ -259,4 +259,31 @@ release 与 debug 两个包均验证；release 包**不输出 App 自身 `hilog`
 - **未验完整项**：**D20**（编辑态滚动）—— 本机书架 3–4 本不足一屏、不可滚，且三条加书路径（搜索 onSubmit / 文件选择器 / 缩小窗口）均不可自动化 → 以「慢滑不误触 + 编辑态慢滑不改选 + 不阻断滚动」三项替代证据；**D10 / D12 / D14 / D18** 已跳过（用户决定：未授权删本地书 / 删空书架，并跳过深色模式与读屏项）。
 - **临时诊断已清理**：排查用的 3 条 `hilog('ShelfDiag')`（+ import）已移除，重新构建安装后复验 D1–D4/D6 通过。
 
-**已知限制**：本轮仅完成「编译 + release 混淆面」闭环，**未做真机验证**；§10 DoD 的 D1–D20 全部待设备接回后补测（重点 R10 返回键是否被 `Navigation` 吞、R12 长按是否补送 click/是否影响滚动、R6 500ms 手感、R3 角标刷新）。
+**已知限制**：本节（§8）只覆盖书架编辑模式本身；release 包的**全局**冒烟见 §9。
+
+---
+
+## 9. release 包首次真机冒烟（T-VER-6，2026-10-07）
+
+目的：混淆（`-enable-property-obfuscation`）类问题**只在 release 现形**——本轮首次把 release 包完整跑一遍并逐段取证。
+包：`entry/build/default/outputs/default/entry-default-signed.hap`（17:58 构建）；设备 `33Z0224424136564`；取证手段 = `uitest dumpLayout` + `hilog -x` + `hidumper`（无 GUI）。
+
+**结论：全部通过，未发现混淆类缺陷。** 逐项证据表见 [`TASKS.md`](./TASKS.md) §「release 冒烟结果（T-VER-6）」；要点：
+
+| 面 | 结论 |
+|---|---|
+| 搜索 / 详情 / 目录 / 正文（NAPI JSON） | ✅ `BookSearchItem` / `bookInfo` / `content` 字段全部正读（「剑来」57 条结果、详情含最新章节、正文分页 `第1/3页`） |
+| 书架 / 进度（relationalStore 读写 + 跨进程） | ✅ 加书 2→3 本、删书 3→0、导入恢复回 3 本，force-stop 重启后进度文字不变 |
+| 听书（TTS→PCM→`AudioRenderer`→AVSession） | ✅ `is the topsession: true`，进度 `00:12 / 03:39` 推进，删正在播的书即停（AVSession 让出 top） |
+| **备份导出（JSON.stringify）** | ✅ 导出文件键名**全未混淆**：sources 23 / books 13 / progress 7 字段 + `schemaVersion`/`exportedAt` 全对（`keep` 列表有效） |
+| **备份导入（JSON.parse）** | ✅ 同一文件导入成功：书源 13 / 书架 3 本 / 进度 7 条 |
+| 书源列表 key（T-SRC-1） | ✅ 同 URL 两条（`bbiquge8` / `笔趣阁8` → `m.bbiquge8.net`）分别渲染，列表头 7/13 启用与备份 JSON 对账一致 |
+| 书架编辑态长按（T-SHELF-4 修复） | ✅ release 同样 `已选择 1 本书` → 全选 3 → 确认弹窗 → 删除 |
+| 异常面 | ✅ 0 条 JS/ArkTS 错误、0 崩溃；应用级 error 仅框架噪音 |
+
+**新发现（已登记）**
+1. **T-DATA-7**：导入并非文案所称「全量覆盖」——`doImport` 只 upsert，不删除备份外的行（实测删书残留的 4 条孤儿进度在导入后仍在）；`removeBooks` 也不 GC 历史孤儿进度行。
+2. **release 下应用 hilog 被系统过滤**：`hilog -T SourceReaderTts` 恒为空（domain `0x0000` 不落 buffer）→ release 冒烟只能靠系统侧日志；已记入 [`../PITFALLS.md`](../PITFALLS.md)。
+3. 启动即出现的 `ImageSource` / `62980118` 封面噪音在 release 同样复现（T-SHELF-5，仍未定位，暂按噪音对待）。
+
+**未跑**：规则调试器页（不在冒烟范围；页面确实已存在，见 `pages/RuleDebugger.ets`）。
