@@ -104,6 +104,7 @@ pub fn fail_message(reason: &str) -> String {
         "no_book_url" => "未解析到书籍地址",
         "static_list" => "搜索结果疑似写死",
         "mismatch" => "详情页书名与搜索结果不一致",
+        "not_image" => "封面地址返回的不是图片",
         "timeout" => "超时",
         "needs_js" => "需要 JS（v1 不支持）",
         "needs_login" => "需要登录（v1 不支持）",

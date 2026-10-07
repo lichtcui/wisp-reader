@@ -455,3 +455,61 @@ UI 用 `uitest dumpLayout` + `uitest uiInput click` 驱动。为让「阅读页�
 
 **未覆盖**：真机未跑 release 包（未动混淆相关项）；「源返回不完整目录」只做了代码守卫、未构造真实场景；
 6h 数值本身没有长跑验证（只验证了 TTL = 0 / 2000ms / 6h 三档下的行为）。
+
+## 14. 增量（2026-10-08）：封面缓存「毒化」修复（T-SHELF-5）
+
+**根因**（两条叠加，都不在 ArkTS 侧）：
+
+1. `rust/legado-engine/src/runtime.rs::download_cover` 只校验 `body_bytes` **非空**，从不校验**是不是图片**
+   —— 源规则指向详情页、站点防盗链返回 200 + `text/html` 占位图、中间层返回 JSON 错误页，都会被 `std::fs::write` 落盘成 `cover_<hash>.img`；
+2. 同一函数以 `if path.exists() { return Ok(path) }` **提前返回** —— 缓存 slot 一旦被毒化，**永不复检、永不重下**。
+
+后果（两者同时成立）：`BookCover.ets` 里 `fileIo.accessSync` 通过 → `image.createImageSource` + `createPixelMap` 抛
+**62980118 = Failed to create the image plugin**（SDK `@ohos.multimedia.image.d.ts` 原文，含义是「数据不是可识别的图片格式」，不是笼统的「文件损坏」）；
+catch 只把 `pixmap = undefined` → **红渐变 + 书名占位**，且失败 URL **不进任何缓存** → 每次组件重建（切 tab / 回书架 / 重启）都重试一次，每次刷 5 行错误。
+⇒ 既是**日志噪音**，也是**用户可见的永久空封面**。
+
+**定位证据（真机 `33Z0224424136564` + 主机）**
+
+| 步骤 | 结论 |
+|---|---|
+| 沙箱 `hdc file recv` 拉回 28 个 `cover_*.img`，逐个 `file` | 只有 `cover_abfeec91b5ff5574.img` 是 **HTML**（10936 B，《天堂向左 深圳往右》详情页） |
+| 自建 rustc 小程序复算 `DefaultHasher` | `abfeec91b5ff5574 == hash("https://tiantangxiangzuoshenzhenwangyou.qwyd.net/")`，与 DB `books` 行 `8200e532` 的 `cover_url` 一致（**哈希对得上 ⇒ 就是封面下载路径写进去的，不是别人误写**） |
+| 插桩 `hilog.warn`（已移除） | 失败 URL 恰为该页地址，全应用仅此一例失败 |
+| `uitest dumpLayout` | `剑来` 封面区无 Text（图片正常），《天堂向左》《大唐（无封面 URL）》封面区各有书名 Text ⇒ 失败走**占位分支**（用户可见） |
+| 现源规则 + `make probe … search/info --json` | `coverUrl: ""` —— 该行值属 **DB 历史行**（源规则后来被改/从未有 coverUrl 规则），今天无法再产出；但「源改动后指向页面」「防盗链返回 HTML」是常见情形，且中毒后永不自愈 |
+
+**处理**
+
+- Rust（`runtime.rs` 封面段）：
+  - 抽出 `cover_cache_path(dest_dir, cover_url)`（命名逻辑单点，供测试复用）；
+  - 新增 `has_image_magic`（JPEG / PNG / GIF87a·89a / BMP / ICO / `RIFF….WEBP` / offset 4 处 `ftyp` 的 HEIC·HEIF·AVIF）、
+    `starts_like_markup`（跳 UTF-8 BOM 与空白后首字节为 `<` / `{` / `[`，或全空白）、`is_text_content_type`、
+    `looks_like_image`（markup 直接否 → 有 magic 直接是 → 否则**只**认 `image/*` 且非 text）、`cached_cover_is_usable`（读头 64 B 非空且非 markup）；
+  - `download_cover`：**缓存命中也要先过 `cached_cover_is_usable`**，不过则**删除旧文件重下**（自愈既有中毒项）；
+    下载后 `!looks_like_image` → **删文件 + 不落盘**，返回 `not_image`。
+  - `status.rs::fail_message` 加 `"not_image" => "封面地址返回的不是图片"`（沿用非变体键惯例，**不新增 `FailReason` 变体** ⇒ 不涉及 keep 列表与混淆）。
+- ArkTS（`components/BookCover.ets`）：新增会话级 `failedCache: Set<string>`（上限 128，与 `pixmapCache` 同款最旧驱逐）
+  ⇒ 同一 URL 每会话只尝试一次；catch 中清 `pathCache` 并 `fileIo.unlinkSync(path)`（解不开的字节不该留到下次启动），
+  保留一条 `hilog.warn(0x0000, 'SourceReaderCover', 'cover unavailable url=… err=…')`（负缓存后每 URL 每会话恰一次）。
+
+**为什么不做**（都已评估）：
+
+- **持久负标记** `cover_*.miss`：`model/CacheTrim.ets` 按 `COVER_PREFIX` + `.img` 后缀扫描驱逐，新命名 = 永不被清理的**泄漏**；接受「每次启动对该 URL 一次无效请求」（`not_image` 会立即返回，无解码成本）。
+- **临时文件 + rename 原子写**：同理会留下 `cover_*.tmp` 孤儿；且校验现在发生在**写之前**，部分写只可能来自崩溃/写满，而 ArkTS 的删文件兜底已能自愈。
+- **`ImageSource.release()`**：无法在无截图条件下确认渲染没回归，风险大于收益。
+
+**验证（2026-10-08 · 设备 `33Z0224424136564` · `make test` → `make rust` → `make run` debug 包）**
+
+| 断言 | 证据 |
+|---|---|
+| ① 单测 | `make test` **56 项全过**（+2）：`test_looks_like_image`（JPEG/PNG/GIF/WebP/HEIC/HTML/JSON/空/全空白/BOM+HTML/content-type 说谎/未知二进制 + `image/*`）；`test_download_cover_validates_and_self_heals`（新 `mock_cover_server` 二进制路由：HTML 拒且**不落盘**、说谎 content-type 拒、PNG 接受且字节相符、**预置毒文件 → 自愈重下**） |
+| ② 启动无噪音 | `hilog -r` 清净后 `aa start` + 8s：`62980118` / `failed to create decoder object` / `Create PixelMap error` **0 行**（修复前基线 15 行 = 3 次尝试 × 5 行） |
+| ③ 失败原因可读 | 恰 1 条失败日志（不再是解码噪音）：`SourceReaderCover: cover unavailable url=https://tiantangxiangzuoshenzhenwangyou.qwyd.net/ err=not_image`（插桩基线为 `err=undefined`） |
+| ④ 沙箱自愈 | 毒文件 `cover_abfeec91b5ff5574.img` 已消失；全量 `file recv` 后 38 个 `cover_*.img` **全为合法 JPEG**（含本次新下载的 5 个 83K/109K/78K/16K/5.6K） |
+| ⑤ 渲染无回归 | `uitest dumpLayout` 与修复前**逐行一致**：`剑来` 封面区仍无 Text（图片渲染），另两本仍占位（一本无 coverUrl、一本就是本次的不可用 URL） |
+| ⑥ 负缓存生效 | 书架 ↔ 搜索来回切 3 轮：该 tag **0 条**日志（不再重复下载/解码） |
+| ⑦ 新下载路径未被误杀 | 搜索「剑来」→ 107 条结果，5 个新封面全部解码成功、无一条 `cover unavailable` |
+
+**未覆盖**：release 包未复跑（本次改动不涉及 JSON 契约与混淆面，`make check` 仍按原样通过）；跨启动「不重下」未验证（设计上就是每启动重试一次）；
+HEIC/AVIF 只验了 magic 分支，未构造真实 HEIC 封面。

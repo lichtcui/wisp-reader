@@ -17,7 +17,16 @@ export declare function content(sourceJson: string, chapterUrl: string): Promise
   */
 export declare function detect(sourcesJson: string, optsJson: string): Promise<string>
 
-/** Download a cover into `dest_dir`; returns the written file path. */
+/**
+  * Download a cover into `dest_dir`; returns the written file path.
+  *
+  * The file is named `cover_<hash>.img` (hash of `cover_url`) and reused while
+  * it still starts like an image; a slot left behind by an older build that
+  * cached an HTML page is deleted and downloaded again. Bodies that are not
+  * images (a book page, an anti-hotlink stub, a JSON error) are never written:
+  * the call fails with `not_image` instead, so the file the decoder chokes on
+  * can no longer be created or kept.
+  */
 export declare function downloadCover(sourceJson: string, coverUrl: string, destDir: string): Promise<string>
 
 /** Fetch a URL over the network (async, returns a Promise in ArkTS). */

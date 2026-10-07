@@ -10,6 +10,8 @@
 //   链路校验：  detect_one / detect_chain（搜索→详情→目录→正文）/ DEFAULT_DETECT_TIMEOUT_MS
 //   正文清洗：  ct_of / spec_for / clean_text / strip_script_style / eval_rule_concat
 //   书名匹配：  normalize_book_name / names_match / bigram_jaccard
+//   封面：      cover_cache_path / looks_like_image / has_image_magic /
+//               starts_like_markup / cached_cover_is_usable / download_cover
 //   测试基建：  文件尾部 `#[cfg(test)]` 内有 mock_server（本地 TcpListener 造页面，可复用）
 // ──────────────────────────────────────────────────────────────────────
 
@@ -719,6 +721,91 @@ pub fn names_match(a: &str, b: &str) -> bool {
 
 // ── Cover download ────────────────────────────────────────────
 
+/// Returned when the cover URL answered with something that is not an image
+/// (a detail page, an anti-hotlink stub, a JSON error body).
+const COVER_NOT_IMAGE: &str = "not_image";
+
+/// Cache slot for `cover_url`: `dest_dir/cover_<hash>.img`.
+fn cover_cache_path(dest_dir: &str, cover_url: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    cover_url.hash(&mut hasher);
+    format!("{}/cover_{:x}.img", dest_dir.trim_end_matches('/'), hasher.finish())
+}
+
+/// Bitmap container signatures the platform decoder (`ImageSource` →
+/// `PixelMap`) understands. Everything else would only be written to the cache
+/// to fail later with `Failed to create the image plugin` (62980118).
+fn has_image_magic(b: &[u8]) -> bool {
+    const MAGIC: [&[u8]; 6] = [
+        b"\xFF\xD8\xFF",      // JPEG
+        b"\x89PNG\r\n\x1a\n", // PNG
+        b"GIF87a",            // GIF
+        b"GIF89a",
+        b"BM",                // BMP
+        b"\x00\x00\x01\x00", // ICO
+    ];
+    if MAGIC.iter().any(|m| b.starts_with(m)) {
+        return true;
+    }
+    // RIFF container: `RIFF????WEBP`
+    if b.len() >= 12 && b.starts_with(b"RIFF") && &b[8..12] == b"WEBP" {
+        return true;
+    }
+    // ISO base media file format: `ftyp` box at offset 4 (HEIC / HEIF / AVIF).
+    b.len() >= 12 && &b[4..8] == b"ftyp"
+}
+
+/// Bodies that begin like markup / JSON / plain whitespace (an HTML page, a
+/// hotlink-protection stub, an API error) are never bitmaps.
+fn starts_like_markup(bytes: &[u8]) -> bool {
+    let b = bytes.strip_prefix(b"\xEF\xBB\xBF".as_slice()).unwrap_or(bytes);
+    match b.iter().find(|c| !c.is_ascii_whitespace()) {
+        Some(c) => matches!(c, b'<' | b'{' | b'['),
+        None => true,
+    }
+}
+
+fn is_text_content_type(ct: &str) -> bool {
+    ct.starts_with("text/")
+        || ct.contains("json")
+        || ct.contains("xml")
+        || ct.contains("javascript")
+}
+
+/// Whether a fetched body is worth caching as a cover.
+fn looks_like_image(bytes: &[u8], content_type: &str) -> bool {
+    if bytes.is_empty() || starts_like_markup(bytes) {
+        return false;
+    }
+    if has_image_magic(bytes) {
+        return true;
+    }
+    // Unknown container: trust an explicit `image/*` answer. The App deletes the
+    // file again if its decoder rejects it, so this cannot poison the cache.
+    let ct: String = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    ct.starts_with("image/") && !is_text_content_type(&ct)
+}
+
+/// A cached `cover_*.img` is re-used unless it is empty or begins like markup —
+/// builds before this check cached HTML pages here, which made every render log
+/// `ImageSource` 62980118 and pinned the book to its placeholder forever.
+fn cached_cover_is_usable(path: &str) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 64];
+    match f.read(&mut head) {
+        Ok(n) => n > 0 && !starts_like_markup(&head[..n]),
+        Err(_) => false,
+    }
+}
+
 /// Download a cover with the source's headers/cookies and write it into
 /// `dest_dir`. Returns the absolute file path.
 pub async fn download_cover(
@@ -726,13 +813,9 @@ pub async fn download_cover(
     cover_url: &str,
     dest_dir: &str,
 ) -> Result<String, String> {
-    let mut hasher = DefaultHasher::new();
-    cover_url.hash(&mut hasher);
-    let name = format!("cover_{:x}.img", hasher.finish());
-    let safe_dir = dest_dir.trim_end_matches('/');
-    let path = format!("{safe_dir}/{name}");
+    let path = cover_cache_path(dest_dir, cover_url);
 
-    if std::path::Path::new(&path).exists() {
+    if std::path::Path::new(&path).exists() && cached_cover_is_usable(&path) {
         return Ok(path);
     }
 
@@ -744,6 +827,12 @@ pub async fn download_cover(
         .map_err(|e| e.fail_reason().as_str().to_string())?;
     if result.body_bytes.is_empty() {
         return Err(FailReason::NoResults.as_str().to_string());
+    }
+    if !looks_like_image(&result.body_bytes, &result.content_type) {
+        // Never cache a non-image: the slot is keyed by URL alone, so a poisoned
+        // file would outlive every retry (and every app launch).
+        let _ = std::fs::remove_file(&path);
+        return Err(COVER_NOT_IMAGE.to_string());
     }
 
     std::fs::write(&path, &result.body_bytes).map_err(|e| e.to_string())?;
@@ -839,6 +928,96 @@ mod tests {
             }
         });
         (base, handle)
+    }
+
+    /// Binary-safe blocking server for the cover tests: routes by path.
+    fn mock_cover_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base = format!("http://{addr}");
+        let handle = std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut socket) = stream else { break };
+                let mut buf = [0u8; 2048];
+                let n = socket.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let (ct, body): (&str, Vec<u8>) = if path == "/cover.png" {
+                    ("image/png", PNG_BYTES.to_vec())
+                } else if path == "/cover.html" {
+                    ("text/html", b"<!DOCTYPE html><html>403 hotlink</html>".to_vec())
+                } else {
+                    // Claims to be a JPEG but ships an HTML page.
+                    ("image/jpeg", b"<!DOCTYPE html><html>stub</html>".to_vec())
+                };
+                let mut resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .into_bytes();
+                resp.extend_from_slice(&body);
+                let _ = socket.write_all(&resp);
+            }
+        });
+        (base, handle)
+    }
+
+    /// Only the signature matters here — Rust never decodes the bitmap.
+    const PNG_BYTES: &[u8] =
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00";
+
+    #[test]
+    fn test_looks_like_image() {
+        assert!(looks_like_image(PNG_BYTES, "image/png"));
+        assert!(looks_like_image(b"\xFF\xD8\xFF\xE0\x00\x10JFIF", ""), "jpeg");
+        assert!(looks_like_image(b"RIFF\x00\x00\x00\x00WEBPVP8 ", ""), "webp");
+        assert!(looks_like_image(b"GIF89a\x01\x00", "image/gif"), "gif");
+        assert!(looks_like_image(b"\x00\x00\x00\x18ftypheic", ""), "heic");
+        // A page / stub / API error body is never a cover.
+        assert!(!looks_like_image(b"<!DOCTYPE html><html><body>403</body>", "text/html"));
+        assert!(!looks_like_image(b"<!DOCTYPE html><html></html>", "image/png"), "lying ct");
+        assert!(!looks_like_image(b"{\"code\":404}", "application/json"));
+        assert!(!looks_like_image(b"", "image/png"));
+        assert!(!looks_like_image(b"   \n\t ", "image/png"));
+        assert!(!looks_like_image(b"\xEF\xBB\xBF<!DOCTYPE html>", "image/png"), "bom");
+        // Unknown binary container: only an explicit `image/*` lets it through.
+        assert!(!looks_like_image(b"ZZZZ\x01\x02", "application/octet-stream"));
+        assert!(looks_like_image(b"ZZZZ\x01\x02", "image/avif"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_download_cover_validates_and_self_heals() {
+        let (base, _h) = mock_cover_server();
+        let source = sample_source(&base);
+        let dir = std::env::temp_dir().join(format!("legado-cover-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_s = dir.to_string_lossy().to_string();
+
+        // 1. A page is refused and nothing is written (no poisoned slot).
+        let page = format!("{base}/cover.html");
+        assert_eq!(download_cover(&source, &page, &dir_s).await, Err(COVER_NOT_IMAGE.into()));
+        assert!(!std::path::Path::new(&cover_cache_path(&dir_s, &page)).exists());
+        // Same for a body that lies about its content type.
+        let stub = format!("{base}/cover.stub");
+        assert_eq!(download_cover(&source, &stub, &dir_s).await, Err(COVER_NOT_IMAGE.into()));
+        assert!(!std::path::Path::new(&cover_cache_path(&dir_s, &stub)).exists());
+
+        // 2. A real image is cached and re-used as-is.
+        let png = format!("{base}/cover.png");
+        let path = download_cover(&source, &png, &dir_s).await.unwrap();
+        assert_eq!(path, cover_cache_path(&dir_s, &png));
+        assert_eq!(std::fs::read(&path).unwrap(), PNG_BYTES);
+        assert_eq!(download_cover(&source, &png, &dir_s).await.unwrap(), path);
+
+        // 3. A slot poisoned by an older build is re-downloaded, not returned.
+        std::fs::write(&path, b"<!DOCTYPE html><html>403</html>").unwrap();
+        assert_eq!(download_cover(&source, &png, &dir_s).await.unwrap(), path);
+        assert_eq!(std::fs::read(&path).unwrap(), PNG_BYTES);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn sample_source(base: &str) -> BookSource {

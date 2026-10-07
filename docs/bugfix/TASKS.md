@@ -18,7 +18,9 @@
 > **2026-10-07 第八次同步**：⑦ T-SHELF-6（P2）已修**真根因**——不是文档口径问题，而是 TOC 缓存**事实上永久**（`CachedToc.fetchedAt` 写了从没人读）→ 连载书新章永不出现；
 > 现加 6h 新鲜期 + 打开书时**后台重爬**（失败静默回退缓存，章数变化时用新分母重写 `percent` 让书架自愈）。文档口径同步改为「快照」；
 > 真机 8 项证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §13。
-> 当前 open：**4 项 `[ ]`**（T-READ-1 / T-READ-3 顺延 · T-SHELF-5 / T-TTS-4 未开始）。
+> **2026-10-08 第九次同步**：⑧ T-SHELF-5（P2）已修并真机复验——不是「缓存文件损坏」或取用路径问题，而是**引擎把非图片正文（详情页 / 防盗链 HTML）写进了 `cover_*.img` 且命中缓存即早退**，中毒 slot 永不复检（封面永久占位 + 每次渲染刷 `ImageSource` 62980118）；
+> 现改为「写盘前嗅探图片签名 + 缓存命中先验头 64 B（旧毒文件则删除重下）+ ArkTS 解不开就删文件」。修复后启动 8s 内该组错误 **15 行 → 0 行**，真机证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §14。
+> 当前 open：**3 项 `[ ]`**（T-READ-1 / T-READ-3 顺延 · T-TTS-4 已登记暂不改）。
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
 ---
@@ -96,9 +98,25 @@
   - 证据（转译产物）：`entry/build/.../esmodule/debug/entry/src/main/ets/pages/Shelf.ts` 里该参数位退化为 `globalThis.Gesture.create(GesturePriority.Parallel); globalThis.Gesture.pop();`（**空手势**）；真机 `uinput -T -d x y -i 900 -u x y` 实测 Down/Up 间隔 935ms 但无任何 gesture 回调。
   - **处置（2026-10-07）**：改为内联手势字面量 `.parallelGesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => this.onLongPress(entry)))`（grid/list 两分支同形），helper 改名 `onLongPress(entry): void`（只留 `longPressFired=true` + `edit.enter`）。理由：`.gesture()/.parallelGesture()` **只接受内联手势字面量**；且 `.gesture()` = `GesturePriority.Low` 会输给祖先识别器。
   - 验证：✅ 真机长按 +498ms 进编辑态（D1/D19）；已回写计划 §1.6 #42/#43、§5 K16、§5.2。
-- [ ] **T-SHELF-5（R12）封面解码失败日志**：真机启动时反复出现 `ImageSource: failed to create decoder object` / `image decode error, ret:[62980118]` / `ImageSourceNapi: Create PixelMap error`，未定位是缓存封面文件损坏、还是 `BookCover`/`pixelMap` 取用路径问题。仅日志噪音还是用户可见空封面，待确认。
-  - 证据：2026-10-07 真机 `hilog -x`（启动即出现，pid 17846 子线程）；`components/BookCover.ets`。与远端 TTS 改动无关。
-  - 复现条件（2026-10-07 release 冒烟）：release 包启动时同样出现同一组 `ImageSource` / `62980118` 错误 → 与 debug/release 无关；封面显示本身正常，暂按日志噪音对待。
+- [x] **T-SHELF-5（R12）封面解码失败日志（2026-10-08 真机修复）**：根因**不是**「缓存文件损坏」也不是 `BookCover`/`pixelMap` 取用路径，而是 **Rust `download_cover` 只校验正文非空、完全不校验是不是图片**（详情页 / 防盗链 HTML 照样落盘），且 `if path.exists() { return Ok(path) }` **命中即早退** ⇒ 中毒 slot 永不复检/永不重下。
+  定性：**既是日志噪音也是用户可见空封面**（该封面永久停在红渐变占位，且每次组件重建都重试解码 → 错误刷屏）。
+  - 取证链（真机 + 主机双向）：① `62980118` 在 SDK `@ohos.multimedia.image.d.ts` = **Failed to create the image plugin**（数据不是可识别的图片格式），非「文件损坏」的笼统码；
+    ② `hdc file recv` 拉回沙箱 28 个 `cover_*.img` 逐个 `file` 检查：**仅 `cover_abfeec91b5ff5574.img` 是 HTML**（《天堂向左 深圳往右》详情页 10936 B）；自建 rustc 小程序复算 `DefaultHasher` 确认 `abfeec91b5ff5574 == hash("https://tiantangxiangzuoshenzhenwangyou.qwyd.net/")`，与该书 DB 行 `books.cover_url`（`8200e532`）一致；
+    ③ `uitest dumpLayout`：`剑来` 封面区无 Text（图片正常渲染），《天堂向左》《大唐》（封面 URL 为空）封面区各有书名 Text → 走占位分支 ⇒ 失败是**用户可见空封面**；
+    ④ 该书的 page-as-cover 值属 DB 历史行（现源 `🔖天堂向左 深圳往右` 的 ruleSearch / ruleBookInfo **都没有 coverUrl 规则**，`make probe … search/info` 现版都返回 `coverUrl: ""`），但**源规则改动 / 防盗链返回 HTML 页面（200 + text/html）是现实常见情形**，且一旦中毒永不自愈 ⇒ 修的根本价值在「不再可能被毒化 + 自愈既有中毒项」。
+  - 处置（Rust `runtime.rs`，封面段）：抽出 `cover_cache_path`；新增 `has_image_magic`（JPEG / PNG / GIF87a·89a / BMP / ICO / `RIFF….WEBP` / offset 4 处 `ftyp` 的 HEIC·HEIF·AVIF）、`starts_like_markup`（跳 UTF-8 BOM 与空白后首字节是 `<` / `{` / `[`，或全空白）、`looks_like_image`（markup 直接否；有 magic 直接是；否则只认 `image/*` 且非 text）、`cached_cover_is_usable`（读头 64 B）；
+    `download_cover` = 「缓存命中需 `cached_cover_is_usable` 才复用（否则删除旧文件重下 = **自愈**）」+「写盘前 `looks_like_image` 校验，不是图片则**删文件 + 不落盘**，返回 `not_image`」；`status.rs::fail_message` 加 `not_image` 文案（不新增 `FailReason` 变体）。
+  - 处置（ArkTS `components/BookCover.ets`）：新增会话级 `failedCache`（上限 128）⇒ 同一 URL 每会话只尝试一次（失败 URL 原本不进任何缓存，故每次重渲染都重试、重复刷屏）；catch 里清 `pathCache` 并 `fileIo.unlinkSync` 掉解不开的文件（下个会话可重下），保留一条 `hilog.warn`（带 url + 原因，现在每 URL 每会话恰一次）。
+  - 验证（2026-10-08 · 设备 `33Z0224424136564` · debug · `make test` → `make rust` → `make run`）：
+    ① `make test` **56 项全过**（新增 `test_looks_like_image` + `test_download_cover_validates_and_self_heals`，后者含「拒绝 HTML 不落盘 / content-type 说谎也拒 / 接受 PNG 且字节相符 / **预置毒文件 → 自愈重下**」）；
+    ② 启动后 8s 抓 `hilog`：`62980118` / `failed to create decoder object` / `Create PixelMap error` **0 行**（修复前基线 15 行 = 3 次尝试 × 5 行）；
+    ③ 恰一条 `SourceReaderCover: cover unavailable url=https://tiantangxiangzuoshenzhenwangyou.qwyd.net/ err=not_image`（基线插桩为 `err=undefined`，说明现在引擎能说清原因）；
+    ④ 沙箱中毒文件 `cover_abfeec91b5ff5574.img` 已消失；`hdc file recv` 全部 38 个 `cover_*.img` 经 `file` 检查**全为合法 JPEG，无一 HTML**；
+    ⑤ `uitest dumpLayout` 与修复前**逐行一致**（`剑来` 仍无占位 Text = 正常封面未回归；另两本仍占位 = 预期）；
+    ⑥ 书架↔搜索来回切 3 轮：**0 条封面日志**（负缓存生效，不再重复下载/解码）；
+    ⑦ 搜索「剑来」107 条结果 + 5 个新下载封面全部解码成功（新下载路径未被守卫误杀）。
+  - 未覆盖：release 包未复跑；跨启动不重下需要持久负标记 `cover_*.miss`，**故意不做**（会破坏 `CacheTrim` 的 `cover_` 前缀 + `.img` 后缀扫描 → 变成永不被清理的泄漏），接受「每次启动对该 URL 一次无效请求」；`ImageSource.release()` 未加（无法无截图验证渲染，风险大于收益）。
+  - 证据：`rust/legado-engine/src/runtime.rs`（`cover_cache_path` / `looks_like_image` / `download_cover` / tests）、`rust/legado-engine/src/status.rs`、`entry/src/main/ets/components/BookCover.ets`；完整修复说明见 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §14。
 
 ## 搜索（Search）
 
@@ -282,5 +300,5 @@
 **未覆盖 / 新发现**
 1. 备份「全量覆盖」语义与文案不符 → 新立 **T-DATA-7**（已于同日修复并真机复验，见该条目）。
 2. release 包下应用自己的 `hilog`（domain 0x0000）被系统过滤，`hilog -T SourceReaderTts` 恒为空 → release 冒烟只能靠系统侧日志 + `dumpLayout`（已记入 [`../PITFALLS.md`](../PITFALLS.md)）。
-3. 启动即出现的 `ImageSource` / `62980118` 噪音在 release 同样复现（T-SHELF-5，仍未定位）。
+3. 启动即出现的 `ImageSource` / `62980118` 噪音在 release 同样复现 → **2026-10-08 已定位并修复**（T-SHELF-5）：是引擎把 HTML 正文当封面缓存 + 命中早退，非 release 特有；修后 debug 真机 0 行，release 未复跑。
 4. 规则调试器页本轮未跑（不在冒烟范围；该页确实已存在，见 `pages/RuleDebugger.ets`）。

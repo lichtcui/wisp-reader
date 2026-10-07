@@ -15,7 +15,7 @@
 - M5 结果（2026-09-25，真机验证） — L37
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
 - 未决 / 风险 — L111
-- 交接备忘 — L151
+- 交接备忘 — L156
 <!-- TOC:END -->
 
 ---
@@ -131,6 +131,11 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   并用新分母重写 `percent` 让书架自愈），顺带把 `buildTocItems` 改用 `setItems()`（**LazyForEach 只在创建时读一次数据源**，换实例不刷新已挂载列表）；
   书架三态文档口径同步改为「快照」。真机 8 项证据（含插桩伪造新章 → 目录 29 章 + 书架 `28章/29章`；TTL = 0 / 2000ms / 6h 三档）→
   [`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §13、[`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-SHELF-6。
+- **T-SHELF-5 封面解码失败日志（2026-10-08）**：定性从「待确认的日志噪音」纠正为**真 bug（日志噪音 + 用户可见永久空封面）**——
+  根因不在解码器也不在 `BookCover` 取用路径，而是 **Rust `download_cover` 不校验正文是不是图片**（详情页 / 防盗链 HTML 照样写进 `cover_*.img`）**且缓存命中即早退**（中毒后永不复检/永不重下，
+  每次渲染重试解码 → `ImageSource` / `62980118` 刷屏）。修法：写盘前嗅探图片签名（非图片不落盘，返回 `not_image`）+ 缓存命中先验头 64 B（旧毒文件删除重下 = 自愈）+ ArkTS 解不开就删文件并负缓存（每 URL 每会话只试一次）。
+  真机：启动 8s 内该组错误 **15 行 → 0 行**，沙箱 38 个封面缓存**全为合法 JPEG**、中毒文件已消失，封面渲染布局与修复前逐行一致（无回归）→
+  [`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §14、[`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-SHELF-5。
 - **书架编辑模式（多选删除）**：已实施并真机验证（2026-10-07，D1–D21）—— 见上文同名节；
   计划 / 逐步代码 / DoD 逐条证据见 [`archive/SHELF-EDIT-PLAN.md`](./archive/SHELF-EDIT-PLAN.md)（§7 / §8 / §10 / §12.3），
   五轮审计轨迹原文见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §附。
