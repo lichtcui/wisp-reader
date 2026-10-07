@@ -122,7 +122,7 @@
 
 **建议（发布前必做）**
 1. 申请正式 Release 证书与 Profile（release 类型、distribution-certificate），新增独立 `signingConfig` 并仅绑定 `products.default` 的 Release 构建；Debug 与 Release 身份分离。
-2. 按 `AGENTS.md` §7：将 `build-profile.json5` 的本地签名差异 `git update-index --skip-worktree`，仓库保存 `signingConfigs: []` 干净版；**勿提交**含路径/口令的版本。
+2. 按 `AGENTS.md` §约定：将 `build-profile.json5` 的本地签名差异 `git update-index --skip-worktree`，仓库保存 `signingConfigs: []` 干净版；**勿提交**含路径/口令的版本。
 3. 完成正式 Release 构建后用 `hap-sign-tool verify-app` + `verify-profile` 复核 profile 类型为 release 且 bundle 一致。
 
 ---
@@ -156,7 +156,7 @@
 
 ## 5. 真机冒烟（2026-09-27，设备 `33Z0224424136564`）
 
-设备接通后完成 `AGENTS.md` §4 闭环（安装 → `aa force-stop` → `aa start` → `hilog`/`uitest` 观测）。
+设备接通后完成 `docs/development.md` 闭环（安装 → `aa force-stop` → `aa start` → `hilog`/`uitest` 观测）。
 release 与 debug 两个包均验证；release 包**不输出 App 自身 `hilog`**（仅系统日志），故 TTS 链路证据取自 debug 包。
 
 | 观测项 | 结果 |

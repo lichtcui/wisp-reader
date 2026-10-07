@@ -113,7 +113,7 @@
 
 - [ ] **T-VER-1 clean 构建复验**：执行一次非增量的 `hvigorw assembleHap ... --no-daemon`，确认冷构建可复现。
 - [ ] **T-VER-2 Rust 回归**：若改动引擎，`cd rust/legado-engine && cargo test`（当前记录 54 passed）并重出 `.so`。
-- [ ] **T-VER-3 真机闭环**：每个修复按 `AGENTS.md` §4 走「编译 → 安装 → `aa force-stop` → 重启 → hilog `SourceReaderTts`/`SourceReaderPoC` 观察」。
+- [ ] **T-VER-3 真机闭环**：每个修复按 `docs/development.md` 走「编译 → 安装 → `aa force-stop` → 重启 → hilog `SourceReaderTts`/`SourceReaderPoC` 观察」（流程清单见 skill `harmony-device-run`）。
 - [ ] **T-VER-4 混淆确认**：新增 JSON 字段时同步 `entry/obfuscation-rules.txt` 的 `-keep-property-name`。
 - [ ] **T-VER-5 文档补齐**：补 `docs/bug.md`（progress.md 引用但缺失）或在 progress.md 去除引用。
 

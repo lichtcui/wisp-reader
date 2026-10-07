@@ -178,7 +178,7 @@
 - [ ] §2 的 7 处调用点**全部同步**（样式改动不分页面，一处改即全改）
 - [ ] `showHeader` 约定未被破坏
 - [ ] 新增/改名的 JSON 字段（若有）已加进 `entry/obfuscation-rules.txt`
-- [ ] 真机闭环：编译 → 安装 → `aa force-stop` → `aa start` → 观察（`AGENTS.md` §4）
+- [ ] 真机闭环：编译 → 安装 → `aa force-stop` → `aa start` → 观察（见 `docs/development.md`）
 
 ---
 

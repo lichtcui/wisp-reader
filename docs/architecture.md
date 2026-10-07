@@ -82,11 +82,34 @@ MainPage (Tabs)
 - 所有颜色走 `resources/{base,dark}/element/color.json` 令牌化。
 - 参考项目：`~/Documents/playground/harmony-pokerouge`（白+红、扁平、iOS 分组列表）。
 
-## 目录结构（目标，见 plan §11）
+## 目录结构（当前）
 
 ```
-entry/src/main/ets/
-  pages/ components/ engine/ model/ common/ viewmodel/
-entry/src/main/cpp/types/liblegado_core/   NAPI 类型声明
-rust/legado-core/                          Rust 引擎 crate
+AGENTS.md / README.md        根目录只放这两个文档（其余文档一律进 docs/）
+docs/                        plan / progress / architecture / engine / development /
+                             PITFALLS / decisions；specs/ / research/ / bugfix/ / handoff/
+build-profile.json5          含 signingConfigs（**含凭据，勿提交**）
+.cargo/config.toml           cargo 镜像（rsproxy）
+entry/
+  libs/arm64-v8a/liblegado_core.so        native 产物
+  src/main/module.json5                   权限 INTERNET / KEEP_BACKGROUND_RUNNING
+  src/main/ets/
+    entryability/  EntryAbility
+    pages/         Index / Shelf / Search / SearchResult / BookDetail / Reader / Listening /
+                   ListeningSettings / BookSourceManage / Settings / ReadingSettings /
+                   GeneralSettings / CacheManage / BackupManage / RuleDebugger
+    ui/common/     BottomDrawer（唯一抽屉实现）/ AppBackButton / FloatingListenButton / MoreMenuButton
+    engine/        IBookEngine（端口）+ BookEngineNapi + types
+    model/         SourceRepository / ShelfRepository / CacheRepository / SourceConfidence /
+                   BookContent / ChapterCache / TocCache / LocalBook / BookRemoval /
+                   ShelfEditState / TtsController / RemoteTtsClient
+    common/        Const（含 ROUTE_*）/ Format / Prefs / Theme / ReaderTheme / Window /
+                   ChapterUtil / ChapterDataSource / SourceListDataSource
+    components/    EmptyView / ListCells / BookCover
+  src/main/cpp/types/liblegado_core/      NAPI 类型声明
+  src/main/resources/rawfile/bundled-sources.json   v1 兼容内置源（13 个）
+rust/legado-engine/  纯 Rust 核心（可主机 cargo test）+ examples/bundled_gen.rs
+rust/legado-core/    薄 NAPI 层（cdylib），依赖 legado-engine
 ```
+
+> 目录会随迭代变化；**权威以 `rg --files` 为准**，本表只用于定位。

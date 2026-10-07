@@ -8,7 +8,8 @@
 > - 视觉基准：`~/Documents/playground/harmony-pokerouge`（白 + 红、扁平）
 >
 > **实施进度**：M0–M5 ✅ 已完成真机验证；M6 未开始。
-> 进度、验证结果与下一步见 [`progress.md`](./progress.md)；接手说明见 [`../AGENTS.md`](../AGENTS.md)。
+> ⚠️ 本文件是**设计归档，无需通读**——按需查对应章节即可。
+> **当前状态 / 文档路由见 [`../AGENTS.md`](../AGENTS.md)**；进度流水见 [`progress.md`](./progress.md)；决策摘要见 [`decisions.md`](./decisions.md)。
 > 本文件是**唯一权威设计**，只描述目标方案，不随进度改动。
 
 ---

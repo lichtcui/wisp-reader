@@ -8,7 +8,8 @@ HarmonyOS NEXT 原生阅读 App，兼容 [Legado](https://github.com/gedoor/lega
 - **v1 范围**：搜索 → 详情 → 加入书架 → 阅读（横向分页翻页）→ 听书。
 - **v1 不做**：JS 运行时、登录型源、换源、发现(explore)、真分页、在线 TTS。
 
-> 完整设计见 [`docs/plan.md`](./docs/plan.md)；开发/构建说明见 [`AGENTS.md`](./AGENTS.md) 与 [`docs/`](./docs)。
+> 完整设计见 [`docs/plan.md`](./docs/plan.md)；开发/构建说明见 [`docs/development.md`](./docs/development.md)；
+> 文档路由见 [`AGENTS.md`](./AGENTS.md)。
 
 ## 当前进度
 
@@ -34,7 +35,7 @@ export OHOS_NDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk/default/openha
 cd rust/legado-core && ohrs build --arch arm64 --release
 cp dist/arm64-v8a/liblegado_core.so ../../entry/libs/arm64-v8a/
 
-# 2) 构建 HAP（需 DevEco 自动签名，见 AGENTS.md）
+# 2) 构建 HAP（需 DevEco 自动签名，见 docs/development.md）
 export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk
 export PATH="/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applications/DevEco-Studio.app/Contents/tools/ohpm/bin:$PATH"
 /Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw assembleHap \

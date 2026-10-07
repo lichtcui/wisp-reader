@@ -87,6 +87,6 @@ cargo run --example bundled_gen -- \
 ## 新增一个 NAPI 导出
 
 1. 在 `rust/legado-core/src/lib.rs` 加函数，标 `#[napi]`；异步用 `async fn`。
-2. 重新构建：`ohrs build --arch arm64 --release`（见 `AGENTS.md` §4）。
+2. 重新构建：`ohrs build --arch arm64 --release`（见 [`development.md`](./development.md)）。
 3. 用生成的 `dist/index.d.ts` 更新 `entry/src/main/cpp/types/liblegado_core/index.d.ts`。
 4. 拷贝 `.so` 到 `entry/libs/arm64-v8a/`，重编 HAP。

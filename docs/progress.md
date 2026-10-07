@@ -1,5 +1,6 @@
 # 进度 / 下一步
 
+> ⚠️ **本文件是进度流水（历史归档），无需通读。** 当前状态与文档路由见 [`../AGENTS.md`](../AGENTS.md)。
 > 权威设计见 [`plan.md`](./plan.md)（含 27 项修订与全部决策）。本文件只记**进度与待办**。
 
 ## 里程碑状态
@@ -546,7 +547,8 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 
 ## 交接备忘
 
-- 构建/安装/调试命令见 [`../AGENTS.md`](../AGENTS.md) §4。
+- 构建/安装/调试命令见 [`development.md`](./development.md)（流程清单见 skill `harmony-device-run`）。
+- 踩坑按症状查 [`PITFALLS.md`](./PITFALLS.md)；技术决策与理由见 [`decisions.md`](./decisions.md)。
 - **底部抽屉规范见 [`specs/UI-SPEC.md`](./specs/UI-SPEC.md)**（唯一权威；改动抽屉必须全项目同步）。
 - 引擎复用清单与门禁见 [`engine.md`](./engine.md)。
 - 架构与 NAPI 边界见 [`architecture.md`](./architecture.md)。
