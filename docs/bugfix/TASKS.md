@@ -40,6 +40,8 @@
   - 证据（转译产物）：`entry/build/.../esmodule/debug/entry/src/main/ets/pages/Shelf.ts` 里该参数位退化为 `globalThis.Gesture.create(GesturePriority.Parallel); globalThis.Gesture.pop();`（**空手势**）；真机 `uinput -T -d x y -i 900 -u x y` 实测 Down/Up 间隔 935ms 但无任何 gesture 回调。
   - **处置（2026-10-07）**：改为内联手势字面量 `.parallelGesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => this.onLongPress(entry)))`（grid/list 两分支同形），helper 改名 `onLongPress(entry): void`（只留 `longPressFired=true` + `edit.enter`）。理由：`.gesture()/.parallelGesture()` **只接受内联手势字面量**；且 `.gesture()` = `GesturePriority.Low` 会输给祖先识别器。
   - 验证：✅ 真机长按 +498ms 进编辑态（D1/D19）；已回写计划 §1.6 #42/#43、§5 K16、§5.2。
+- [ ] **T-SHELF-5（R12）封面解码失败日志**：真机启动时反复出现 `ImageSource: failed to create decoder object` / `image decode error, ret:[62980118]` / `ImageSourceNapi: Create PixelMap error`，未定位是缓存封面文件损坏、还是 `BookCover`/`pixelMap` 取用路径问题。仅日志噪音还是用户可见空封面，待确认。
+  - 证据：2026-10-07 真机 `hilog -x`（启动即出现，pid 17846 子线程）；`components/BookCover.ets`。与远端 TTS 改动无关。
 
 ## 搜索（Search）
 
@@ -65,6 +67,11 @@
   - 证据：`model/TtsController.ets:705-721`、`:880-907`
 - [ ] **T-TTS-3 错误态恢复**：`onError` 后 `playing=false`，确认 UI 与 `AVSession` 状态一致、可重试。
   - 证据：`model/TtsController.ets:585-590`、`pages/Listening.ets:359-374`
+- [ ] **T-TTS-4（R11）远端 TTS 并发预取导致 VPS RTF 劣化**：`AHEAD_REMOTE=3` 使 VPS 同时跑 3 个 ZipVoice 请求，而服务端固定 `num_threads=4` → 12 线程挤 4 核，RTF 由单请求的 **0.767/0.784** 涨到 **1.655 / 1.753 / 2.580 / 6.428**（2026-10-07 真机实测）。当前靠 3 段预取缓冲仍能实时不断流（60s 墙钟推进 60s 音频，`play para=1…8` 连续），但余量很薄，网络或负载稍差即可能欠载。
+  - 证据：VPS `journalctl -u tts | grep 'remote-tts synth'`（对比并发期与停 App 后单请求）；`common/Const.ets`（`AHEAD_REMOTE`）、`model/TtsController.ets`（`ensureRemoteSynthesized` 的 `issuedIndex - flushIndex < AHEAD_REMOTE`）。
+  - 可选方向（二选一，均需重新部署/真机复测）：① 服务端 `app.py` 加并发锁串行化 → RTF 稳定 ≈0.77，代价是首段等待变长；② 下调 `AHEAD_REMOTE` → 并发降低但预取缓冲变薄、欠载风险上升。
+  - 文档缺口：`docs/remote-tts-deploy.md` §3 现写「RTF≈0.92 仍 <1」，**只对单请求成立**，需补注并发场景。
+  - 用户处置（2026-10-07）：**确认先不改代码**，仅登记待办。
 
 ## 书源管理（BookSourceManage）
 
