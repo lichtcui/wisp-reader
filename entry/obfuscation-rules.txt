@@ -146,6 +146,19 @@ exportedAt
 sources
 books
 progress
+# 模型 / 缓存 / 进度字段（types.ets 的 Book / Chapter / ReadProgress / ChapterCache）
+# 这些名字会经 JSON 往返（备份文件、章节缓存文件、本地书目录），被混淆后 release 里会
+# 读成 undefined（debug 正常）且备份文件变得不可移植。新增字段时同时改 types.ets 与本文件。
+# 核对：scripts/check-keep-props.sh（= make check）。
+addedAt
+bookId
+chapterIndex
+chapterTitle
+charOffset
+inShelf
+paragraphIndex
+percent
+updatedAt
 # Native NAPI import names (liblegado_core.so) — must match the .so exports
 -keep-global-name
 bookInfo

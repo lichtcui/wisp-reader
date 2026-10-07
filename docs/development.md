@@ -24,7 +24,12 @@
 | `make hap` / `make hap-release` | 只编译（debug / release+混淆+签名） |
 | `make rust` | 交叉编译 `.so` **并拷 `index.d.ts`** 进 `entry/` |
 | `make test` | 主机跑引擎单测（`cargo test`，不碰真机） |
+| `make probe` | 主机直跑引擎，不上设备：`make probe ARGS='源.json search 关键词'` |
 | `make log` | 清日志 + 实时过滤 `SourceReaderPoC` |
+| `make log Q=关键词` | 同上，并在主机侧再筛一遍关键词 |
+| `make run-release` | 同 `make run` 但装 release 包（验证混淆 / 备份等只在 release 现形的问题） |
+| `make doctor` | 自检：`.so` / `index.d.ts` / HAP 是否落后于源码 + 设备是否连着 |
+| `make check` | 自检文档与契约：行号目录是否过期 / md 失效链接 / JSON 字段是否都进 keep 列表 |
 | `make devices` | 列出设备 UDID |
 | `make docs-toc` | 重建大文档顶部的行号目录 |
 
@@ -86,6 +91,7 @@ $HDC shell hilog -x -T SourceReaderPoC   # 按 tag 过滤；裸 hilog -x | grep 
 - Rust 侧 `panic`/`unwrap` 会在设备上崩溃，尽量 `Result` 化。
 - ArkTS 严格模式：不用 `any`；`getHostContext()` 返回 `Context | undefined` 需判空。
 - release 已开混淆：新增 JSON 字段名等点语法属性名要加进 `entry/obfuscation-rules.txt` 的 `-keep-property-name`。
+  判定范围与缺项由 `make check`（`scripts/check-keep-props.sh`）机械核对，别靠眼睛看 159 行列表。
 
 ## Skill 来源
 
@@ -118,7 +124,7 @@ $HDC shell hilog -x -T SourceReaderPoC   # 按 tag 过滤；裸 hilog -x | grep 
 
 | 项 | 路径 |
 |---|---|
-| 命令统一入口 | `Makefile`（`make help`）；文档目录生成器 `scripts/docs-toc.sh` |
+| 命令统一入口 | `Makefile`（`make help`）；`scripts/`：`docs-toc.sh`（行号目录，`--check` 只校验）· `doctor.sh`（产物/设备自检）· `check-keep-props.sh` · `check-docs-links.sh` |
 | Rust 引擎核心（纯 Rust，可 `cargo test`） | `rust/legado-engine/` |
 | Rust NAPI 包装（cdylib） | `rust/legado-core/` |
 | 内置书源生成器 | `rust/legado-engine/examples/bundled_gen.rs` |

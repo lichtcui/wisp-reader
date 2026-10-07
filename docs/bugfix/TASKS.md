@@ -114,7 +114,10 @@
 - [ ] **T-VER-1 clean 构建复验**：执行一次非增量的 `hvigorw assembleHap ... --no-daemon`，确认冷构建可复现。
 - [ ] **T-VER-2 Rust 回归**：若改动引擎，`cd rust/legado-engine && cargo test`（当前记录 54 passed）并重出 `.so`。
 - [ ] **T-VER-3 真机闭环**：每个修复按 `docs/development.md` 走「编译 → 安装 → `aa force-stop` → 重启 → hilog `SourceReaderTts`/`SourceReaderPoC` 观察」（流程清单见 skill `harmony-device-run`）。
-- [ ] **T-VER-4 混淆确认**：新增 JSON 字段时同步 `entry/obfuscation-rules.txt` 的 `-keep-property-name`。
+- [ ] **T-VER-4 混淆确认**：已机械化为 `make check`（`scripts/check-keep-props.sh` 扫描 `types.ets` + 所有含 `JSON.parse/stringify` 的 `.ets` 的 interface 字段 ↔ keep 列表）。
+  - 2026-10-07 补齐漏掉的 9 个：`Book.addedAt/bookId/inShelf`、`ReadProgress.chapterIndex/chapterTitle/charOffset/paragraphIndex/percent/updatedAt`——这些字段会经备份 JSON 往返，漏 keep 会让 release 写出的备份键名与格式不符（跨版本读不回）。
+- [ ] **T-VER-6 release 包真机 smoke（首次）**：`make run-release` 装上 release 包，跑一遍搜索 / 阅读 / 听书 / **备份导出 → 清库 → 导入**（混淆类问题只在这里现形）。
+  - 静态证据（2026-10-07）：release HAP 的 `modules.abc` 里 `addedAt` **完全不出现**（被改名）、`bookSourceUrl` 保留 → `-enable-property-obfuscation` 确实在这些模型字段上生效，非理论风险。
 - [ ] **T-VER-5 文档补齐**：补 `docs/bug.md`（progress.md 引用但缺失）或在 progress.md 去除引用。
 
 ---

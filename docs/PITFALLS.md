@@ -14,7 +14,9 @@
 | Makefile 里拿到的 hdc/NDK 路径不对 | **变量不要用 `?=`**：本机环境已有 `NDK_HOME`/`SDK` 等同名变量，`?=` 会当成“已定义”而不赋值；用 `:=` | 根目录 `Makefile` 顶部注释 |
 | `index.d.ts` 的接口说明/参数与引擎实际行为不一致 | 那份是**产物**：真源是 `rust/legado-core/src/lib.rs` 的 `///` doc comment，改完 `make rust` 会拷过来；**勿手改** `entry/.../index.d.ts` | `docs/engine.md` |
 | 大文档顶部目录的行号指到了错地方 | 目录由 `make docs-toc` 生成，**勿手改行号**（只改 `<!-- TOC:BEGIN/END -->` 之间的东西会丢） | `AGENTS.md` §硬性约定 |
-| release 包 JSON 字段读出来是 `undefined` | `entry/obfuscation-rules.txt` 漏了对应的 `-keep-property-name` | `docs/development.md` §调试要点 |
+| release 包 JSON 字段读出来是 `undefined`（debug 正常） | `entry/obfuscation-rules.txt` 漏了对应的 `-keep-property-name`；不要靠眼睛看列表，跑 `make check` 会列出漏掉的字段名 | `docs/engine.md` §JSON 契约 |
+| 不确定设备上跑的是不是刚改的代码 | 先 `make doctor`：比对 `.so` / `index.d.ts` / HAP 与源码的 mtime + 设备是否连着 | `scripts/doctor.sh` |
+| 改引擎规则想秒级验证，不想上真机 | `make probe ARGS='源.json search 关键词'`（主机直跑引擎，秒级）；`detect` 走完搜索→详情→目录→正文 | `docs/engine.md` §主机侧调试 |
 | 签名报 `unable to obtain user group` | DevEco 的 GRS 请求失败（非账号问题）：重试 → `File > Invalidate Caches / Restart` → 查 HTTP Proxy（本机 `127.0.0.1:7897`） | `docs/development.md` |
 | `ohrs build` 找不到 NDK / 报路径错 | `OHOS_NDK_HOME` **不要**指到 `.../openharmony/native`（`ohrs` 会自己再拼 `native/`） | `docs/development.md` |
 | `cargo` 拉不到 crates.io | 项目根 `.cargo/config.toml` 指向 `rsproxy.cn`，**勿删** | `docs/development.md` |

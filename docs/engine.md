@@ -68,6 +68,38 @@ rust/
 - **安全红线**：`danger_accept_invalid_certs` 已移除；每源独立 `Client`（Cookie 隔离，上限 64 后整体回收）+ `concurrentRate` 限速。
 - **known_gaps（相对 Legado 官方语义）**：负索引、区间选取、`&&`、`children`、`ownText/all` 未支持。
 
+## JSON 契约（跨 NAPI / 落盘的字段名）
+
+引擎与 ArkTS 之间传的是 **serde JSON**，字段名即契约。新增/改名一个字段要同步**三处**：
+
+1. `rust/legado-engine/src/types.rs` 的 struct（`camelCase`，字段名就是 JSON key）；
+2. `entry/src/main/ets/engine/types.ets` 的 interface（同一份类型给 ArkTS 用）；
+3. `entry/obfuscation-rules.txt` 的 `-keep-property-name`（release 开了属性混淆，漏了 → release 读到
+   `undefined`，debug 一切正常）。
+
+第 2、3 步由 `make check`（`scripts/check-keep-props.sh`）机械核对：它扫描 `types.ets` 与所有含
+`JSON.parse/stringify` 的 `.ets` 里的 interface 字段（备份文件、章节/目录缓存、进度），缺一个就报错。
+`BookSource` 用 `#[serde(flatten)] extra` 透传未识别字段，保证导入导出 round-trip 不掉规则。
+
+已知的**不一致**（非 bug，但会让你白查半天）：
+
+- ArkTS 的 `Chapter` 多声明了 `bookId`，**引擎返回的章节没有这个字段**（只有本地导入的书会填它）；
+- 详情页的书名/作者取自搜索结果：部分源压根没写 `ruleBookInfo.name/author`，`make probe info` 打印空串是正常的。
+
+## 主机侧调试：`make probe`（不上真机）
+
+改规则 DSL / URL 模板 / 门禁 / 编码时先在这里秒级验证，不要每轮都走真机：
+
+```bash
+make probe ARGS='entry/src/main/resources/rawfile/bundled-sources.json gate'
+make probe ARGS='源.json search 剑来 --limit 3'
+make probe ARGS='源.json detect 剑来'                 # 逐源校验 搜索→详情→目录→正文
+make probe ARGS='源.json parse html "id.bookintro@tag.p@text" < page.html'
+```
+
+默认只打摘要（样本条数、字数、前 200 字），`--json` 才 dump 完整 JSON；`--index N` 选源，`--timeout`/`--concurrency` 可调。
+完整命令表在 `rust/legado-engine/examples/probe.rs` 头部。网络全在 Rust 侧，与 App 同一条链路（含 header/Cookie/限速/编码）。
+
 ## 生成内置书源
 
 ```bash
@@ -81,6 +113,6 @@ cargo run --example bundled_gen -- \
 ## 新增一个 NAPI 导出
 
 1. 在 `rust/legado-core/src/lib.rs` 加函数，标 `#[napi]`；异步用 `async fn`。
-2. 重新构建：`ohrs build --arch arm64 --release`（见 [`development.md`](./development.md)）。
-3. 用生成的 `dist/index.d.ts` 更新 `entry/src/main/cpp/types/liblegado_core/index.d.ts`。
-4. 拷贝 `.so` 到 `entry/libs/arm64-v8a/`，重编 HAP。
+2. 重新构建：`make rust`（先看 `docs/engine.md` §JSON 契约，新增字段别忘了 keep 列表）。
+3. `make rust` 已把生成的 `dist/index.d.ts` 拷到 `entry/src/main/cpp/types/liblegado_core/index.d.ts`（勿手改）。
+4. 拷贝 `.so` 到 `entry/libs/arm64-v8a/` 一并完成；再 `make run` 上真机。
