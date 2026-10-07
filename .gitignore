@@ -29,7 +29,11 @@ signature/
 
 # local tooling
 .opencode/
-.pi/
+/.pi/*
+# 例外：项目专属 skill 随仓库走（通用 harmony skill 在 ~/Documents/skills.harmony/，
+# 由 .pi/settings.json 按项目声明，不提交）
+!/.pi/skills/
+!/.pi/skills/**
 # Python
 __pycache__/
 *.pyc

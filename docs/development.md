@@ -69,6 +69,25 @@ $HDC shell hilog -x | grep SourceReaderPoC
 - ArkTS 严格模式：不用 `any`；`getHostContext()` 返回 `Context | undefined` 需判空。
 - release 已开混淆：新增 JSON 字段名等点语法属性名要加进 `entry/obfuscation-rules.txt` 的 `-keep-property-name`。
 
+## Skill 来源
+
+本仓库同时用两类 skill，来源不同：
+
+| 类型 | 位置 | 加载方式 |
+|---|---|---|
+| **项目专属**（`harmony-device-run`：真机验证闭环） | 仓库内 `.pi/skills/harmony-device-run/` | `.pi/skills/` 自动发现；**随仓库 git 走**（`.gitignore` 里 `!/.pi/skills/**` 例外） |
+| **通用 harmony**（`harmony-next`、`harmonyos-build-doctor`、`harmonyos-project-audit`、`harmonyos-release-*`） | `~/Documents/skills.harmony/`（中央库，唯一真源） | 本仓库 `.pi/settings.json` 的 `skills` 数组按项目声明 |
+
+为什么不全放全局 `~/.pi/agent/skills/`：那是**全局**目录，非 harmony 项目也会加载，
+每个 skill 白付 name+description（约 50–100 tokens/会话）。
+
+**skill 没加载时的排查顺序**：
+
+1. `.pi/settings.json` 是否存在、路径是否写对（项目 settings 里的路径从 `.pi/` 解析，`~` 可用）；
+2. **项目信任**是否已给（`.pi/` 下的配置与资源在信任后才加载，`pi -a` 可为单次放行，`/trust` 保存决定）；
+3. 是否已 `/reload` 或新开会话；
+4. `~/Documents/skills.harmony/` 是否存在（换机后需重新 `git clone`）。
+
 ## 目录/产物速查
 
 | 项 | 路径 |
