@@ -6,7 +6,11 @@
 > ② release 包首次真机冒烟（T-VER-6）+ 逐项核代码：T-SRC-1 真机复验通过、T-DATA-3 备份往返验证通过（原记「M6 未开始」有误）。
 > 行的 `证据` 行号多为审计时快照，可能已漂移。
 > **2026-10-07 第三次同步**：③ T-DATA-7（导入非「全量覆盖」）已修复并真机复验 —— 导入改为真覆盖（`replaceShelf`）。
-> 当前 open：**6 项 `[ ]`**（T-SHELF-3 / T-READ-1 / T-READ-3 顺延 · T-SHELF-5 / T-TTS-4 未开始 · T-DATA-4 未开始）
+> **2026-10-07 第四次同步**：④ T-DATA-4（缓存上限策略）已实现 ——
+> 口径、算法与验证步骤见 [`../research/CACHE-LIMIT-PLAN.md`](../research/CACHE-LIMIT-PLAN.md)。
+> **2026-10-07 第五次同步**：④ T-DATA-4 已**真机六项压测通过**（含未读先删 / 软保护降级 / toc 连带删 / 新鲜窗口 / 会话保护集 / TTL / 封面水位，逐字节与沙箱对账，常量已还原）；
+> 证据见条目内「验证」段与 [`../research/CACHE-LIMIT-PLAN.md`](../research/CACHE-LIMIT-PLAN.md) §8。
+> 当前 open：**5 项 `[ ]`**（T-SHELF-3 / T-READ-1 / T-READ-3 顺延 · T-SHELF-5 / T-TTS-4 未开始）
 > + **1 项 `[~]`**（T-CROSS-3 仅缓解）。
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
@@ -113,9 +117,28 @@
   - 状态（2026-10-07 更正）：**已实现**——原记「M6 未开始」有误，页面 `entry/src/main/ets/pages/BackupManage.ets`（271 行）随 `f898a23`（2026-10-02）落地；
     **release 真机导出 → 清库 → 导入 → 重启复读已验**（详见 T-VER-6）。残留「覆盖」语义另立 T-DATA-7。
   - 证据：`plan.md:272`、`pages/Settings.ets:88-93`
-- [ ] **T-DATA-4 缓存上限策略**：落实 plan §7「已读永久保留、未读超 N 天清理 / LRU ~200MB」。
-  - 状态（2026-10-07）：**未开始**（原记「M6 范围」，但 M6 其余项均已落地；此项仍无实现）。
-  - 证据：`plan.md:270-271`
+- [x] **T-DATA-4 缓存上限策略**：落实 plan §7「已读永久保留、未读超 N 天清理 / LRU ~200MB」。
+  - 状态（2026-10-07）：**已实现并真机验证通过**（设备 `33Z0224424136564`，debug 包）。
+  - **口径修正（重要）**：plan 原文两项要求互相矛盾 —— 章节缓存按「读一章写一章 + 预取邻居」增长，
+    若「已读永久保留」是绝对的，200MB 上限几乎永不触发（实测 ~9.6KB/章，1441 章的书全读完仅 ~14MB），磁盘无界增长。
+    已按「**已读 = 软保护**」落地：未读先删；仍超配额才按最久未访问（`mtime`）删已读；未读另吃 30 天 TTL。
+  - **实现**：新增 `model/CacheTrim.ets`（`protectBook` / `maybeTrimCaches` / `scheduleStartupTrim` / `trimCaches`）；
+    `CacheRepository` 导出 `chapterDir`/`tocDir`（路径单一来源）；`ChapterCache` 写入后 `maybeTrimCaches` + 命中时节流刷新 `mtime`（真 LRU）；
+    `EntryAbility.onCreate` 在 `initShelf` 成功后延迟 3s 首扫；`Reader.load` / `TtsController.start` 各调一次 `protectBook`。
+    预算常量 8 个进 `common/Const.ets`（200MB / 16MB / 64MB / 0.8 / 30d / 16KB / 5min / 30min）。
+  - **刻意不做**：不新增持久化索引（keep 列表与 `make check` 均无需改）；不动 `filesDir/local` 与 DB；不加设置页配额档位与手动整理入口（纯自动）。
+  - **封面限制**：`cover_<DefaultHasher(url)>.img` 在 ArkTS 侧不可复现 → 无法识别在架书封面，只按最旧 `mtime` 驱逐（重下即恢复）。
+  - 证据：`plan.md:312`（原要求）、`rust/legado-engine/src/runtime.rs:729-733`（封面命名不可复现）
+  - 方案 / 算法 / 验证步骤（含常量压测法）：[`../research/CACHE-LIMIT-PLAN.md`](../research/CACHE-LIMIT-PLAN.md)
+  - 验证：`make check` ✅（keep 扫描全绿）、`make hap` / `make hap-release` ✅。**真机压测（临时压小常量，逐条与沙箱 `ls -l` 对账，验完已全部还原）**：
+    ① 默认常量 `trim scanned=2 freed=0 keptRead=1` → 不误删；
+    ② 配额 4KB → `freed=1 files 3765 B`，删的正是**未读** `_1.json`，**已读** `_0.json` 留下（未读先删）；
+    ③ 配额 2KB → `freed=2 files 9667 B` = 已读章 2856 + 连带删的 toc 6811（逐字节对上），两目录皆空（软保护降级 + toc 联动）；
+    ④ 配额 2KB 但文件 30s 前刚写 → `freed=0`（新鲜窗口保护）；
+    ⑤ 配额 2KB + 窗口 0 + 闸门 1，打开在读的书 → 热路径 `freed=0`（同一会话不打开书则 `freed=3 files 14657 B` 全清）→ `protectBook` 按书生效；
+    ⑥ 配额 200MB + TTL 0 天 → `freed=1 files 3644 B` 只删未读，已读不吃 TTL；
+    ⑦ 封面预算 200KB → `freed=32 files 972410 B`，剩 6 封 161511 B ≤ 滞回线 163840（停在水位内，非清零；书架随后自动重下 6→8）。
+  - 已知代价（设计取舍）：封面文件名不可与 `coverUrl` 互推 → 只按最旧 `mtime` 驱逐，可能重下在架封面（无数据损失）；用目录跳到第 500 章会把 1–499 章算「已读」而受保护（多留不多删）。
 - [x] **T-DATA-5 目录缓存未纳入统计**：`filesDir/tocs/<bookId>.json`（`TocCache` 写入）不在 `CacheStats` 任何分类内，「清理缓存」页显示的数字偏小。
   - **处置（2026-10-07）**：`CacheStats` 增 `toc` 分类；`isChapterFile` **改名**为 `isJsonFile`（chapters 与 tocs 共用，未新增重复函数）；`getCacheStats()` 计入 `toc` 并加入合计；`CacheManage` 增「目录缓存」行 + 文案补「目录」（`CacheRepository.ets`、`CacheManage.ets`）。真机数字比对见 §10 D15（设备离线，待补）。
   - 证据：`model/TocCache.ets:37-45`、`model/CacheRepository.ets:20-56`
@@ -152,7 +175,8 @@
 
 ## 回归验收状态（S10 回归 / 发布，2026-09-27）
 
-> 逐项核对源码 + 构建复核。图例：`✅ 已修复/已核验` · `➖ 缓解` · `⏭ 顺延/范围外` · `🚫 受阻（设备离线）`。
+> 逐项核对源码 + 构建复核。图例：`✅ 已修复/已核验` · `🟡 已实现待真机复验` · `➖ 缓解` · `⏭ 顺延/范围外` · `🚫 受阻（设备离线）`。
+> （`🟡` 目前无条目，保留供以后使用。）
 > 修复均已通过 **clean debug 构建** 与 **release 构建**（`BUILD SUCCESSFUL`）。
 
 | 任务 | 状态 | 处置 / 证据 |
@@ -177,7 +201,7 @@
 | T-DATA-1 封面读穿 | ✅ | S3 已实现：`pathCache` + `accessSync` 校验，命中不重下（`BookCover.ets:58-62`） |
 | T-DATA-2 清理缓存页 | ✅ | S9 已实现并真机核对（`CacheManage.ets`、`CacheRepository.ets`）；本轮增 `cover_*.img` 后缀精确匹配 |
 | T-DATA-3 备份/恢复 | ✅ | **2026-10-07 首次 release 真机往返**：导出 31.83KB（键名全未混淆）→ 清库 → 导入 → 书源 13 / 书架 3 本 / 进度 7 条，重启仍对（见下方「release 冒烟结果」）；原记「M6 未开始」有误（`f898a23`） |
-| T-DATA-4 缓存上限策略 | ⏭ | 未开始（原记 M6 范围；M6 其余项已落地） |
+| T-DATA-4 缓存上限策略 | ✅ | 2026-10-07 落地并真机压测通过：`model/CacheTrim.ets`（配额 + TTL + 新鲜窗口 + 会话保护集，口径改为「已读=软保护」）+ `Const.ets` 8 常量 + `EntryAbility` 启动首扫 + `ChapterCache` mtime 刷新；六项分支逐字节与沙箱对账，方案与证据见 [`../research/CACHE-LIMIT-PLAN.md`](../research/CACHE-LIMIT-PLAN.md) |
 | T-DATA-5 目录缓存未统计 | ✅ | 2026-10-07：`CacheStats.toc` + `CacheManage`「目录缓存」行（`isChapterFile`→`isJsonFile` 改名） |
 | T-DATA-6 清理缓存漏 `tocs` | ✅ | 2026-10-07：`clearCache()` 增 `removeDir(filesDir/tocs)` |
 | T-VER-1 clean 构建 | ✅ | `hvigorw clean` + `assembleHap debug --no-daemon` → `BUILD SUCCESSFUL`（全量任务） |

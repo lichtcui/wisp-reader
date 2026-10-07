@@ -3,6 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { applyThemeMode, readThemeMode } from '../common/Theme';
 import { applyKeepScreenOn, readKeepScreenOn, setMainWindow } from '../common/Window';
+import { scheduleStartupTrim } from '../model/CacheTrim';
 import { initShelf } from '../model/ShelfRepository';
 import { TtsController } from '../model/TtsController';
 
@@ -14,9 +15,15 @@ export default class EntryAbility extends UIAbility {
     applyThemeMode(this.context, readThemeMode(this.context));
     // Open the shelf DB eagerly so progress survives even when the user opens a
     // book from Search before ever visiting the Shelf tab.
-    initShelf(this.context).catch((err: Error) => {
-      hilog.warn(DOMAIN, TAG, 'shelf db init failed: %{public}s', err.message);
-    });
+    initShelf(this.context)
+      .then((): void => {
+        // Cache quota/TTL maintenance needs the progress table (it decides
+        // which chapters count as "read"), so it waits for the DB.
+        scheduleStartupTrim(this.context);
+      })
+      .catch((err: Error): void => {
+        hilog.warn(DOMAIN, TAG, 'shelf db init failed: %{public}s', err.message);
+      });
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onCreate');
   }
 

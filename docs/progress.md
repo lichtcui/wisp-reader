@@ -15,7 +15,7 @@
 - M5 结果（2026-09-25，真机验证） — L37
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
 - 未决 / 风险 — L111
-- 交接备忘 — L138
+- 交接备忘 — L140
 <!-- TOC:END -->
 
 ---
@@ -30,7 +30,7 @@
 | M3 | 搜索聚合 + 详情 + 加入书架 + 持久化 | ✅ 已完成（真机验证：加入书架重启仍在） |
 | M4 | 阅读页（横向分页翻页）+ 目录（含分页）+ 进度 + 阅读设置 | ✅ 已完成（真机验证：目录/跳转/字号/进度重启恢复；修 bindSheet + 正文清洗；**收尾项已补**）|
 | M5 | 听书 + 系统 TTS + 后台播放 + AVSession | ✅ 已完成（真机验证：PCM→AudioRenderer→AVSession 成为 top session，锁屏控件/媒体键可控，切后台不断，定时关闭，段落高亮/进度同步）|
-| M6 | 规则调试器 + 缓存清理 + 备份恢复 | 🟡 仅剩倒数一项：规则调试器 UI（`pages/RuleDebugger.ets`）、备份/恢复（`pages/BackupManage.ets`，含 2026-10-07 修的真「全量覆盖」）、目录缓存统计/清理均已实现并通过真机验证；仅剩缓存上限策略 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) T-DATA-4 |
+| M6 | 规则调试器 + 缓存清理 + 备份恢复 | ✅ 功能全部落地：规则调试器 UI（`pages/RuleDebugger.ets`，真机验收未做）、备份/恢复（`pages/BackupManage.ets`，含 2026-10-07 修的真「全量覆盖」）、目录缓存统计/清理、**缓存上限策略（`model/CacheTrim.ets`，2026-10-07 实现并真机六项压测通过）**。仅余规则调试器页真机验收 → [`research/CACHE-LIMIT-PLAN.md`](./research/CACHE-LIMIT-PLAN.md) |
 | v2 | QuickJS/Boa JS 引擎、换源、在线 TTS、真分页 | ⏳ |
 
 
@@ -125,6 +125,8 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   五轮审计轨迹原文见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §附。
 
 **未决**
+
+- （当前无阻塞性未决项；待做清单与状态以 [`bugfix/TASKS.md`](./bugfix/TASKS.md) 头部摘要为准。）
 
 - 目录分页 `nextTocUrl` / 卷 `isVolume` 已在引擎实现（真机 detect 覆盖当页路径），多页目录待复验。
 - 书源持久化仍用 `preferences` JSON（书籍/进度已用 `relationalStore`）；后续可迁移统一。

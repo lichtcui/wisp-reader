@@ -27,4 +27,7 @@
 | 想给 `progress` 表做「孤儿行」GC（`book_id` 不在 `books` 里） | **不要做**：详情页「立即阅读」不要求已上架也能写进度（`BookDetail.ets:233`），孤儿行有合法来源，全局 GC 会删掉用户真实阅读位置 | `docs/bugfix/TASKS.md` §T-DATA-7 |
 | 无 GUI 下点不动 UI：`TextInput` 提交不了 / 长按不进编辑态 | ① `uitest uiInput inputText <x> <y> <text>` 可注入文本，但 `onSubmit` 不会自己触发 → 再发 `uitest uiInput keyEvent 2054`（Enter）；② 长按命令是 **`longClick`**（不是 `longPress`）；③ 文件选择器（保存/打开）用 `uitest uiInput click` 点右上/右下确认钮 + 目录行逐层进入 | skill `harmony-device-run` §4 |
 | 编辑器/构建报 ArkTS 严格模式错误 | 不用 `any`；`getHostContext()` 返回 `Context \| undefined` 需判空 | `docs/development.md` |
+| 无 GUI 下的文件缓存 LRU 时间信号 | **`stat.atime` 不可用**：数据分区默认 **`noatime`** 挂载（SDK `@ohos.file.fs.d.ts` 明文注明）；只能用 `mtime`，靠 `fileIo.utimes` 主动刷新 | `docs/research/CACHE-LIMIT-PLAN.md` §4 |
+| LRU 顺序乱：最旧的当成最新的 / 时间直接变 1970 或几万年 | **单位不一致**：`stat.mtime` 是**秒**，而 `fileIo.utimes(path, mtime)` 收的是**毫秒**（内部统一用毫秒比较） | `docs/research/CACHE-LIMIT-PLAN.md` §4 |
+| 给纯内存 interface 加了字段，`make check` 却要求进 keep 列表 | keep 扫描的判定范围是「**含 `JSON.parse(` / `JSON.stringify(` 的文件**里声明的 interface」——纯内存结构只要该文件不出现这两个调用就不会被扫；别为了打日志写 `JSON.stringify(err)`（用 `(err as BusinessError).message`） | `scripts/check-keep-props.sh` |
 | 页面跳转用了 `@ohos.router` 报废弃 | 统一 `Navigation` + `NavPathStack`，路由常量见 `common/Const.ets` 的 `ROUTE_*` | `docs/architecture.md` |

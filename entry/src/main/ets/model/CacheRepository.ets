@@ -33,11 +33,13 @@ const TTS_DIR_NAME: string = 'tts';
 const COVER_PREFIX: string = 'cover_';
 const COVER_SUFFIX: string = '.img';
 
-function chapterDir(ctx: common.UIAbilityContext): string {
+/** Single source of truth for the chapter-body cache path (also used by `CacheTrim`). */
+export function chapterDir(ctx: common.UIAbilityContext): string {
   return ctx.filesDir + '/' + CHAPTER_DIR_NAME;
 }
 
-function tocDir(ctx: common.UIAbilityContext): string {
+/** Single source of truth for the TOC cache path (also used by `CacheTrim`). */
+export function tocDir(ctx: common.UIAbilityContext): string {
   return ctx.filesDir + '/' + TOC_DIR_NAME;
 }
 

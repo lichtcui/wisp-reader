@@ -57,6 +57,29 @@ export const TTS_REMOTE_VOICE_OPTIONS: string[] = ['流萤', '花火', '卡芙�
 /** 远端每段合成的预取深度（比系统 TTS 的 AHEAD=2 略深，抵消网络往返）。 */
 export const AHEAD_REMOTE: number = 3;
 
+// ── 缓存上限策略（T-DATA-4 / plan §7）────────────────────────────────
+// 口径：已读=软保护（未读先删，仍超配额才按「最久未访问」删已读），另加未读 TTL。
+
+/** 章节正文缓存预算；超出后整理到 TARGET_RATIO。 */
+export const CACHE_CHAPTER_QUOTA: number = 200 * 1024 * 1024;
+/** 目录缓存兜底预算（真机实测约 74KB/本，通常不会触发）。 */
+export const CACHE_TOC_QUOTA: number = 16 * 1024 * 1024;
+/**
+ * 封面缓存预算。文件名是 Rust 侧对 coverUrl 的哈希（`runtime.rs::download_cover`），
+ * ArkTS 无法把书名映射到文件，因此只能按 mtime 最旧先删（代价：可能重下在架封面）。
+ */
+export const CACHE_COVER_QUOTA: number = 64 * 1024 * 1024;
+/** 整理目标水位：删到配额的该比例即停（滞回，避免每次写入都触发整理）。 */
+export const CACHE_TARGET_RATIO: number = 0.8;
+/** 未读章节的保留天数，超期即清（与配额无关）。 */
+export const CACHE_MAX_AGE_DAYS: number = 30;
+/** 章节文件平均大小估计，仅用于把配额折算成廉价的「文件数闸门」（免去每次写盘都全扫）。 */
+export const CACHE_AVG_CHAPTER_BYTES: number = 16 * 1024;
+/** 刚写入/刚访问的文件在此窗口内永不删除（正在读的那几章不会被抽掉）。 */
+export const CACHE_FRESH_WINDOW_MS: number = 5 * 60 * 1000;
+/** 会话内两次整理的最小间隔（启动后的首次整理用 force，不受此限）。 */
+export const CACHE_TRIM_MIN_INTERVAL_MS: number = 30 * 60 * 1000;
+
 /** Keyword used by the book-source availability detector. */
 export const DEFAULT_DETECT_KEYWORD: string = '重生';
 

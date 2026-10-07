@@ -25,6 +25,7 @@ import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { Book, BookSource, Chapter } from '../engine/types';
 import { isReadable, nextReadable, prevReadable } from '../common/ChapterUtil';
 import { loadChapterParagraphs } from './BookContent';
+import { protectBook } from './CacheTrim';
 import { saveProgress } from './ShelfRepository';
 import { getNumber, putNumber, getString, putString } from '../common/Prefs';
 import {
@@ -240,6 +241,8 @@ export class TtsController {
     }
     this.source = source;
     this.book = book;
+    // 听书期间整理缓存时不删这本书的章节文件（会话级保护）。
+    protectBook(book.bookId);
     this.chapters = chapters;
     this.bookName = book.name;
     this.author = book.author;

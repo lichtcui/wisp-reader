@@ -39,6 +39,7 @@ import {
   setWindowBackgroundColor
 } from '../common/Window';
 import { getProgress, saveProgress } from '../model/ShelfRepository';
+import { protectBook } from '../model/CacheTrim';
 import { ReaderTheme } from '../common/ReaderTheme';
 import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
 import { getCachedToc, putCachedToc } from '../model/TocCache';
@@ -219,6 +220,8 @@ export struct ReaderPage {
       this.loading = false;
       return;
     }
+    // 缓存整理时保护这本书的章节文件（会话级，30 分钟未更新自动失效）。
+    protectBook(book.bookId);
     try {
       let chapters: Chapter[];
       if (isLocalBook(book)) {
