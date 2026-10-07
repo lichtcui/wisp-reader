@@ -12,7 +12,8 @@ export declare function content(sourceJson: string, chapterUrl: string): Promise
 
 /**
   * Detect whether sources can complete a reading chain; returns JSON
-  * `DetectResult[]`. `opts_json` may carry `{ keyword, concurrency }`.
+  * `DetectResult[]`. `opts_json` may carry
+  * `{ keyword, concurrency, timeoutMs }`.
   */
 export declare function detect(sourcesJson: string, optsJson: string): Promise<string>
 
