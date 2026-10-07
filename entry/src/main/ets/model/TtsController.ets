@@ -1,3 +1,20 @@
+// ─── 文件索引（改本文件先看这里；本文件约 1280 行）──────────────────────────
+// 下面只列**成员名**，不列行号（行号会漂）；定位用 `grep -n "<名字>" entry/src/main/ets/model/TtsController.ets`。
+//   @ObservedV2 单例（供 Reader / Listening / Shelf FAB 共用）：
+//   单例与查询： instance（static）/ isActiveFor / currentSource / currentBook / currentChapters / loadPrefs
+//   对外控制：   start / stop / pause / resume / toggle / next / prev / seekParagraph / jumpChapter /
+//                setSpeed / setVoice / setRemoteVoice / setTimer / setVoice 相关的参数持久化走 common/Prefs
+//   引擎：       ensureEngine / ensureRenderer / startRenderer / releaseRenderer / remoteSynth / fallbackToSystem
+//   后台与锁屏： ensureSession / startBackground / stopBackground / updateMetadata / updatePlaybackState /
+//                updatePlaybackStateFromPlaying / listener（onStart/onComplete/onStop/onData/onError）
+//   合成与队列： setChapter / loadChapter / beginFrom / ensureSynthesized / ensureRemoteSynthesized / queueExhausted /
+//                onData / onComplete / onStop / onError / enqueueParagraph / insertLateData / fill /
+//                resetQueues / clearInflight（PCM 预合成 AHEAD 段 + 乱序到达重排在这里）
+//   刷新与进度： startFlushTimer / stopFlushTimer / tickProgress / tryFlush / startProgressTimer / stopProgressTimer /
+//                scheduleParagraphEnd / onParagraphEnd / playedMs / paragraphAt / estimateDurationMs / persistProgress
+//   调试：       traceFormat（hilog 格式化）
+// ──────────────────────────────────────────────────────────────────────
+
 import { common, wantAgent, WantAgent } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';

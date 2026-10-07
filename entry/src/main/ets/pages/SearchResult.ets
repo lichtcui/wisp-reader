@@ -1,3 +1,21 @@
+// ─── 文件索引（改本文件先看这里；本文件约 1041 行）──────────────────────────
+// 下面只列**成员名**，不列行号（行号会漂）；定位用 `grep -n "<名字>" entry/src/main/ets/pages/SearchResult.ets`。
+//   状态（@Local/@Param）：keyword / searchToken / groups / statuses / searching / total / enriching /
+//                          statusVisible / shelfKeys / pickerVisible / pickerDs / expandedReason
+//   搜索主流程（滑动窗口 + 并发 8 + 每源超时，见 docs/decisions.md D4）：
+//     aboutToAppear / onSearchTokenChange（@Monitor）/ startSearch / drain / searchOne / searchGen（代次守卫）/ nextIndex
+//   富化与合并：enrichMerged / enrichOne / infoCache / rebuildGroups / bucketOf / cleanAuthor / cleanChapter /
+//               stripPrefix / weightOf / metaLine / primaryOrigin
+//   置信度（失败扣分/成功回分，持久化）：persistConfidence / confidenceLabel / failLabel / sourceSummary /
+//                                        okCount / failCount / successPct / elapsedLabel
+//   来源抽屉（状态/原因分组）：preparePicker / statusGroups / statusesOfReason / statusesOfGroup / statusRows /
+//                              statusRowKey / isGroupExpanded / pickerRowView / pickerContent / statusSummary /
+//                              statusGroupHeader / statusSourceRow / statusContent / statusFooter
+//   行与跳转：resultItem / isInShelf / loadShelfKeys / shelfKey / handleTap / open / chapterNo /
+//             pickerSubtitle / hostOf / pickOrigin
+//   @Builder 子视图：searchBanner / statusSummary / statusContent / pickerContent / resultItem / build
+// ──────────────────────────────────────────────────────────────────────
+
 import { common } from '@kit.AbilityKit';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSearchItem, BookSource, SourceStatus } from '../engine/types';

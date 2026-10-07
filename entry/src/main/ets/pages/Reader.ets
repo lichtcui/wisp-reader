@@ -1,3 +1,20 @@
+// ─── 文件索引（改本文件先看这里；本文件约 1426 行）──────────────────────────
+// 下面只列**成员名**，不列行号（行号会漂）；定位用 `grep -n "<名字>" entry/src/main/ets/pages/Reader.ets`。
+//   状态（@Local）：chapters / chapterIndex / paragraphs / paragraphIndex / pages / pageIndex / sliderValue
+//                   menuVisible / panel / tocDescending / fontSize / lineHeight / nightMode / oneHandMode / tts
+//   生命周期：aboutToAppear / aboutToDisappear / onTtsProgress（@Monitor 听书进度 → 高亮 + 跟随滚动）
+//   加载正文：loadToc / load / loadChapter / applyChapter / fetchContent / cachedContent / sanitize / warmNeighbors / prefetch
+//   章内导航：isReadable / firstReadable / nextReadable / prevReadable / prevChapter / nextChapter / prevPage / nextPage / onPageChanged
+//   分页测算（横向分页核心）：availWidthPx / availHeightPx / measureOptions / measureHeight / maxCharsFit / paraMargin
+//                             paginateChapter / rebuildWindow / flatIndexOf / pageIdFor / indexOfPageId / PageSeg
+//   进度持久化：persistProgress / locateCurrentToc / tocPosition
+//   主题：systemDark / resolveColorHex / applyFullScreen / toggleNight / bgColor / textColor / dimColor
+//         changeFont / changeLineHeight
+//   跳转：onContentTap / onTopBack / openPanel / openDetail / openListening / moreMenuItems / isSpeaking
+//   @Builder 子视图：topBar / bottomBar / contentPager（Swiper 分页）/ tocDrawerContent / settingsDrawerContent /
+//                    iconButton / funcButton / moreButton / buildTocItems / readableCount / toggleTocOrder
+// ──────────────────────────────────────────────────────────────────────
+
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSource, Chapter, ReadProgress } from '../engine/types';
