@@ -3,7 +3,7 @@
 //   状态（@Local）：chapters / chapterIndex / paragraphs / paragraphIndex / pages / pageIndex / sliderValue
 //                   menuVisible / panel / tocDescending / fontSize / lineHeight / nightMode / oneHandMode / tts
 //   生命周期：aboutToAppear / aboutToDisappear / onTtsProgress（@Monitor 听书进度 → 高亮 + 跟随滚动）
-//   加载正文：loadToc / refreshToc / load / loadChapter / applyChapter / fetchContent / cachedContent / warmNeighbors / prefetch
+//   加载正文：loadToc / refreshToc / load / loadChapter / applyChapter / fetchContent / fetchRemote / cachedContent / warmNeighbors
 //             （正文清洗不在本文件：统一走 model/BookContent.sanitizeText，见 T-READ-1）
 //   章内导航：isReadable / firstReadable / nextReadable / prevReadable / prevChapter / nextChapter / prevPage / nextPage / onPageChanged
 //   分页测算（横向分页核心）：availWidthPx / availHeightPx / measureOptions / measureHeight / maxCharsFit / paraMargin
@@ -125,6 +125,12 @@ export struct ReaderPage {
   private tocSession: number = 0;
   /** 各章已 sanitize 的段落缓存（key=章节下标）。跨章连续页流需要同时分页上一章/本章/下一章。 */
   private paraCache: Map<number, string[]> = new Map();
+  /**
+   * 在飞的引擎请求（key = `bookId#index`，与 `ChapterCache.memoryKey` 同形）。
+   * 频繁切章时同一章会被多个调用方同时索要（新章 + 上一次 `warmNeighbors()` 的邻居 +
+   * 下一次切章再暖同一批邻居），去重后共享同一个 promise（T-READ-3）。
+   */
+  private inflight: Map<string, Promise<string>> = new Map();
   /** 当前可视页的身份（首段 chapterIndex@para@start）。重排窗口后用它对回同一页，
       长段落跨页拆分时 start 能区分“同一段落的最后一页”与“倒数第二页”。 */
   private currentPageId: string = '';
@@ -362,6 +368,15 @@ export struct ReaderPage {
 
   // ── Chapter content ───────────────────────────────────────────
 
+  /**
+   * Fetch one chapter body, single-flighting concurrent requests for the same
+   * `bookId#index`.
+   *
+   * 没有去重时，同一章会被同时抓两次：`loadChapter` 要的新章 + 仍在飞的
+   * `warmNeighbors()` 邻居 + 下一次切章再暖同一批邻居 —— 两边各发一次引擎请求、
+   * 各写一次 `putCachedChapter`，而后到的结果还会被 `loadChapter` 的 `loadGen`
+   * 守卫丢弃。去重后调用方共享同一个 promise：只请求一次、只写盘一次（T-READ-3）。
+   */
   private async fetchContent(chapter: Chapter, index: number): Promise<string> {
     const src: BookSource | undefined = this.source;
     const book: Book | undefined = this.book;
@@ -379,6 +394,29 @@ export struct ReaderPage {
         return cached;
       }
     }
+    const key: string = book.bookId + '#' + index.toString();
+    const running: Promise<string> | undefined = this.inflight.get(key);
+    if (running !== undefined) {
+      return running;
+    }
+    const task: Promise<string> = this.fetchRemote(src, ctx, book, chapter, index);
+    this.inflight.set(key, task);
+    try {
+      return await task;
+    } finally {
+      // 落定即出表：后续调用应当命中它刚写下的文件缓存；失败也必须能重试。
+      this.inflight.delete(key);
+    }
+  }
+
+  /** Engine request + disk write for a single chapter; only reached from `fetchContent`. */
+  private async fetchRemote(
+    src: BookSource,
+    ctx: common.UIAbilityContext | undefined,
+    book: Book,
+    chapter: Chapter,
+    index: number
+  ): Promise<string> {
     const result = await bookEngine.content(src, chapter.url);
     if (ctx !== undefined) {
       putCachedChapter(ctx, book.bookId, index, chapter.url, result.content);
@@ -505,18 +543,6 @@ export struct ReaderPage {
     }
     if (gen === this.loadGen && this.sized) {
       this.rebuildWindow(false);
-    }
-  }
-
-  /** Warm the file cache for the next chapter in the background. */
-  private async prefetch(index: number): Promise<void> {
-    const book: Book | undefined = this.book;
-    if (index < 0 || book === undefined) {
-      return;
-    }
-    try {
-      await this.fetchContent(this.chapters[index], index);
-    } catch (err) {
     }
   }
 

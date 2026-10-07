@@ -20,8 +20,11 @@
 > 真机 8 项证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §13。
 > **2026-10-08 第九次同步**：⑧ T-SHELF-5（P2）已修并真机复验——不是「缓存文件损坏」或取用路径问题，而是**引擎把非图片正文（详情页 / 防盗链 HTML）写进了 `cover_*.img` 且命中缓存即早退**，中毒 slot 永不复检（封面永久占位 + 每次渲染刷 `ImageSource` 62980118）；
 > 现改为「写盘前嗅探图片签名 + 缓存命中先验头 64 B（旧毒文件则删除重下）+ ArkTS 解不开就删文件」。修复后启动 8s 内该组错误 **15 行 → 0 行**，真机证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §14。
-> 当前 open：**2 项 `[ ]`**（T-READ-3 顺延 · T-TTS-4 已登记暂不改）。
 > **2026-10-08 第十次同步**：⑨ T-READ-1（R7）**统一正文清洗**已落地（纯重构、无行为变更）——`Reader` 的私有 `sanitize` 删除，阅读页与听书共用 `BookContent.sanitizeText`；真机复核段落下标一致（`start para=7` = 阅读页 `paragraphIndex`，`play para=8/9/10` 连续推进），详见条目内「验证」段。
+> **2026-10-08 第十一次同步**：⑩ T-READ-3（P2，原顺延）已实现并转入 `[~]` —— `Reader.fetchContent` 加单飞表（`inflight: Map<bookId#index, Promise<string>>`，引擎请求 + 写盘下沉到 `fetchRemote`），
+> 频繁切章时同一章只发一次引擎请求、只写一次盘（内存 LRU 挡不住并发：`warmNeighbors` 只判「已解析缓存」，两条路径在缓存都未命中时并发进来）；
+> 顺带删除死代码 `prefetch`（全仓库无调用）。本机已验（编译 / `make check` / 转译产物 / 调用面 `rg`），**真机待复验**（设备未连接）→ [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §15。
+> 当前 open：**1 项 `[ ]`**（T-TTS-4 已登记暂不改）+ **1 项 `[~]`**（T-READ-3 已实现，待真机复验）。
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
 ---
@@ -138,9 +141,23 @@
   - 证据：`entry/src/main/ets/model/BookContent.ets:6-19`、`entry/src/main/ets/pages/Reader.ets:51,457,503`
 - [x] **T-READ-2（R8）章节缓存内存上限**：为 `ChapterCache` 内存层加 LRU/上限；清理死代码 `hasCachedChapter`。
   - 证据：`model/ChapterCache.ets:18,92-94`、`plan.md:270`
-- [ ] **T-READ-3 预取去重**：频繁切章时避免对同一 `bookId#index` 重复预取/重复写盘。
-  - 状态（2026-10-07）：**顺延**（内存 LRU 后重复写盘概率已降，in-flight 去重未做），仍未开始。
-  - 证据：`pages/Reader.ets:245-255`、`:212-243`
+- [~] **T-READ-3 预取去重**：频繁切章时避免对同一 `bookId#index` 重复预取/重复写盘。
+  - 状态（2026-10-08）：**已实现**（`[~]` = 待真机复验；本机 `hdc list targets` = `[Empty]`，设备未连接）。
+  - 根因核对：内存 LRU（T-READ-2）只降低了「写盘撞车」的概率，**挡不住并发**——`warmNeighbors` 的判重是
+    `paraCache.has(n)`（已解析缓存），两条路径在**缓存都未命中**时并发进来，于是同一 `bookId#index` 发两次引擎请求、
+    写两次 `putCachedChapter`；后到的那份还会被 `loadChapter` 的 `loadGen` 守卫直接丢弃（`Reader.ets` 里 `if (gen !== this.loadGen) return;`）= 纯浪费。
+  - 修法（纯 ArkTS）：`fetchContent` 加单飞层 —— 缓存查询不变，未命中则按 `bookId#index`（与 `ChapterCache.memoryKey` 同形）
+    查 `inflight: Map<string, Promise<string>>`，命中返回同一 promise，未命中入表、`finally` 出表（失败仍可重试）；
+    引擎请求 + 写盘下沉到新的 `fetchRemote`（只被 `fetchContent` 调用）。key 带 `bookId` ⇒ 跨书复用实例也不串。
+  - 顺带：删除死代码 `prefetch(index)`（全仓库无调用；`HANDOFF-S10.md` §6.1 记的「保留未删，无碍」随之失效），
+    `warmNeighbors` 已覆盖「暖邻居进文件缓存」；文件索引行同步改为 `fetchContent / fetchRemote`。无新增 JSON 字段 ⇒ 未动 keep。
+  - 验证（2026-10-08 · 本机）：`make hap` `BUILD SUCCESSFUL`（`Reader.ets` 零 ArkTS 告警）；`make check` ✓（145 个 keep 名字覆盖不变）、`make doctor` 无阻断项；
+    转译产物核对 `entry/build/.../esmodule/debug/.../pages/Reader.ts:443-454` —— `inflight.get` 早退 + `set` + `delete` 均在，未被编译期改写，`prefetch` 无残留；
+    `rg` 复核全部取正文入口（`loadChapter` / `warmNeighbors`）均经 `fetchContent` ⇒ 无绕过去重的路径。
+  - **待真机**：连续快速切章时确认同一 `bookId#index` 只发一次引擎请求、章节文件只写一次（需要设备）。
+  - 未覆盖：release 包（不涉混淆面）；TTS 侧 `BookContent.loadChapterParagraphs` 有同型「未命中即打引擎」写法，
+    但与阅读页是两条独立调用链、无共享单飞表，本次**不合并**（要合并需引入共享模块，另立任务）。
+  - 证据：`pages/Reader.ets`（`inflight` 字段 / `fetchContent` / `fetchRemote`、`prefetch` 已删）、[`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §15
 
 ## 听书（Listening / TTS）
 
@@ -243,7 +260,7 @@
 ## 回归验收状态（S10 回归 / 发布，2026-09-27）
 
 > 逐项核对源码 + 构建复核。图例：`✅ 已修复/已核验` · `🟡 已实现待真机复验` · `➖ 缓解` · `⏭ 顺延/范围外` · `🚫 受阻（设备离线）`。
-> （`🟡` 目前无条目，保留供以后使用。）
+> （`🚫` 目前无条目，保留供以后使用；`🟡` 见 T-READ-3。）
 > 修复均已通过 **clean debug 构建** 与 **release 构建**（`BUILD SUCCESSFUL`）。
 
 | 任务 | 状态 | 处置 / 证据 |
@@ -260,7 +277,7 @@
 | T-SEARCH-2 搜索代次 guard | ✅ | S6 实现并真机验证；本轮静态复核无残影 |
 | T-READ-1 统一正文清洗 | ✅ | **2026-10-08 落地**：`Reader.sanitize` 删除，阅读页与听书共用 `BookContent.sanitizeText`（改动前 `diff` 复核两副本逐字节一致 → 纯重构）；真机验证 `start para=7` = 阅读页 `paragraphIndex`、`play para=8/9/10` 连续推进 |
 | T-READ-2 缓存内存上限 + 死码 | ✅ | `ChapterCache` 加 24 条 LRU（`touchMemory`）；删除死码 `hasCachedChapter`；`BookCover` 加 64 条 PixelMap LRU |
-| T-READ-3 预取去重 | ⏭ | `ChapterCache` 内存 LRU 后重复写盘概率降低；in-flight 去重顺延 |
+| T-READ-3 预取去重 | 🟡 | 2026-10-08 **已实现**：`fetchContent` 加单飞表 `inflight: Map<bookId#index, Promise<string>>`（引擎请求 + 写盘下沉到 `fetchRemote`），所有取正文入口都走它 ⇒ 同一章只请求一次、只写一次盘；顺带删死代码 `prefetch`。本机编译/契约/转译产物已验，**真机待复验**（设备未连接）→ [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §15 |
 | T-TTS-1 引擎释放 | ✅ | `stop()` 增 `engine.shutdown()` 并置空、复位日志位（`TtsController.ets:226-243`） |
 | T-TTS-2 定时器自然结束 | ✅ | 末章播完 `clearTimer()`，避免 1s 定时器空转（`TtsController.ets:825-830`） |
 | T-TTS-3 错误态恢复 | ✅ | `onError` 清 in-flight、停 flush/progress 定时器、停后台；新增 `queueExhausted()`，播完后 `resume()` 可从章首重播 |

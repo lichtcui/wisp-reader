@@ -513,3 +513,39 @@ catch 只把 `pixmap = undefined` → **红渐变 + 书名占位**，且失败 U
 
 **未覆盖**：release 包未复跑（本次改动不涉及 JSON 契约与混淆面，`make check` 仍按原样通过）；跨启动「不重下」未验证（设计上就是每启动重试一次）；
 HEIC/AVIF 只验了 magic 分支，未构造真实 HEIC 封面。
+
+---
+
+## 15. 增量（2026-10-08）：章节预取去重（T-READ-3）
+
+**问题**：`ReaderPage` 每一条取正文的路径都直接打引擎 —— `loadChapter`（当前章）与 `warmNeighbors`（上一章 / 下一章）。
+频繁切章时同一 `bookId#index` 会被**同时在飞**的多条路径索要（新章与上一次 `warmNeighbors()` 正在暖的邻居重叠，下一次切章又暖同一批邻居），
+于是同一章**发两次引擎请求 + 写两次 `putCachedChapter`**（含重复的 `JSON.stringify` 落盘），而后到的那份结果还会被
+`loadChapter` 的 `loadGen` 守卫直接丢弃（`if (gen !== this.loadGen) return;`）—— 纯浪费。
+T-READ-2 的内存 LRU 只压低「撞车概率」，**挡不住并发**：`warmNeighbors` 的判重是 `paraCache.has(n)`（判「已解析缓存」），
+两条路径在**缓存都未命中**时才同时进来，正是需要去重的那一档。
+
+**修法**（纯 ArkTS，`entry/src/main/ets/pages/Reader.ets`）
+
+- `fetchContent` 加**单飞（single-flight）**层：内存 / 文件缓存查询保持不变；未命中则按 `bookId#index`
+  （与 `ChapterCache.memoryKey` 同形）查在飞表 `inflight: Map<string, Promise<string>>`，命中即返回**同一个 promise**；
+  未命中则建任务入表，`finally` 出表（落定即删 ⇒ 不残留、失败仍可重试）。
+- 引擎请求 + 写盘下沉到新的 `fetchRemote(src, ctx, book, chapter, index)`，**只被 `fetchContent` 调用** ⇒ 全文件只有一条真正打引擎的路径。
+- key 带 `bookId`：跨书复用同一 `ReaderPage` 实例（`@Param` 变化）也不会串；不做 `load()` 清理（表项自删，无跨书泄漏）。
+- **顺带删除死代码 `prefetch(index)`**：全仓库无调用（`HANDOFF-S10.md` §6.1 记的「保留未删，无碍」随之失效），
+  `warmNeighbors` 已覆盖「把邻居暖进文件缓存」这一用途；文件索引行同步由 `… / warmNeighbors / prefetch` 改为 `… / fetchContent / fetchRemote / cachedContent / warmNeighbors`。
+- 无新增 JSON 字段 ⇒ `obfuscation-rules.txt` / keep 列表不动。
+
+**验证（2026-10-08 · 本机；设备未连接，真机项待复验）**
+
+| 断言 | 证据 |
+|---|---|
+| 编译 | `make hap` → `BUILD SUCCESSFUL`（14.6s）；122 条 ArkTS 告警**无一在 `Reader.ets`**（均为既有的 `Window.ets` / `ShelfRepository.ets`） |
+| 契约 | `make check` ✓（145 个 keep 名字覆盖全部 JSON 字段、目录与链接均最新）、`make doctor` 无阻断项 |
+| 转译产物未被改写 | `entry/build/.../esmodule/debug/.../pages/Reader.ts:443-454`：`inflight.get` → 早退 `return running` + `set` + `finally delete` 均在；全文件已无 `prefetch` 残留 |
+| 调用面闭合 | `rg` 复核 `fetchContent` 的全部调用点（`loadChapter`、`warmNeighbors`）与定义（唯一 `bookEngine.content` 在 `fetchRemote` 内）⇒ 无绕过去重的路径 |
+| 真机行为 | ⏳ **未做**（`hdc list targets` = `[Empty]`）：需连续快速切章，确认同一 `bookId#index` 只出现一次引擎请求、章节缓存文件只写一次 |
+
+**未覆盖**：真机与 release 包均未跑（改动纯 ArkTS 内存层，不触 JSON 契约与混淆面）。
+TTS 侧 `model/BookContent.ets::loadChapterParagraphs` 有同型「未命中即打引擎」写法，但它与阅读页是两条独立调用链、
+没有共享单飞表 ⇒ **本次不合并**（合并需引入共享模块，另立任务）。
