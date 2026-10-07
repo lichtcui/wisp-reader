@@ -10,7 +10,7 @@
 | 锁屏无媒体卡 / 媒体键无反应 / AVSession 不是 top session | **系统 TTS「直连播报」路线不可行**（系统 TTS 自持音频焦点）。必须让 App 自己播 PCM（`STREAM_USAGE_AUDIOBOOK`）才能成为 top session | `docs/progress.md` §M5 |
 | 抽屉错乱：tab 栏被盖住 / 面板从中间冒出 / 关不干净 | tab 页（`TabContent`）用 `mode: 'cover'`，`NavDestination` 用 `overlay`；唯一实现 `ui/common/BottomDrawer.ets`，**禁止**裸 `bindSheet` 与条件挂载 | `docs/specs/UI-SPEC.md` |
 | 改了 ArkTS，设备上行为没变 | ① 只编译没安装 ② 没 `aa force-stop`（`aboutToAppear` 不重跑） | `docs/development.md` |
-| release 包 JSON 字段读出来是 `undefined` | `entry/obfuscation-rules.txt` 漏了对应的 `-keep-property-name` | `AGENTS.md` §约定 |
+| release 包 JSON 字段读出来是 `undefined` | `entry/obfuscation-rules.txt` 漏了对应的 `-keep-property-name` | `docs/development.md` §调试要点 |
 | 签名报 `unable to obtain user group` | DevEco 的 GRS 请求失败（非账号问题）：重试 → `File > Invalidate Caches / Restart` → 查 HTTP Proxy（本机 `127.0.0.1:7897`） | `docs/development.md` |
 | `ohrs build` 找不到 NDK / 报路径错 | `OHOS_NDK_HOME` **不要**指到 `.../openharmony/native`（`ohrs` 会自己再拼 `native/`） | `docs/development.md` |
 | `cargo` 拉不到 crates.io | 项目根 `.cargo/config.toml` 指向 `rsproxy.cn`，**勿删** | `docs/development.md` |
