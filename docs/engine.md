@@ -29,24 +29,18 @@ rust/
 - 依赖：`napi-ohos`/`napi-derive-ohos`/`napi-build-ohos`（v1.2）、`scraper 0.22`、`serde`/`serde_json`、
   `regex`、`reqwest 0.12`（`rustls-tls` + `gzip` + `cookies`）、`chardetng`、`encoding_rs`、`url`、`futures`。
 
-## NAPI 接口（M2）
+## NAPI 接口（语义）
 
-```ts
-import * from 'liblegado_core.so';
-parse(content, contentType, rule): string[]                 // 旧接口，保留
-parseWithDiagnostics(content, contentType, rule): string    // JSON { values, diagnostics }
-fetchText(url): Promise<string>
-gateSources(sourcesJson): string                             // JSON { total, eligible, excluded }
-search(sourcesJson, keyword, optsJson): Promise<string>      // JSON { items, sources }
-bookInfo(sourceJson, bookUrl): Promise<string>               // JSON BookInfo
-toc(sourceJson, tocUrl): Promise<string>                     // JSON Chapter[]
-content(sourceJson, chapterUrl): Promise<string>             // JSON { content, nextUrl }
-detect(sourcesJson, optsJson): Promise<string>               // JSON DetectResult[]
-downloadCover(sourceJson, coverUrl, destDir): Promise<string>
-```
+**签名不在这里重复**：以 `entry/src/main/cpp/types/liblegado_core/index.d.ts` 为唯一真源。
+那份 .d.ts **由 `ohrs build` 从 `rust/legado-core/src/lib.rs` 的 `///` doc comment 生成**，
+所以**要改接口说明就改 Rust 的 `///`**（改完 `make rust` 会自动把新 .d.ts 拷到 entry 下），
+本节只写「每个函数保证什么」——也就是 doc comment 装不下的部分。
+万一两边不一致，以 Rust 侧为准（并顺手修本节）。
 
 要点：
 
+- 10 个导出：`parse` / `parseWithDiagnostics` / `fetchText` / `gateSources` / `search` /
+  `bookInfo` / `toc` / `content` / `detect` / `downloadCover`；参数与返回类型看 `index.d.ts`。
 - **粗粒度 JSON 进出**；失败以 NAPI error（reject）返回 `reason` key，ArkTS 侧 `FailReason` 文案映射。
 - `search`：按源并发（默认 8）+ 每源超时（默认 10s），返回每源 `SourceStatus`（ok/count/error/elapsedMs）。
 - `toc`：内部走 `nextTocUrl` 分页（上限 50、自引用防环）+ 卷 `isVolume` 跳过。

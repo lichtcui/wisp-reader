@@ -28,33 +28,20 @@ legado-core（规则解析 / HTML·JSON 提取 / HTTP / Cookie / 限速 / 正文
 
 ## NAPI 接口
 
-### 当前（M2）
+**签名唯一真源**：`entry/src/main/cpp/types/liblegado_core/index.d.ts`。该文件由 `ohrs build` 从
+`rust/legado-core/src/lib.rs` 的 `///` doc comment 生成（`make rust` 会一并拷贝），**勿手改**。
+本文件与 [`engine.md`](./engine.md) **不再粘贴签名列表**，只写「边界契约」与「语义」。
 
-```ts
-import {
-  parse, parseWithDiagnostics, fetchText,
-  gateSources, search, bookInfo, toc, content, detect, downloadCover
-} from 'liblegado_core.so';
-
-parse(content, contentType, rule): string[]                         // 同步
-parseWithDiagnostics(content, contentType, rule): string            // { values, diagnostics }
-gateSources(sourcesJson): string                                    // { total, eligible, excluded }
-search(sourcesJson, keyword, optsJson): Promise<string>            // { items, sources }
-bookInfo(sourceJson, bookUrl): Promise<string>                     // BookInfo
-toc(sourceJson, tocUrl): Promise<string>                           // Chapter[]（内部 nextTocUrl 分页 + 卷）
-content(sourceJson, chapterUrl): Promise<string>                   // { content, nextUrl }（内部拼整章）
-detect(sourcesJson, optsJson): Promise<string>                     // DetectResult[]
-downloadCover(sourceJson, coverUrl, destDir): Promise<string>      // 落盘路径
-fetchText(url): Promise<string>
-```
-
+- 当前导出（10 个）：`parse` / `parseWithDiagnostics` / `fetchText` / `gateSources` / `search` /
+  `bookInfo` / `toc` / `content` / `detect` / `downloadCover`。
 - ArkTS `engine/BookEngineNapi.ets` 实现 `IBookEngine`，把 JSON 字符串解析为类型化对象。
-- 尚未实现：`search` 的「流式进度」回调（当前一次返回 + 每源超时，M3 再做渐进）。
+- 尚未实现：`search` 的「流式渐进进度」回调（当前一次返回 + 每源超时）。
 
-要点：
+要点（边界契约，改引擎时必须遵守）：
 - **粗粒度**：输入完整 JSON，返回结构化；禁止按字段跨语言回调。
 - **异步**：Rust 内跑 tokio 工作线程（`search`/`detect` 用 `buffer_unordered` 限并发 + 超时）。
 - **二进制不过 NAPI**：封面由 Rust 写沙箱文件，返回路径，ArkTS 用 `PixelMap` 加载。
+- **逐函数语义 / 错误码 / 分页与限流规则** → [`engine.md`](./engine.md)。
 
 ## 领域模型（对齐 Rust `types.rs`）
 
@@ -86,8 +73,10 @@ MainPage (Tabs)
 
 ```
 AGENTS.md / README.md        根目录只放这两个文档（其余文档一律进 docs/）
+Makefile / scripts/         命令统一入口（`make help`）/ 工具脚本（`docs-toc.sh`）
 docs/                        plan / progress / architecture / engine / development /
-                             PITFALLS / decisions；specs/ / research/ / bugfix/ / handoff/
+                             PITFALLS / decisions；specs/ / research/ / bugfix/ / handoff/ /
+                             archive/（已完结历史，**默认不读**）
 build-profile.json5          含 signingConfigs（**含凭据，勿提交**）
 .cargo/config.toml           cargo 镜像（rsproxy）
 entry/
@@ -113,3 +102,29 @@ rust/legado-core/    薄 NAPI 层（cdylib），依赖 legado-engine
 ```
 
 > 目录会随迭代变化；**权威以 `rg --files` 为准**，本表只用于定位。
+
+## 改动定位（改什么 → 动哪些文件）
+
+> 先在这里定位，再读文件；避免“先全仓搜一遍”。路径都相对 `entry/src/main/ets/`（Rust/资源另标）。
+
+| 你要改什么 | 动哪些文件（先读） |
+|---|---|
+| 底部抽屉（样式/高度/打开方式） | **先读 [`specs/UI-SPEC.md`](./specs/UI-SPEC.md)**；`ui/common/BottomDrawer.ets`（唯一实现）+ 7 处调用点 |
+| 阅读页翻页 / 分页测算 / 排版 / 字号行距 | `pages/Reader.ets`（顶部有文件索引）、`common/ReaderTheme.ets`、`common/ChapterDataSource.ets` |
+| 听书 / 播放 / 锁屏卡片 / 后台 / 音色 | `model/TtsController.ets`（顶部有文件索引）、`pages/Listening.ets`、`pages/ListeningSettings.ets`、`model/RemoteTtsClient.ets`、`model/BookContent.ets`、`entryability/EntryAbility.ets`（退出释放）、`src/main/module.json5`（`backgroundModes`） |
+| 搜索结果页 / 来源抽屉 / 书源置信度 | `pages/SearchResult.ets`（顶部有文件索引）、`model/SourceConfidence.ets`、`common/SourceListDataSource.ets` |
+| 书架 / 编辑模式（多选删除）/ 进度 | `pages/Shelf.ets`、`model/ShelfRepository.ets`、`model/ShelfEditState.ets`、`model/BookRemoval.ets`、`components/BookCover.ets` |
+| 路由 / 页面注册 / 顶栏底栏 | `pages/Index.ets`、`common/Const.ets`（`ROUTE_*`） |
+| 书源导入 / 能力门禁（非文字/禁用/登录/JS） | `rust/legado-engine/src/gate.rs`、`pages/BookSourceManage.ets`、`model/SourceRepository.ets`、`src/main/resources/rawfile/bundled-sources.json` |
+| 规则 DSL / HTML·JSON 提取 | `rust/legado-engine/src/rule_dsl/*`、`rust/legado-engine/examples/bundled_gen.rs` |
+| 搜索 URL / header / `@js:` 的 L1 字符串模式 | `rust/legado-engine/src/search_url.rs` |
+| 网络 / Cookie / 限速 / 编码探测 | `rust/legado-engine/src/http_client.rs` |
+| **NAPI 接口（增删函数/改返回 JSON）** | `rust/legado-core/src/lib.rs`（签名 + `///` doc comment → 生成 `index.d.ts`）；ArkTS 侧 `engine/IBookEngine.ets`、`engine/BookEngineNapi.ets`、`engine/types.ets` |
+| 缓存（章节/目录/清理） | `model/ChapterCache.ets`、`model/TocCache.ets`、`model/CacheRepository.ets`、`pages/CacheManage.ets` |
+| 备份恢复 / 本地书 | `pages/BackupManage.ets`、`model/LocalBook.ets` |
+| 规则调试器（**M6 未开始**） | `pages/RuleDebugger.ets` |
+| 颜色 / Design Token | `src/main/resources/{base,dark}/element/color.json`；规范见 [`plan.md`](./plan.md) §2 |
+| 权限 / SDK 版本 / bundle / 混淆 | `src/main/module.json5`、`AppScope/app.json5`、`build-profile.json5`、`entry/obfuscation-rules.txt` |
+
+改完的必走闭环：`make run`（编译 → 安装 → force-stop → 启动）；Rust 侧先 `make test`。
+踩坑按症状查 [`PITFALLS.md`](./PITFALLS.md)。

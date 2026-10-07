@@ -1,7 +1,16 @@
 # HANDOFF 归档（S3–S8）
 
 > 本文件由 `HANDOFF-S3.md` … `HANDOFF-S8.md` 合并归档，正文未作改动，原文件已删除。
-> S9 起仍保留独立文件（见 `HANDOFF-S9.md`）。
+> S9 起仍保留独立文件（见 [`HANDOFF-S9.md`](../handoff/HANDOFF-S9.md)）。
+
+**索引**（各节标题是 H1 且文件内还有代码块注释，故无自动目录；行号为本次快照）
+
+- `HANDOFF-S3` — 地基改动（公共组件 + 缓存层） — L8
+- `HANDOFF-S4` — 阅读模块逐项修复（A–G） — L139
+- `HANDOFF-S5` — 听书模块逐项修复（A–E） — L308
+- `HANDOFF-S6` — 搜索模块原地化 + 抽屉化（A–F） — L462
+- `HANDOFF-S7` — 书架模块（A–B） — L627
+- `HANDOFF-S8` — 书源管理模块（A–F） — L752
 
 ---
 

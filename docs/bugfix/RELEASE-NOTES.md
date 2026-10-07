@@ -216,7 +216,7 @@ release 与 debug 两个包均验证；release 包**不输出 App 自身 `hilog`
 
 ## 8. 增量（2026-10-07）：书架编辑模式（多选删除）+ 目录缓存统计
 
-> 计划与逐行代码见 [`../research/SHELF-EDIT-PLAN.md`](../research/SHELF-EDIT-PLAN.md)（§8 S1–S4）。
+> 计划与逐行代码见 [`../archive/SHELF-EDIT-PLAN.md`](../archive/SHELF-EDIT-PLAN.md)（§8 S1–S4）。
 > 本节为增量记录，§0–§7 仍描述 S10 快照。
 
 ### 8.1 新功能
@@ -247,7 +247,7 @@ release 与 debug 两个包均验证；release 包**不输出 App 自身 `hilog`
 | release 构建（`assembleHap buildMode=release`，含 SignHap） | ✅ `BUILD SUCCESSFUL`（比 D21 要求的「跑到混淆阶段」更强） |
 | 混淆产物 | ✅ `.../release/obfuscation/{nameCache,fileWhiteLists,projectWhiteList}.json` 重新生成（2026-10-07） |
 | 混淆面静态自查（K15/§5.5） | ✅ 全仓无 `@Monitor('edit.x')` / `this.edit['x']` / `ShelfEditState` JSON 往返 |
-| 真机 DoD D1–D21 | ✅ **已验（2026-10-07，设备 `33Z0224424136564`）**：D1–D9 / D11 / D13 / D15–D17 / D19 / D21 全通过；D10 / D12 / D14 / D18 按用户决定跳过；D20 部分通过（书架书量不足）。逐条证据见 [`../research/SHELF-EDIT-PLAN.md`](../research/SHELF-EDIT-PLAN.md) §12.3 |
+| 真机 DoD D1–D21 | ✅ **已验（2026-10-07，设备 `33Z0224424136564`）**：D1–D9 / D11 / D13 / D15–D17 / D19 / D21 全通过；D10 / D12 / D14 / D18 按用户决定跳过；D20 部分通过（书架书量不足）。逐条证据见 [`../archive/SHELF-EDIT-PLAN.md`](../archive/SHELF-EDIT-PLAN.md) §12.3 |
 
 ### 8.5 真机验证与真机专属修复（2026-10-07）
 
