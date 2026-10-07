@@ -15,6 +15,8 @@ VPS：`ssh -p 40860 root@103.236.96.53`（Ubuntu 22.04 / 4C Xeon 8173M / 3.8G �
 - **采样率差异**：系统 TTS 是 16 kHz，远端返回 24 kHz；`TtsController` 的 `sampleRate` 按引擎取值，
   渲染器用 `SAMPLE_RATE_24000`、时长换算用 `24000 * 2` 字节/秒。改这块时别写死 16 kHz。
 - 预取：远端 `AHEAD_REMOTE = 3` 段（系统 TTS 为 2），整段 HTTP、无 SSE/WS、无本地缓存、无并发限制。
+  服务端固定 `num_threads=4`，所以 3 路预取会互相抢核：**RTF 只在单请求下 <1**（详见 §3 注）。
+- ⚠️ 状态：这条远端链路（含并发预取）**已知会整体重做**，本文件只按现状记录，不代表最终方案。
 
 ## 1. 现场（勿动）
 
@@ -48,6 +50,9 @@ ssh -p 40860 root@103.236.96.53 'systemctl restart tts && journalctl -u tts -f'
 
 - `num_steps` 默认 2，可经环境变量 `NUM_STEPS` 覆盖（现用 **3**，句首更干净、RTF≈0.92 仍 <1）；`num_threads=4`。
   每句合成后加 12ms 淡入压句首瞬态。
+  **注（并发场景）**：上面这个 RTF 是**单请求**口径。`num_threads=4` 是固定的，而 App 侧 `AHEAD_REMOTE = 3` 会同时发 3 个请求，
+  三者互相抢核 → 实测 RTF 由 0.767 / 0.784 涨到 **1.655 / 1.753 / 2.580 / 6.428**（2026-10-07 真机对比并发期与停 App 后的单请求），
+  即**并发下已不能保证 <1**。当前仍能实时不断流（靠 3 段预取缓冲），但余量很薄。
 - 输出固定 24kHz S16LE mono；RTF（num_steps=2）流萤/花火/卡芙卡约 0.56–0.71（VPS 4C）。
 
 ## 4. 端点与鉴权
@@ -62,7 +67,7 @@ ssh -p 40860 root@103.236.96.53 'systemctl restart tts && journalctl -u tts -f'
 |---|---|
 | `403/401` | App 的 API Key 与服务端 `X_API_KEY` 不一致 |
 | 服务起不来 / 端口占用 | `systemctl status tts`；`ss -tlnp \| grep 9880` |
-| RTF 变慢 / 内存爆 | `journalctl -u tts` 看是否 `num_steps` 被改；峰值 RSS 约 831 MiB |
+| RTF 变慢 / 内存爆 | `journalctl -u tts` 看是否 `num_steps` 被改；峰值 RSS 约 831 MiB；**多条 `remote-tts synth` 并发在跑也是原因**（App 侧预取 3 路 → RTF >1，见 §3 注） |
 | 输出无声/杂音 | 确认 `vocos_24khz.onnx` 在 `${VOCODER}`；参考音频未被删 |
 
 ## 6. 网络（已落定：公网映射 39680）

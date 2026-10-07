@@ -24,7 +24,8 @@
 > **2026-10-08 第十一次同步**：⑩ T-READ-3（P2，原顺延）已实现并转入 `[~]` —— `Reader.fetchContent` 加单飞表（`inflight: Map<bookId#index, Promise<string>>`，引擎请求 + 写盘下沉到 `fetchRemote`），
 > 频繁切章时同一章只发一次引擎请求、只写一次盘（内存 LRU 挡不住并发：`warmNeighbors` 只判「已解析缓存」，两条路径在缓存都未命中时并发进来）；
 > 顺带删除死代码 `prefetch`（全仓库无调用）。本机已验（编译 / `make check` / 转译产物 / 调用面 `rg`），**真机待复验**（设备未连接）→ [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §15。
-> 当前 open：**1 项 `[ ]`**（T-TTS-4 已登记暂不改）+ **1 项 `[~]`**（T-READ-3 已实现，待真机复验）。
+> 同时：**T-TTS-4 条目已按用户决定移除**（远端 TTS 链路后续会整体重做，不再单独治理其并发预取的 RTF 劣化；相关部署事实已记入 [`../remote-tts-deploy.md`](../remote-tts-deploy.md) §0/§3）。
+> 当前 open：**1 项 `[~]`**（T-READ-3 已实现，待真机复验），**无 `[ ]` 未开始项**。
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
 ---
@@ -167,11 +168,6 @@
   - 证据：`model/TtsController.ets:705-721`、`:880-907`
 - [x] **T-TTS-3 错误态恢复**：`onError` 后 `playing=false`，确认 UI 与 `AVSession` 状态一致、可重试。
   - 证据：`model/TtsController.ets:585-590`、`pages/Listening.ets:359-374`
-- [ ] **T-TTS-4（R11）远端 TTS 并发预取导致 VPS RTF 劣化**（未开始 · 已登记）：`AHEAD_REMOTE=3` 使 VPS 同时跑 3 个 ZipVoice 请求，而服务端固定 `num_threads=4` → 12 线程挤 4 核，RTF 由单请求的 **0.767/0.784** 涨到 **1.655 / 1.753 / 2.580 / 6.428**（2026-10-07 真机实测）。当前靠 3 段预取缓冲仍能实时不断流（60s 墙钟推进 60s 音频，`play para=1…8` 连续），但余量很薄，网络或负载稍差即可能欠载。
-  - 证据：VPS `journalctl -u tts | grep 'remote-tts synth'`（对比并发期与停 App 后单请求）；`common/Const.ets`（`AHEAD_REMOTE`）、`model/TtsController.ets`（`ensureRemoteSynthesized` 的 `issuedIndex - flushIndex < AHEAD_REMOTE`）。
-  - 可选方向（二选一，均需重新部署/真机复测）：① 服务端 `app.py` 加并发锁串行化 → RTF 稳定 ≈0.77，代价是首段等待变长；② 下调 `AHEAD_REMOTE` → 并发降低但预取缓冲变薄、欠载风险上升。
-  - 文档缺口：`docs/remote-tts-deploy.md` §3 现写「RTF≈0.92 仍 <1」，**只对单请求成立**，需补注并发场景。
-  - 用户处置（2026-10-07）：**确认先不改代码**，仅登记待办。
 
 ## 书源管理（BookSourceManage）
 
