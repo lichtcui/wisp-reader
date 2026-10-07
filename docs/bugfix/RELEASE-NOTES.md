@@ -139,7 +139,7 @@
 ### 4.2 顺延的 TASKS（非本轮范围）
 
 - `T-SHELF-1` 删除书籍清理缓存：`removeBook` 无调用点（无删除 UI），待删除入口一并实现。
-- `T-SHELF-3` 进度三态在 `percent` 极小值时的反推边界，待真机复验。
+- `T-SHELF-3` 进度三态在 `percent` 极小值时的反推边界：**2026-10-07 已修复并真机验证**（反推收敛到 `Format.deriveTotalChapters`，脏值降级「第N章」；见 §12）；`toc.length` ↔ `percent` 反推的口径分歧登记为 `T-SHELF-6`。
 - `T-READ-1` `Reader.sanitize` 与 `BookContent.sanitizeText` 合并（两份当前**逐字节一致**，纯重构）。
 - `T-READ-3` 章节预取 in-flight 去重（LRU 已降低重复写盘概率）。
 - `T-DATA-4` 缓存 LRU/上限策略（未开始，**M6 最后一项**）；`T-DATA-3` 备份/恢复已于 2026-10-07 release 真机验证通过（§9），其「全量覆盖」语义缺陷 `T-DATA-7` 已于同日修复并真机复验（§10）。
@@ -360,3 +360,53 @@ UI 用 `uitest dumpLayout` + `uitest uiInput click` 驱动。为让「阅读页�
 
 **未覆盖 / 残留**：`removeBooks` 的 `forgetProgressOwner` 只在代码层复核（真机删书链路已在 T-SHELF-1 验过，未单测「删正在播的书后重加」）；
 归属是**进程内**状态，App 重启后自然清空（重启时也没有活跃播放会话，符合预期）。
+
+---
+
+## 12. 增量（2026-10-07）：书架进度总数反推边界加固（T-SHELF-3）
+
+**核对（先取证，再决定改不改）**：书架进度三态不读目录，`total` 由 `percent` 反推 ——
+`percent` 由两个写入者按 `(chapterIndex + 1) / chapters.length` 落库（`Reader.persistProgress` / `TtsController.persistProgress`）。
+把 `Format.ets` 拷成 `.ts` 用 `node --experimental-strip-types` **直接 import 真实函数**复算：
+
+- **正常区间零误差**：`len ≤ 20000` 的**全部**章序×章数组合（2.0 亿组）中 `Math.round((ci+1)/percent)` **无一组**不等于真实章数
+  （双精度除法误差最多几个 ULP，`Math.round` 吸收）。
+- **出问题的只有应用自己不会写的值**：`percent ≤ 0` / `NaN` / `Infinity`（旧码已自然落到「第N章」）；**极小值**
+  （`1e-9` → 「7章/7000000000章」、次正规 `5e-324` → 「7章/Infinity章」）；**`percent > 1`**（反推出 `total < 已读` → **误报「已读到最新章」**）。
+
+**处理**（用户选「仅边界加固」，不动书架数据流）
+
+- 反推从 `Shelf.ets` 内联表达式收敛到 `common/Format.ets::deriveTotalChapters(chapterIndex, percent)`：`percent` 非有限 / ≤ 0 / > 1、
+  章序 ≤ -1、`percent < 1/100000`、反推 `total < 已读章数` 一律回 `0` → `shelfProgressText` 降级为「第N章」（**总数不可信时不编造数字**）。
+- 正常值路径与三段文案**逐字节不变**；无新增 JSON 字段（`obfuscation-rules.txt` / `make check` 不受影响）；`Shelf.ets` 由 3 行变 2 行调用。
+
+**验证（2026-10-07 · 主机复算 + 真机三态 + 真机脏值对照）**
+
+| 断言 | 结果 |
+|---|---|
+| 9 项退化值（0 / NaN / `Infinity` / 负数 / `1e-9` / 次正规 / 1.5 / `percent=1` 陈旧行 / 章序 -1） | ✅ 全部落到预期文案，含修复前/后对照（旧码：`7000000000章`、`Infinity章`、误报「已读到最新章」） |
+| 8 项正常值（len 1 / 2 / 1000 / 3000 / 20000 / 100000，含末章与首章） | ✅ 与修复前逐字节一致（零回归） |
+| `len ≤ 20000` 全枚举（2.0 亿组）反推 == 真实章数 | ✅ 0 组错误 |
+| `make hap`（debug） | ✅ `BUILD SUCCESSFUL`；`Format.ets` / `Shelf.ets` **零告警** |
+| 转译产物核对（`esmodule/debug/.../Format.ts:22-35`） | ✅ `Number.isFinite` 守卫与常量均在，未被编译期改写 |
+
+脚本 `/tmp/tshelf3/check.ts`（未入库，复制真实文件后 import 运行）。
+
+**真机验证（2026-10-07，设备 `33Z0224424136564`，`make run` debug 包，`uitest dumpLayout`）**
+
+| 场景 | 真机现象 |
+|---|---|
+| 三态：剑来 / 大唐 / 天堂向左（库内 `percent` 0.06 / 0.106176… / 1.0） | ✅ `3章/50章` / `153章/1441章` / `已读到最新章`；拉沙箱 `shelf.db` 逐条对账一致 |
+| 第三态「未读过」 | ✅ 搜索→加入书架的**第 4 本**（未打开过，无 `progress` 行）显示「未读过」 |
+| **修复前 / 修复后对照**（临时插桩：注入脏 `percent`，左侧=旧内联表达式、右侧=新函数） | ✅ 大唐（`percent=1.5`）`已读到最新章 ｜ 第153章`（旧码**误报已完成**）、天堂向左（`percent=1e-9`）`28章/28000000000章 ｜ 第28章`；未注入的剑来 `3章/50章 ｜ 3章/50章`（正常区间零回归） |
+| JS 错误 / 崩溃 | ✅ 0 条 |
+| 复原 | ✅ 插桩已还原（`git diff` 无 TEMP 残留）并复验回三态原文案；测试书「赘婿」已删；沙箱 DB 回到 `books 3 / progress 7`，三行 `percent` 与验证前逐字节一致 |
+
+**为何用插桩**：沙箱不可写 —— `hdc shell` 是 `uid=2000(shell)`（无 root，`hdc target mount` 拒绝：`Operate need running under debug mode`），
+`/data/app/el2/...`、`/storage/media/...` 均 `Permission denied`；**真实脏行**进不了库（备份导入是「全量覆盖」，会洗掉用户数据），
+所以脏值分支只能在 `progressText` 临时注入脏值来驱动（与 T-CROSS-3 的「临时抬常量 / 临时加日志」同型），验证后已还原。
+
+**未覆盖**：真机未跑 release 包（未改混淆相关项）；「已读到最新章」的陈旧快照副作用见 T-SHELF-6。
+
+**附带登记**：`docs/architecture.md:51` / `plan.md:163` 写的是「`chapterIndex >= toc.length-1`」，实现一直走 `percent` 反推 →
+两文档原位加注记，差异与后果（源加新章后 `percent = 1` 仍判「已读到最新章」）登记为 **T-SHELF-6**。

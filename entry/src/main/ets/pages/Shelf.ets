@@ -6,7 +6,7 @@ import { getAllProgress, getBooks, initShelf } from '../model/ShelfRepository';
 import { ShelfEditState } from '../model/ShelfEditState';
 import { loadSources } from '../model/SourceRepository';
 import { isLocalBook, localSource } from '../model/LocalBook';
-import { shelfProgressText } from '../common/Format';
+import { deriveTotalChapters, shelfProgressText } from '../common/Format';
 import { TtsController } from '../model/TtsController';
 import { FloatingListenButton } from '../ui/common/FloatingListenButton';
 
@@ -304,7 +304,9 @@ export struct ShelfPage {
     if (p === undefined) {
       return '未读过';
     }
-    const total: number = p.percent > 0 ? Math.round((p.chapterIndex + 1) / p.percent) : 0;
+    // 章节总数不入库、书架也不读目录 → 只能由 percent 反推；脏数据/退化值回 0，
+    // 由 shelfProgressText 降级为「第N章」（见 `Format.deriveTotalChapters`）。
+    const total: number = deriveTotalChapters(p.chapterIndex, p.percent);
     return shelfProgressText(p.chapterIndex, total, true);
   }
 }

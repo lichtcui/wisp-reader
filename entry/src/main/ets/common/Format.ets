@@ -1,3 +1,43 @@
+/**
+ * Upper bound for the `percent` reverse-derivation below. Real books stay far
+ * under it; the constant only exists to reject degenerate `percent` values whose
+ * derived total would otherwise be printed verbatim (「1章/1000000000章」).
+ */
+const MAX_DERIVED_CHAPTERS: number = 100000;
+
+/**
+ * Reverse-derive a book's chapter count from its stored progress.
+ *
+ * Both writers store `percent = (chapterIndex + 1) / chapters.length`
+ * (`Reader.persistProgress` / `TtsController.persistProgress`), and the shelf must
+ * show 「已读到最新章」 / `{i+1}章/{total}章` without loading a TOC — so the total has
+ * to come back out of that ratio. Inside the range the app itself writes
+ * (`percent ∈ (0, 1]`, chapter counts of at most a few 万) the round-trip is exact.
+ * The guards reject only what the app never writes: a hand-edited / foreign backup
+ * row (`percent` ≤ 0, `NaN`, `Infinity`, `> 1`) or a degenerate tiny value whose
+ * derived total would be absurd.
+ *
+ * Returns 0 for 「总数不可信」; `shelfProgressText(…, 0, true)` then degrades to the
+ * chapter-only label 「第N章」 — the honest answer when the total is unknown.
+ */
+export function deriveTotalChapters(chapterIndex: number, percent: number): number {
+  const read: number = chapterIndex + 1;
+  if (read <= 0) {
+    return 0;
+  }
+  // percent = (chapterIndex + 1) / 总章数 ≤ 1 恒成立；越界即是脏数据。
+  if (!Number.isFinite(percent) || percent <= 0 || percent > 1) {
+    return 0;
+  }
+  if (percent < 1 / MAX_DERIVED_CHAPTERS) {
+    return 0;
+  }
+  const total: number = Math.round(read / percent);
+  // 反推结果小于「已读章数」说明 percent 与 chapter_index 不同源，宁可不显示总数，
+  // 也不能让 shelfProgressText 误判成「已读到最新章」。
+  return total >= read ? total : 0;
+}
+
 export function shelfProgressText(chapterIndex: number, totalChapters: number, hasProgress: boolean): string {
   if (!hasProgress || chapterIndex < 0) {
     return '未读过';

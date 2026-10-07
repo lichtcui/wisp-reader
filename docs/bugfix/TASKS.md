@@ -12,7 +12,10 @@
 > 证据见条目内「验证」段与 [`../research/CACHE-LIMIT-PLAN.md`](../research/CACHE-LIMIT-PLAN.md) §8。
 > **2026-10-07 第六次同步**：⑤ T-CROSS-3（R3）不再是「仅缓解」——改为「**播放中音频独占进度写**」归属仲裁（新增 `model/ProgressOwner.ets`），
 > 并顺带修 `Reader.onTtsProgress` 跨章缺段落锚点；真机四场景（含**修复前对照**）验证通过，证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §11。
-> 当前 open：**5 项 `[ ]`**（T-SHELF-3 / T-READ-1 / T-READ-3 顺延 · T-SHELF-5 / T-TTS-4 未开始）。
+> **2026-10-07 第七次同步**：⑥ T-SHELF-3（P2）边界加固落地——反推收敛到 `Format.deriveTotalChapters`，脏值/退化值不再编造总数；
+> 真机取证：三态（含新加一本书看到的「未读过」）+ 沙箱 DB 对账 + **临时插桩的脏值旁排对照**（修复前「已读到最新章」误报 / 「28章/28000000000章」→ 修复后「第153章」/「第28章」），插桩已还原、测试书已删、DB 逐字节复原；
+> 证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §12。并登记 T-SHELF-6（`toc.length` ↔ `percent` 反推的口径分歧）。
+> 当前 open：**5 项 `[ ]`**（T-READ-1 / T-READ-3 / T-SHELF-6 顺延 · T-SHELF-5 / T-TTS-4 未开始）。
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
 ---
@@ -55,9 +58,31 @@
     带完整代码与逐步验证清单，可直接按 §8 S1 开工。
 - [x] **T-SHELF-2（R10）数据层懒初始化**：`ShelfRepository` 在 `store===undefined` 时补初始化，避免书架 Tab 初始化前进度丢写。
   - 证据：`model/ShelfRepository.ets:20-36,130-145`、`pages/Shelf.ets:42`
-- [ ] **T-SHELF-3 进度三态**：核对 `progressText` 的 `total` 反推在 `percent` 为 0/极小值时是否正确。
-  - 状态（2026-10-07）：**顺延**（S10 判定低风险、不在 D1–D21 DoD 内），仍未开始。
-  - 证据：`pages/Shelf.ets:225-232`
+- [x] **T-SHELF-3 进度三态**：核对 `progressText` 的 `total` 反推在 `percent` 为 0/极小值时是否正确。
+  - 状态（2026-10-07）：**已完成**（主机复算 + 真机三态 + 真机脏值对照）。
+  - **核对结论**：正常区间**零误差** —— `percent` 恒为 `(chapterIndex+1)/章节数`，`Math.round((ci+1)/percent)` 在 `len ≤ 20000` 的**全部**章序×章数组合（2.0 亿组）下都等于真实章数。
+    有问题的只有**应用自己不会写**的脏值：① `percent ≤ 0 / NaN / Infinity`（旧码已自然落到「第N章」）；
+    ② **极小值** —— `1e-9` → 「**7章/7000000000章**」、次正规 `5e-324` → 「**7章/Infinity章**」；
+    ③ **`percent > 1`** —— 旧码反推出 `total < 已读章数` → 误报「**已读到最新章**」。
+  - **处置**：反推从 `Shelf.ets` 的内联表达式收敛到 `common/Format.ets::deriveTotalChapters(chapterIndex, percent)`（单点、可复算、可复验）；
+    越界/退化值回 `0` → `shelfProgressText` 降级为「第N章」（**总数不可信时不编造数字**）；正常值路径与三段文案**逐字节不变**。无新增 JSON 字段（未动混淆 keep）。
+    兜底阈值 `MAX_DERIVED_CHAPTERS = 100000`（`percent < 1/1e5` 即判不可信）、并拒收 `total < 已读章数` 的反推结果。
+  - 验证（2026-10-07 **主机 + 真机 `33Z0224424136564`**，debug 包 `make run`）：
+    ① 主机：把 `Format.ets` 拷成 `.ts` 后用 `node --experimental-strip-types` **直接 import 真实函数**复算（脚本 `/tmp/tshelf3/check.ts`）——9 项退化值 + 8 项正常值 + `len ≤ 20000` 全枚举 = **0 FAIL**；
+    ② 真机三态（`uitest dumpLayout`）：剑来 `3章/50章`、大唐 `153章/1441章`、天堂向左 `已读到最新章`，搜索→加入书架 的第 4 本（未打开过）显示 `未读过`；
+    拉沙箱 `shelf.db` 对账：`percent` 0.06→50 / 0.106176…→1441 / 1.0→末章，与文案逐条相符；
+    ③ 真机脏值对照（沙箱**不可写** —— `uid=2000(shell)`，`/data/app/el2/...` 与共享存储均 `Permission denied`，无 root —— 改用与 T-CROSS-3 同型的**临时插桩**：
+    对两本书注入脏 percent 并把「修复前表达式 ｜ 修复后函数」并排渲染）：大唐（`percent=1.5`）`已读到最新章 ｜ 第153章`（**修复前误报已完成**）、天堂向左（`percent=1e-9`）`28章/28000000000章 ｜ 第28章`；未注入的剑来 `3章/50章 ｜ 3章/50章`（零回归）；
+    插桩已还原（`git diff` 无 TEMP 残留）并复验回三态原文案；全程 **0 JS 错误 / 0 崩溃**。
+  - 数据复原：测试用第 4 本「赘婿」经编辑模式删除；沙箱 DB 回到 `books 3 / progress 7`，三行 `percent`/`chapter_index` 与验证前逐字节一致。
+  - 未覆盖：无法用**真实脏行**验证（沙箱写不进、备份导入=全量覆盖），脏值分支靠临时插桩；`make check` 通过（无新增 JSON 字段）。
+  - 证据：`common/Format.ets:1-40`（新增 `MAX_DERIVED_CHAPTERS` + `deriveTotalChapters`）、`pages/Shelf.ets:302-310`（原 `:307` 内联反推已删除）。
+- [ ] **T-SHELF-6 进度总数口径分歧（登记 · 未开始）**：`docs/architecture.md:51` 与 `plan.md:163` 写的是「`chapterIndex >= toc.length-1` → 已读到最新章」，
+  实现是**不读目录**、由 `percent` 反推总数（T-SHELF-3 加固后仍如此）。可复现后果：用户读完后源又发新章时，陈旧快照 `percent = 1` 仍判「已读到最新章」，
+  直到重新打开该书（刷新并缓存目录）才更新。
+  - 方向（未选）：① 书架 `reload` 用**已在内存**的 `TocCache` 章数覆盖反推值（零额外 I/O，顺带修陈旧误报，但 `MEMORY_LIMIT=6` 只惠及刚读过的书）；
+    ② 磁盘 toc 也读（书架加载路径新增 N 次同步 `JSON.parse`，冷启动有卡顿风险）；③ `totalChapters` 入库（`books` 加列或 `ReadProgress` 加字段 → 动 Rust struct 与混淆 keep）。
+  - 两项文档已在原位加了指向本条的注记。
 - [x] **T-SHELF-4（真机）长按手势被静默丢弃**：`Shelf.ets` 按计划 §8 S1-3e 写成 helper 返回 gesture（`longPressToEdit(entry): GestureType`）+ `.gesture(this.longPressToEdit(entry))` → **真机长按从不触发**（编译无错、无告警）。
   - 证据（转译产物）：`entry/build/.../esmodule/debug/entry/src/main/ets/pages/Shelf.ts` 里该参数位退化为 `globalThis.Gesture.create(GesturePriority.Parallel); globalThis.Gesture.pop();`（**空手势**）；真机 `uinput -T -d x y -i 900 -u x y` 实测 Down/Up 间隔 935ms 但无任何 gesture 回调。
   - **处置（2026-10-07）**：改为内联手势字面量 `.parallelGesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => this.onLongPress(entry)))`（grid/list 两分支同形），helper 改名 `onLongPress(entry): void`（只留 `longPressFired=true` + `edit.enter`）。理由：`.gesture()/.parallelGesture()` **只接受内联手势字面量**；且 `.gesture()` = `GesturePriority.Low` 会输给祖先识别器。
@@ -196,7 +221,7 @@
 | T-SHELF-1 删除书籍清缓存 | ✅ | 2026-10-07 落地：`removeBooks` + `ChapterCache.deleteBookChapters` / `TocCache.deleteBookToc` / `LocalBook.deleteLocalBookData` + 新增 `model/BookRemoval.ets` 编排；`Index` 二次确认弹窗 + `deleting` 防重入。**真机已验证（D6–D9/D11/D13/D17）**：书架 4→3 且重启仍 3、DB 4/7→3/6 行、`chapters/` 13→6、`tocs/` 4→3、TTS 播放中删除即停播 + FAB 消失；D10/D12 经用户同意跳过 |
 | T-SHELF-4 长按手势被编译成空手势 | ✅ | 2026-10-07 真机发现：helper 返回 gesture + `.gesture()` → 转译为 `Gesture.create; Gesture.pop();` 空手势，真机永不触发 → 改内联 `.parallelGesture(LongPressGesture(...))` + helper 只留业务（`onLongPress`）。计划 §1.6 #42/#43、K16 |
 | T-SHELF-2 数据层懒初始化 | ✅ | `EntryAbility.onCreate` 预调 `initShelf`，搜索直达阅读也能落进度（`EntryAbility.ets:14-19`） |
-| T-SHELF-3 进度三态 | ⏭ | `percent` 极小值反推 `total` 的边界不在本轮 DoD 范围（D1–D21 未覆盖）；低风险，顺延复验 |
+| T-SHELF-3 进度三态 | ✅ | 2026-10-07 边界加固（`Format.deriveTotalChapters`）：`percent` ≤0 / NaN / Infinity / >1 / 极小值 → 回 0，降级「第N章」；正常区间 `len ≤ 20000` 全枚举 0 误差。**主机复算 + debug 构建 + 真机三态 + 真机脏值对照均已通过**（插桩已还原、DB 已复原）；文档口径分歧另登记 T-SHELF-6（[`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §12） |
 | T-SEARCH-1 concurrency 透传 | ✅ | `BookEngineNapi.search` 现传 `concurrency`（`BookEngineNapi.ets:23-26`） |
 | T-SEARCH-2 搜索代次 guard | ✅ | S6 实现并真机验证；本轮静态复核无残影 |
 | T-READ-1 统一正文清洗 | ⏭ | 两处 `sanitize` 当前**逐字节一致**（非功能缺陷）；合并为纯重构，顺延 |

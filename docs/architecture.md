@@ -49,6 +49,8 @@ legado-core（规则解析 / HTML·JSON 提取 / HTTP / Cookie / 限速 / 正文
 - `Book.bookId = hash(normalize(sourceUrl + bookUrl))`。
 - 进度用 `paragraphIndex + charOffset`（与字号无关）。
 - 书架进度三态：无进度→「未读过」；`chapterIndex >= toc.length-1`→「已读到最新章」；否则 `{i+1}章/{total}章`。
+  （实现**不读目录**，`total` 由 `percent = (chapterIndex+1)/toc.length` 反推——与 `toc.length` 直读的差异、以及陈旧快照的后果见
+  [`bugfix/TASKS.md`](./bugfix/TASKS.md) T-SHELF-6；反推的边界口径见 `common/Format.ets::deriveTotalChapters`。）
 
 ## 页面与路由
 
