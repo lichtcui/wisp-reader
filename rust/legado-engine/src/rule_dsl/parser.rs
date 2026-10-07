@@ -1,3 +1,12 @@
+// ─── 文件索引（改本文件先看这里）─────────────────────────────────────
+//   入口：      tokenize / parse_rule → Vec<RuleToken>
+//   切分：      split_fallback（`||`）/ split_segments（`&&`）/ split_index（下标与区间）/ extract_index
+//   单段解析：  parse_locator（tag/class/id）/ parse_annotation（text/html/正则等）/ index_token /
+//                parse_regex_replace / tokenize_at_chain
+//   类型：      RuleToken / IndexSpec
+//   上层用法见同目录 mod.rs（extract_single）、html_extractor.rs、json_extractor.rs
+// ──────────────────────────────────────────────────────────────────────
+
 /// Legado rule DSL lexer & parser.
 ///
 /// Tokenizes a rule string like `class.item@tag.li.0@text` into a chain

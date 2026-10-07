@@ -3,6 +3,18 @@
 //! Field names match the ArkTS side (`engine/types.ets`) and the original
 //! Legado JSON so serde can round-trip without a conversion layer.
 
+// ─── 文件索引（改本文件先看这里）─────────────────────────────────────
+// ⚠️ **本文件的字段名就是跨 NAPI 的 JSON 契约**：新增/改名一个字段要同步三处——
+//    此处 struct、`entry/src/main/ets/engine/types.ets` 的 interface、
+//    `entry/obfuscation-rules.txt` 的 `-keep-property-name`；漏第三处 = release 读到 undefined。
+//    `make check` 会核对后两处。契约说明见 `docs/engine.md` §JSON 契约。
+//   书源与规则：  BookSource / SearchRule / BookInfoRule / ContentRule / TocRule / ExploreRule
+//   搜索与详情：  BookSearchItem / SourceStatus / SearchOutput / BookInfo
+//   目录与正文：  Chapter / ContentResult / DetectResult
+//   诊断：        Diagnostic / ParseOutput（给 parseWithDiagnostics 用）
+//   工具：        parse_concurrent_rate / default_true / Extra（未知字段透传，保证 round-trip 不掉规则）
+// ──────────────────────────────────────────────────────────────────────
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;

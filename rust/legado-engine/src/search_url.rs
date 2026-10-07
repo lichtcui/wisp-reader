@@ -1,6 +1,15 @@
 //! Build HTTP request specs from a book source's `searchUrl` (templates, POST
 //! convention, `@js:` L1 resolution, header parsing, URL resolution).
 
+// ─── 文件索引（改本文件先看这里）─────────────────────────────────────
+//   入口：      build_request（searchUrl → RequestSpec，含 POST 与 `@js:` L1）
+//   模板与 JS：  resolve_template / resolve_js_l1 / contains_post_marker / try_parse_post /
+//                parse_post_request / extract_post_body
+//   URL 与头：  resolve_url / urlencoding / extract_charset / source_headers / page_headers
+//   结构体：    RequestSpec（url/method/body/headers/charset/no_redirect）
+//   ⚠️ L1 是 v1 唯一保留的 JS 形态（见 decisions.md D10）：只做字符串替换，不加 JS 运行时
+// ──────────────────────────────────────────────────────────────────────
+
 use regex::Regex;
 
 use crate::types::BookSource;

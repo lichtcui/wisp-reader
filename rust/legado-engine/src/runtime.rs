@@ -3,6 +3,16 @@
 //! v1 does not execute JS: sources that need it are excluded by the gate, so
 //! these paths only run DSL rules.
 
+// ─── 文件索引（改本文件先看这里；本文件约 900 行）──────────────────────────
+// 下面只列**名字**，不列行号（行号会漂）；定位用 `grep -n "<名字>" rust/legado-engine/src/runtime.rs`。
+//   对外入口：  search / book_info / toc / content / detect / verify_chain / download_cover
+//   搜索：      search_one（单源）/ SourceSearch（单源结果）/ SearchOptions
+//   链路校验：  detect_one / detect_chain（搜索→详情→目录→正文）/ DEFAULT_DETECT_TIMEOUT_MS
+//   正文清洗：  ct_of / spec_for / clean_text / strip_script_style / eval_rule_concat
+//   书名匹配：  normalize_book_name / names_match / bigram_jaccard
+//   测试基建：  文件尾部 `#[cfg(test)]` 内有 mock_server（本地 TcpListener 造页面，可复用）
+// ──────────────────────────────────────────────────────────────────────
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;

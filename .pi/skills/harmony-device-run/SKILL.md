@@ -9,6 +9,8 @@ description: 改完本仓库代码后在真机验证的完整闭环流程（判�
 1. **只编译不安装 = 设备上跑的是旧版。**
 2. **不 `aa force-stop` = `aboutToAppear` 不重跑。**
 
+**拿不准先跑 `make doctor`**：它比对 `.so` / `index.d.ts` / HAP 与源码的 mtime 并报设备连通（回答“改了没生效”的第三类成因）。
+
 ## 1. 判定改动范围
 
 | 改了什么 | 要重建 native（步骤①）吗 | 后续 |
@@ -19,6 +21,7 @@ description: 改完本仓库代码后在真机验证的完整闭环流程（判�
 
 改 Rust 后额外两件事：
 1. 先在主机跑测试：`make test`（= `cd rust/legado-engine && cargo test`，含 mock 端到端）——过了再上设备；
+   只改规则 DSL / URL 模板 / 门禁时优先 `make probe ARGS='源.json search 关键词'`（主机直跑，秒级，不用装 HAP）；
 2. 重新生成 `.so` 与 `index.d.ts`：`make rust`（会一次性拷进 `entry/libs/...` 与 `entry/src/main/cpp/types/liblegado_core/`）。
 
 ## 2. 执行
@@ -29,7 +32,10 @@ description: 改完本仓库代码后在真机验证的完整闭环流程（判�
 |---|---|
 | 只改 ArkTS | `make run` |
 | 改了 Rust / NAPI 类型 | `make test && make rust && make run` |
-| 看日志 | `make log`（已带 `hilog -r` + `-T SourceReaderPoC`） |
+| 只调引擎规则（不上设备） | `make probe ARGS='entry/src/main/resources/rawfile/bundled-sources.json detect 关键词'` |
+| 怀疑设备上是旧版 | `make doctor` |
+| 混淆相关 / 备份往返 | `make run-release`（release 包才现形的 bug 只在它上面能看到） |
+| 看日志 | `make log`（已带 `hilog -r` + `-T SourceReaderPoC`；可加 `Q=关键词`） |
 | 看设备 | `make devices` |
 
 需要手工分步时，`make -n <target>` 可打印它到底执行了什么；原始命令与环境变量

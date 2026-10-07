@@ -4,6 +4,15 @@
 //! Security: `danger_accept_invalid_certs` is deliberately NOT used — the app
 //! must never disable certificate validation.
 
+// ─── 文件索引（改本文件先看这里）─────────────────────────────────────
+//   定位用 `grep -n "<名字>" rust/legado-engine/src/http_client.rs`。
+//   取 client：    engine()（全局单例）/ Engine / client_for（每源一个，Cookie 隔离，MAX_CLIENTS=64 后回收）
+//   发请求：      SourceClient::fetch（限速 concurrentRate）/ FetchResult / RequestSpec（见 search_url.rs）
+//   失败分类：    FetchError / FailReason / classify_status（HTTP 码 → 失败原因）/ looks_like_tls / fail_reason
+//   头与编码：    parse_headers / decode_body / extract_charset_from_header / USER_AGENT / domain_of
+//   注意：切 TLS 行为/证书校验前先看本文件头部的安全注释（禁止放行）
+// ──────────────────────────────────────────────────────────────────────
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
