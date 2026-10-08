@@ -31,6 +31,7 @@ FILES=(
   docs/progress.md
   docs/archive/PROGRESS-HISTORY.md
   docs/archive/SHELF-EDIT-PLAN.md
+  docs/research/TTS-ENGINE-COMPARISON.md
 )
 if [ "$#" -gt 0 ]; then
   FILES=("$@")

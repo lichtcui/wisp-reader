@@ -1,5 +1,5 @@
 [Unit]
-Description=Source Reader remote TTS (sherpa-onnx ZipVoice)
+Description=Source Reader remote TTS (sherpa-onnx VITS)
 After=network.target
 
 [Service]
@@ -11,10 +11,24 @@ RestartSec=3
 Environment=PYTHONUNBUFFERED=1
 # Set to the same value the app's "API Key" field sends.
 Environment=X_API_KEY=
-# num_steps=2 keeps RTF comfortably <1; =3 is cleaner (less onset grain) but tighter.
-# NOTE: measured 2026-10-07 on this 4C VPS -- steps=2 RTF 0.56, steps=3 RTF 0.84,
-# steps=6 RTF 1.49 (too slow for realtime). See docs/research/TTS-ENGINE-COMPARISON.md.
-Environment=NUM_STEPS=3
+# --- engine (switched 2026-10-08: ZipVoice -> VITS) --------------------------
+# VITS (vits-hf-zh-jp-zomehwh.onnx, 804 speakers) runs RTF 0.58 and does not degrade on
+# long paragraphs, where ZipVoice needed num_steps>=6 (RTF 1.49) to stop sounding muddy
+# and could never be both real-time and clean on this box. See
+# docs/research/TTS-ENGINE-COMPARISON.md for the measurements and the lexicon bug.
+Environment=ENGINE=vits
+Environment=VITS_DIR=/root/tts/genshin-vits
+# The client hardcodes speed=1.0 for the remote engine; this is the server-side rate.
+Environment=SPEED_SCALE=0.85
+# sherpa emits only ~80ms between sentences (measured). Split server-side and insert real
+# silence; commas keep the model's own short pause.
+Environment=SENTENCE_PAUSE_MS=320
+# Set to 1 to A/B the raw model output (bypasses EQ/normalize/limit/fades).
+#Environment=POST_ENABLE=0
+
+# --- ZipVoice rollback path (ENGINE=zipvoice only) ---------------------------
+# steps=2 RTF 0.56, steps=3 RTF 0.84, steps=6 RTF 1.49 (measured 2026-10-07, 4C VPS).
+#Environment=NUM_STEPS=3
 
 # --- memory safety (added 2026-10-07) ---------------------------------------
 # The box has 3.9G RAM and no swap used to be configured; it had already OOM-killed
@@ -24,7 +38,7 @@ Environment=NUM_STEPS=3
 # whatever else is running. 2G swap is configured in /etc/fstab.
 MemoryHigh=1200M
 MemoryMax=1600M
-# Daily restart as a leak backstop; a restart costs ~7s of model load.
+# Daily restart as a leak backstop; a VITS restart costs ~3s of model load.
 RuntimeMaxSec=86400
 
 # Avoid thread oversubscription: NumThreads=4 for ONNX + numpy's FFT pool on a 4-core box.

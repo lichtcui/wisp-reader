@@ -1,31 +1,61 @@
-"""Remote TTS service: sherpa-onnx OfflineTts + ZipVoice (int8 distil) zero-shot clone.
+"""Remote TTS service for the HarmonyOS reader.
+
+Two engines, selected by `ENGINE`:
+
+  vits      (default) sherpa-onnx OfflineTts + multi-speaker VITS.
+            Model: vits-hf-zh-jp-zomehwh.onnx (804 speakers, native 22050 Hz).
+            Chinese pronunciation comes from a *Chinese-only* lexicon -- see below.
+  zipvoice  sherpa-onnx OfflineTtsZipvoiceModelConfig zero-shot cloning (kept for
+            rollback; RTF>=0.83 on a 4-core box and its few-step flow-matching output
+            is audibly muddy at any affordable step count).
 
 Endpoints:
-  GET  /health                   -> {"ok": true}
-  POST /tts {text, voice, speed} -> audio/wav (24kHz S16LE mono, RIFF header)
+  GET  /health                   -> {"ok", "engine", "voices", "speed_scale", ...}
+  POST /tts {text, voice, speed} -> audio/wav (24 kHz S16LE mono, RIFF header)
 
-Single user / single VPS worker. Reference audio is resampled to the model rate once
-at load and kept resident; `tts.generate(...)` is serialized by a lock because
-sherpa's OfflineTts.generate() is not thread-safe (`num_threads=4` per call, so two
-concurrent calls would oversubscribe a 4-core box).
+Why the lexicon matters (this was the "some characters sound like a Japanese person"
+bug): the checkpoint's own lexicon ships as two concatenated, codepoint-sorted
+passes -- pass 1 is a Chinese *single-character* table, pass 2 is a Japanese word
+list, and the two only overlap for 1,376 words. sherpa's InitLexicon keeps the first
+occurrence, so Chinese wins for those, but every multi-character Chinese word that
+exists only in the Japanese pass is read in Japanese:
 
-Post-processing (see `docs/research/TTS-ENGINE-COMPARISON.md` for the measurements):
-ZipVoice at the only affordable step count (2-3 on a 4-core CPU) loses the 600-1500 Hz
-presence band and piles ~48% of the energy into a single 200-300 Hz band, which is
-audible as "boomy / muddy". `num_steps>=6` fixes it but pushes RTF above 1.5, so the
-service instead applies a zero-phase FFT EQ (de-mud + presence), a per-voice loudness
-normalization (the raw model differs by up to 5.5 dB between voices) and edge fades.
-All of it costs ~0.2% CPU, i.e. it does not move the RTF.
+    追求 -> ʦ ɯ ↑ i k y ɯ ɯ (tsuikyuu)   instead of   zhuīqiú
+    分裂 -> b ɯ ↑ N r e ʦ ɯ  (bunretsu)  instead of   fēnliè
+
+`lexicon_final.txt` is built by `mklex2.py`: the complete pure-Chinese lexicon
+(66,395 entries, 0 duplicates when loaded) plus 395 rare single chars from the
+checkpoint's Chinese pass; the Japanese pass is dropped outright.
+
+Text normalization: the model's symbol table has no digits, so without `rule_fsts`
+every number is silently dropped ("第2024章" -> "第章"). `date.fst`, `number.fst`
+and `phone.fst` expand digits to Chinese before synthesis.
+
+Pauses: punctuation is not in the lexicon (it is dropped as OOV) but sherpa still
+splits on it, and it produces only ~80 ms of silence. Measured: the same paragraph
+with punctuation removed has *zero* internal pauses. `SENTENCE_PAUSE_MS` therefore
+splits the text at sentence enders server-side and inserts real silence, while commas
+keep the model's own short pauses.
+
+Post-processing (numpy only -- the VPS has no scipy/ffmpeg/sox). For ZipVoice the
+few-step flow-matching output piles ~48% of its energy into 200-300 Hz and loses the
+600-1500 Hz presence band, hence the optional zero-phase EQ; VITS does not need it,
+so EQ defaults to off there. Loudness normalization (voices differ by up to 5.5 dB)
+plus a block-wise peak limiter and edge fades always run. All of it costs ~0.2% CPU.
 
 Env knobs:
-  NUM_STEPS           flow-matching steps (2-3 keeps RTF<1 on 4 cores; >=6 is cleaner but RTF>1)
-  EQ_BANDS            "fc:gain_db:q,..." peaking filters; empty string disables EQ
-  TARGET_RMS_DBFS     loudness target (default -16 dBFS RMS)
-  PEAK_CEILING_DBFS   peak ceiling; normalization is reduced rather than clipping
-  POST_ENABLE         "0" to bypass EQ/normalize/fades entirely (A/B + rollback)
-  ZIPVOICE_DIR / VOCODER / REFS_DIR / X_API_KEY   as before
-
-Auth: if `X_API_KEY` env is set, the `X-API-Key` request header must match.
+  ENGINE              vits | zipvoice
+  VITS_DIR            model dir (default /root/tts/genshin-vits)
+  VITS_DICT_DIR       jieba dict dir for word segmentation
+  RULE_FST_DIR        dir holding date.fst / number.fst / phone.fst
+  SPEED_SCALE         server-side multiplier on the client's speed (default 0.85)
+  SENTENCE_PAUSE_MS   silence inserted between sentences (default 320; 0 = off)
+  EQ_BANDS            "fc:gain_db:q,..."; empty disables EQ
+  TARGET_RMS_DBFS     loudness target (default -18 dBFS RMS)
+  PEAK_CEILING_DBFS   peak ceiling; the limiter engages instead of clipping
+  POST_ENABLE         "0" to bypass EQ/normalize/limit/fades (A/B + rollback)
+  X_API_KEY           if set, requests need a matching `X-API-Key` header
+  NUM_STEPS / ZIPVOICE_DIR / VOCODER / REFS_DIR   ZipVoice engine only
 """
 
 import io
@@ -44,23 +74,53 @@ from pydantic import BaseModel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("remote-tts")
 
-MODEL_DIR = os.environ.get(
-    "ZIPVOICE_DIR",
-    "/root/tts/zipvoice/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia",
-)
-VOCODER = os.environ.get("VOCODER", "/root/tts/zipvoice/vocos_24khz.onnx")
-REFS_DIR = os.environ.get("REFS_DIR", "/root/tts/refs")
+ENGINE = os.environ.get("ENGINE", "vits").strip().lower()
 API_KEY = os.environ.get("X_API_KEY", "").strip()
-
-NUM_STEPS = int(os.environ.get("NUM_STEPS", "2"))  # 2 = RTF<1 前提；=3 偏慢但更干净，可 A/B
 NUM_THREADS = 4
 MODEL_PROVIDER = "cpu"
+OUT_SR = 24000  # the client's contract (SAMPLE_RATE_REMOTE)
+
+# --- VITS engine -----------------------------------------------------------------
+VITS_DIR = os.environ.get("VITS_DIR", "/root/tts/genshin-vits")
+VITS_MODEL = os.path.join(VITS_DIR, "vits-hf-zh-jp-zomehwh.onnx")
+VITS_TOKENS = os.path.join(VITS_DIR, "zome_tokens.txt")
+VITS_LEXICON = os.path.join(VITS_DIR, "lexicon_final.txt")
+VITS_DICT_DIR = os.environ.get("VITS_DICT_DIR", "/root/tts/vits-zh-ll/sherpa-onnx-vits-zh-ll/dict")
+RULE_FST_DIR = os.environ.get("RULE_FST_DIR", "/root/tts/vits-zh-ll/sherpa-onnx-vits-zh-ll")
+RULE_FSTS = [x.strip() for x in os.environ.get("RULE_FSTS", "date.fst,number.fst,phone.fst").split(",") if x.strip()]
+
+# sid verified by measuring F0 per speaker: male voices must land at 90-140 Hz.
+VITS_VOICES = {
+    "胡桃": 119,      # 312 Hz
+    "甘雨": 111,      # 273 Hz
+    "刻晴": 115,      # 255 Hz
+    "雷电将军": 125,  # 208 Hz
+    "钟离": 104,      # 122 Hz
+}
+# The app still ships TTS_REMOTE_VOICE_OPTIONS=[流萤, 花火, 卡芙卡]; accepting them here
+# keeps the client working until that list is updated.
+VITS_VOICE_ALIASES = {"流萤": "甘雨", "花火": "胡桃", "卡芙卡": "雷电将军"}
+
+SPEED_SCALE = float(os.environ.get("SPEED_SCALE", "0.85"))
+SENTENCE_PAUSE_MS = float(os.environ.get("SENTENCE_PAUSE_MS", "320"))
+
+# --- ZipVoice engine (rollback path) ---------------------------------------------
+MODEL_DIR = os.environ.get("ZIPVOICE_DIR",
+                           "/root/tts/zipvoice/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia")
+VOCODER = os.environ.get("VOCODER", "/root/tts/zipvoice/vocos_24khz.onnx")
+REFS_DIR = os.environ.get("REFS_DIR", "/root/tts/refs")
+NUM_STEPS = int(os.environ.get("NUM_STEPS", "3"))  # 2 = RTF<1 前提；>=6 更干净但 RTF>1.5
+
+VOICE_REFS = {
+    "流萤": "【中立】…我应该会选择请求猎犬家系停止追捕。.wav",
+    "花火": "【吃惊】…好吧，看你这个表情是不会相信我的…没事，我可以明天再来问你一遍！.wav",
+    "卡芙卡": "【中立】黑塔用这么简单的小玩意藏她的宝贝？.wav",
+}
 
 # --- post-processing -------------------------------------------------------------
 POST_ENABLE = os.environ.get("POST_ENABLE", "1") != "0"
-# Measured deviation of num_steps=3 output vs. the num_steps=6 output (and vs. the
-# reference clips): too much 200-300 Hz, too little 600-1500 Hz. Values in dB.
-EQ_BANDS_RAW = os.environ.get("EQ_BANDS", "280:-3.5:0.9,2800:+3.5:0.7")
+# Only meaningful for ZipVoice; VITS output needs no spectral correction.
+EQ_BANDS_RAW = os.environ.get("EQ_BANDS", "" if ENGINE == "vits" else "280:-3.5:0.9,2800:+3.5:0.7")
 TARGET_RMS_DBFS = float(os.environ.get("TARGET_RMS_DBFS", "-18"))
 PEAK_CEILING_DBFS = float(os.environ.get("PEAK_CEILING_DBFS", "-1"))
 FADE_IN_MS = 15
@@ -68,23 +128,16 @@ FADE_OUT_MS = 40
 
 BAND_EDGES = [(0, 120), (120, 200), (200, 300), (300, 600), (600, 1500), (1500, 4000), (4000, 8000)]
 
-# voice -> default reference audio (basename under REFS_DIR/<voice>/中文/emotions/)
-VOICE_REFS = {
-    "流萤": "【中立】…我应该会选择请求猎犬家系停止追捕。.wav",
-    "花火": "【吃惊】…好吧，看你这个表情是不会相信我的…没事，我可以明天再来问你一遍！.wav",
-    "卡芙卡": "【中立】黑塔用这么简单的小玩意藏她的宝贝？.wav",
-}
-
 _tts = None
-_refs = {}  # voice -> (ref_samples float32 @ model rate, sr, ref_text)
-_lock = threading.Lock()  # sherpa OfflineTts.generate() is not thread-safe; serialize
+_refs = {}  # ZipVoice only: voice -> (samples float32 @ model rate, sr, ref_text)
+_lock = threading.Lock()  # OfflineTts.generate() is not thread-safe; serialize
 
 
 # --- audio helpers (numpy only: the VPS has no scipy/ffmpeg) ----------------------
 
 def _resample_fft(x, sr_in, sr_out):
-    """Band-limited (FFT) resampler. Runs 3x at startup; keeps the refs at the model
-    rate so sherpa does not rebuild a 44.1k->24k resampler on every request."""
+    """Band-limited (FFT) resampler. Verified tone-transparent: 1000 Hz in -> 1000 Hz
+    out. Done once per response (22050 -> 24000), never per reference clip."""
     if sr_in == sr_out:
         return x, sr_out
     n_out = int(round(len(x) * sr_out / sr_in))
@@ -225,9 +278,7 @@ def _profile(x, sr):
 def _fmt_profile(p):
     if not p:
         return "(too short)"
-    bands = " ".join(
-        "%d-%d=%.1f" % (a, b, p["%d-%d" % (a, b)]) for a, b in BAND_EDGES
-    )
+    bands = " ".join("%d-%d=%.1f" % (a, b, p["%d-%d" % (a, b)]) for a, b in BAND_EDGES)
     return "rms=%.4f peak=%.3f | %s" % (p["rms"], p["peak"], bands)
 
 
@@ -251,9 +302,60 @@ def _ref_text_from(path):
     return stem.split("】", 1)[1].strip() if "】" in stem else stem.strip()
 
 
-def _build():
+def _split_sentences(text):
+    """Break on sentence enders so we can insert our own silence between them.
+
+    sherpa already splits on punctuation, but it only produces ~80 ms of silence
+    (measured), which reads as "no room to breathe" over a whole chapter. Commas stay
+    inside a segment on purpose: the model's own short pause there is about right.
+    """
+    out = []
+    buf = []
+    for ch in text:
+        if ch in "\n\r":
+            if buf:
+                out.append("".join(buf))
+                buf = []
+            continue
+        if ch in "。！？!?…":
+            buf.append(ch)
+            out.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        out.append("".join(buf))
+    return [s.strip() for s in out if s.strip()]
+
+
+def _build_vits():
     global _tts
+    _tts = so.OfflineTts(so.OfflineTtsConfig(
+        model=so.OfflineTtsModelConfig(
+            vits=so.OfflineTtsVitsModelConfig(
+                model=VITS_MODEL,
+                tokens=VITS_TOKENS,
+                lexicon=VITS_LEXICON,
+                dict_dir=VITS_DICT_DIR,
+            ),
+            num_threads=NUM_THREADS,
+            provider=MODEL_PROVIDER,
+        ),
+        max_num_sentences=1,
+        rule_fsts=",".join(os.path.join(RULE_FST_DIR, x) for x in RULE_FSTS),
+    ))
+    first_sid = VITS_VOICES["钟离"]
     t0 = time.time()
+    _tts.generate("你好", sid=first_sid, speed=1.0)  # pay jieba/FST/ORT-arena cost now
+    log.info("vits ready (warmed) in %.2fs sr=%d speakers=%d model=%s lexicon=%s rule_fsts=%s",
+             time.time() - t0, _tts.sample_rate, _tts.num_speakers,
+             os.path.basename(VITS_MODEL), os.path.basename(VITS_LEXICON), ",".join(RULE_FSTS))
+    log.info("voices=%s aliases=%s speed_scale=%.2f sentence_pause=%.0fms",
+             sorted(VITS_VOICES), VITS_VOICE_ALIASES, SPEED_SCALE, SENTENCE_PAUSE_MS)
+
+
+def _build_zipvoice():
+    global _tts
     zip_cfg = so.OfflineTtsZipvoiceModelConfig(
         tokens=os.path.join(MODEL_DIR, "tokens.txt"),
         encoder=os.path.join(MODEL_DIR, "encoder.int8.onnx"),
@@ -268,78 +370,116 @@ def _build():
         path = os.path.join(REFS_DIR, voice, "中文", "emotions", name)
         samples, sr = _load_wav(path)
         rms_in = float(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
-        samples, sr = _resample_fft(samples, sr, 24000)
+        samples, sr = _resample_fft(samples, sr, OUT_SR)
         rms_out = float(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
         _refs[voice] = (samples, sr, _ref_text_from(path))
-        log.info(
-            "ref loaded voice=%s file=%s sr=%d dur=%.2fs rms %.4f->%.4f",
-            voice, name, sr, len(samples) / sr, rms_in, rms_out,
-        )
-    # warmup: pay the first-inference / resampler creation cost now, not on first request
+        log.info("ref loaded voice=%s file=%s sr=%d dur=%.2fs rms %.4f->%.4f",
+                 voice, name, sr, len(samples) / sr, rms_in, rms_out)
     _s, _sr, _t = _refs[list(VOICE_REFS)[0]]
     warm = _tts.generate("你好", prompt_text=_t, prompt_samples=_s, sample_rate=_sr, num_steps=NUM_STEPS)
-    log.info(
-        "post-processing: enabled=%s eq=%s target=%.1fdBFS ceiling=%.1fdBFS",
-        POST_ENABLE, EQ_BANDS_RAW if POST_ENABLE else "(off)", TARGET_RMS_DBFS, PEAK_CEILING_DBFS,
-    )
-    log.info("tts ready (warmed) in %.2fs; warmup %s", time.time() - t0,
+    log.info("zipvoice ready (warmed); warmup %s",
              _fmt_profile(_profile(np.asarray(warm.samples, dtype=np.float32), warm.sample_rate)))
+
+
+def _build():
+    t0 = time.time()
+    if ENGINE == "vits":
+        _build_vits()
+    elif ENGINE == "zipvoice":
+        _build_zipvoice()
+    else:
+        raise SystemExit("unknown ENGINE %r (want vits|zipvoice)" % ENGINE)
+    log.info("engine=%s post: enabled=%s eq=%s target=%.1fdBFS ceiling=%.1fdBFS",
+             ENGINE, POST_ENABLE, EQ_BANDS_RAW if POST_ENABLE else "(off)",
+             TARGET_RMS_DBFS, PEAK_CEILING_DBFS)
+    log.info("startup total %.2fs", time.time() - t0)
 
 
 _build()
 
-app = FastAPI(title="remote-tts", version="1.1.0")
+app = FastAPI(title="remote-tts", version="2.0.0")
 
 
 class TtsRequest(BaseModel):
     text: str
-    voice: str = "流萤"
+    voice: str = "钟离"
     speed: float = 1.0
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "steps": NUM_STEPS, "post": POST_ENABLE, "eq": EQ_BANDS_RAW if POST_ENABLE else ""}
+    return {
+        "ok": True,
+        "engine": ENGINE,
+        "version": "2.0.0",
+        "sample_rate": OUT_SR,
+        "voices": sorted(VITS_VOICES) if ENGINE == "vits" else sorted(VOICE_REFS),
+        "speed_scale": SPEED_SCALE,
+        "post": POST_ENABLE,
+        "eq": EQ_BANDS_RAW if POST_ENABLE else "",
+    }
+
+
+def _synth_vits(text, voice, speed):
+    sid = VITS_VOICES[voice]
+    parts = _split_sentences(text)
+    pause = np.zeros(max(0, int(OUT_SR * SENTENCE_PAUSE_MS / 1000.0)), dtype=np.float32)
+    chunks = []
+    for i, seg in enumerate(parts):
+        audio = _tts.generate(seg, sid=sid, speed=speed)
+        seg_x = np.asarray(audio.samples, dtype=np.float32)
+        src_sr = audio.sample_rate
+        seg_x = seg_x - seg_x.mean()
+        seg_x, src_sr = _resample_fft(seg_x, src_sr, OUT_SR)
+        if i:
+            chunks.append(pause)
+        chunks.append(seg_x)
+    return np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32), OUT_SR, len(parts)
+
+
+def _synth_zipvoice(text, voice, speed):
+    ref_samples, ref_sr, ref_text = _refs[voice]
+    audio = _tts.generate(text, prompt_text=ref_text, prompt_samples=ref_samples,
+                          sample_rate=ref_sr, num_steps=NUM_STEPS)
+    return np.asarray(audio.samples, dtype=np.float32), audio.sample_rate, 1
 
 
 @app.post("/tts")
 def synthesize(req: TtsRequest, request: Request):
-    if API_KEY:
-        got = request.headers.get("X-API-Key", "")
-        if got != API_KEY:
-            raise HTTPException(status_code=401, detail="unauthorized")
-    if req.voice not in VOICE_REFS:
+    if API_KEY and request.headers.get("X-API-Key", "") != API_KEY:
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    voice = req.voice
+    if ENGINE == "vits":
+        voice = VITS_VOICE_ALIASES.get(voice, voice)
+        if voice not in VITS_VOICES:
+            raise HTTPException(status_code=400, detail="unknown voice")
+    elif voice not in VOICE_REFS:
         raise HTTPException(status_code=400, detail="unknown voice")
+
     text = req.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="empty text")
-    # `speed` is accepted for API compatibility but ZipVoice has no rate control;
-    # playback speed is handled client-side (system TTS only) in v1.
 
-    ref_samples, ref_sr, ref_text = _refs[req.voice]
+    # The client hardcodes speed=1.0 for the remote engine; SPEED_SCALE is the server-side
+    # default rate, and a future client-side speed setting multiplies on top of it.
+    speed = min(2.0, max(0.5, req.speed)) * SPEED_SCALE
+
     t0 = time.time()
     with _lock:
-        audio = _tts.generate(
-            text,
-            prompt_text=ref_text,
-            prompt_samples=ref_samples,
-            sample_rate=ref_sr,
-            num_steps=NUM_STEPS,
-        )
+        if ENGINE == "vits":
+            samples, out_sr, n_seg = _synth_vits(text, voice, speed)
+        else:
+            samples, out_sr, n_seg = _synth_zipvoice(text, voice, speed)
         t_synth = time.time()
-        samples = np.asarray(audio.samples, dtype=np.float32)
-        out_sr = audio.sample_rate
-        raw_prof = _profile(samples - samples.mean(), out_sr)
-        out_rms = float(raw_prof.get("rms", 0.0))
+        raw_prof = _profile(samples, out_sr)
         if POST_ENABLE:
-            samples = samples - samples.mean()
             samples = _eq(samples, out_sr, EQ_BANDS)
             samples, gain_db, out_rms = _normalize(samples, out_sr, TARGET_RMS_DBFS, PEAK_CEILING_DBFS)
             samples = _fades(samples, out_sr, FADE_IN_MS, FADE_OUT_MS)
         else:
-            gain_db = 0.0
+            gain_db, out_rms = 0.0, float(raw_prof.get("rms", 0.0))
         wall = time.time() - t0
-        # only the last-resort safety net: normalization already keeps us under the ceiling
         s16 = np.clip(samples * 32767.0, -32768.0, 32767.0).astype("<i2")
         dur = len(samples) / out_sr
 
@@ -349,12 +489,11 @@ def synthesize(req: TtsRequest, request: Request):
             w.setsampwidth(2)
             w.setframerate(out_sr)
             w.writeframes(s16.tobytes())
-    log.info(
-        "synth voice=%s chars=%d dur=%.2fs wall=%.2fs rtf=%.3f synth=%.2fs sr=%d gain=%+.2fdB "
-        "rms %.4f->%.4f",
-        req.voice, len(text), dur, wall, wall / dur if dur else 0.0, t_synth - t0, out_sr, gain_db,
-        raw_prof.get("rms", 0.0), out_rms,
-    )
+
+    log.info("synth engine=%s voice=%s chars=%d segs=%d speed=%.3f dur=%.2fs wall=%.2fs rtf=%.3f "
+             "synth=%.2fs sr=%d gain=%+.2fdB rms %.4f->%.4f",
+             ENGINE, voice, len(text), n_seg, speed, dur, wall, wall / dur if dur else 0.0,
+             t_synth - t0, out_sr, gain_db, raw_prof.get("rms", 0.0), out_rms)
     log.info("  before: %s", _fmt_profile(raw_prof))
-    log.info("  after : %s", _fmt_profile(_profile(samples - samples.mean(), out_sr)))
+    log.info("  after : %s", _fmt_profile(_profile(samples, out_sr)))
     return Response(content=buf.getvalue(), media_type="audio/wav")

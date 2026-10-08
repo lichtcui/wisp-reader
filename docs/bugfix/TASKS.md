@@ -1,3 +1,7 @@
+> **2026-10-08 第十三次同步**：⑫ **T-TTS-5 服务端部分完成** —— 远端 TTS 已切到 VITS 并上线，服务端三个真 bug（词典 / 数字 / 停顿）修复，`/health` 返回 `{ok,engine,version,sample_rate,voices,speed_scale,post,eq}`。
+> 关键转折：**不需要微调** —— 804 说话人底模自带原神声线（含钟离/胡桃/甘雨/刻晴/雷电将军），F0 正常；原先规划的「微调 VITS」路线作废。
+> 线上实测 RTF **0.576**（硬约束 <1 达标）、RSS 441MB 零增长、24kHz 契约与旧音色名兼容均保持不变。剩余：真机端到端 + `readTimeout` 整改（设备离线）。
+
 > **2026-10-08 第十二次同步**：⑪ 登记 **T-TTS-5（P1）远端 TTS 引擎切换**（即 T-TTS-4 删除时所指的「整体重做」）。
 > 本轮实测把「杂音 + 跟不上」两个症状收敛到同一个根因：ZipVoice 在本机**没有任何一档 `num_steps` 能同时实时与不浑浊**；
 > 同时实测出唯一可行替代（`sherpa-onnx-vits-zh-ll` RTF 0.40 / RSS 250MB），结论与训练链路见 [`../research/TTS-ENGINE-COMPARISON.md`](../research/TTS-ENGINE-COMPARISON.md)。
@@ -173,22 +177,33 @@
   - 证据：`model/TtsController.ets:705-721`、`:880-907`
 - [x] **T-TTS-3 错误态恢复**：`onError` 后 `playing=false`，确认 UI 与 `AVSession` 状态一致、可重试。
   - 证据：`model/TtsController.ets:585-590`、`pages/Listening.ets:359-374`
-- [ ] **T-TTS-5（P1）远端 TTS：ZipVoice → VITS 架构切换**（即 T-TTS-4 删除时所指的「整体重做」）。
-  - 背景与实测：见 [`../research/TTS-ENGINE-COMPARISON.md`](../research/TTS-ENGINE-COMPARISON.md)。
-    ZipVoice 在本机（4C Xeon / 3.9G）**没有任何一档 `num_steps` 同时做到实时与不浑浊** ——
+- [~] **T-TTS-5（P1）远端 TTS：ZipVoice → VITS 架构切换** —— **服务端已完成并上线（v2.0.0），真机验证待设备上线**。
+  - 根因回顾：ZipVoice 在本机（4C Xeon / 3.9G）**没有任何一档 `num_steps` 同时做到实时与不浑浊** ——
     steps=2 RTF 0.558 / 200–300Hz 占 47.3%；steps=3 RTF 0.834 / 47.8%（吞吐余量仅 1.2×）；steps=6 RTF 1.485 已不能实时。
-    即：用户反馈的「大量杂音」与「朗读跟不上」是**同一个架构根因**，不是两个可分别调参的问题。
-  - 已上线的部分（v1.1.0，不依赖换引擎）：去浑浊 EQ（280Hz −3.5dB）+ 临场提升（2800Hz +3.5dB）+ 块级峰值限幅（包络用膨胀而非均值）
-    + −18 dBFS 响度归一 → 200–300Hz 47.8%→**24–32%**、600–1500Hz 8–12%→**15–23%**、三音色响度离散 5.5dB→**0.62dB**、**0% 削波**。
-  - 目标模型：`sherpa-onnx-vits-zh-ll` 同构（实测 **RTF 0.398–0.431、RSS 184–294MB**，比 ZipVoice 快 2.1×、内存低 2.7×，
-    且是单次前向、没有「步数 vs 音质」矛盾）。
-  - 两个分支：① 现成 5 个说话人之一可接受 → 直接换引擎，**零训练**（试听样本在 `~/Desktop/tts-abtest/`）；
-    ② 必须要角色音色 → 微调 VITS 后导出（VITS-fast-fine-tuning → `export_vits_fast_fine_tuning_onnx.py`，
-    导出物结构与现用模型**完全一致**；底模与工具均无需访问 HF，见对比文档 §5）。
-    ⚠️ 微调前提：需要每角色 100+ 条带文本短音频，**现有参考包每角色只有 4–6 条，不够**。
-  - 验证（待设备上线）：换模型后复核 RTF < 1 且余量 ≥2×、`/health` 回显 `steps/post/eq` 生效、
-    204 字段落不再触发客户端 60s `readTimeout` → 不中途 `fallbackToSystem()` 换音色。
-  - 证据：`server/app.py`（v1.1.0 后处理链）、`server/tts.service`（内存加固）、[`../remote-tts-deploy.md`](../remote-tts-deploy.md) §7、VPS `/root/tts/vits-zh-ll/`
+    用户反馈的「大量杂音」与「朗读跟不上」是**同一个架构根因**。
+  - **实际落地（与计划不同）**：计划是「5 说话人之一 → 或微调 VITS」，**实际发现 804 说话人预导模型自带原神声线，零训练、零微调**。
+    模型 `vits-hf-zh-jp-zomehwh.onnx`（804 说话人，原生 22050Hz，经 `_resample_fft()` 升到 24000Hz，**客户端零改动**）。
+  - **上线声线**：胡桃 119 / 甘雨 111 / 刻晴 115 / 雷电将军 125 / 钟离 104（4 女 + 1 男）。
+    旧名别名兜底（App 端未改也能播）：**流萤→甘雨、花火→胡桃、卡芙卡→雷电将军**。
+  - **期间修掉的三个上游真 bug**（详见 [`../research/TTS-ENGINE-COMPARISON.md`](../research/TTS-ENGINE-COMPARISON.md) §4.2–4.4）：
+    1. **「发音像日本人」= 词典**：模型自带 lexicon 是「中文单字表（21,287）+ 日文词表（15,500）」两遍拼接，**没有一个中文词组**，
+       14,150 个词只能查到日文读音（`追求` → ついきゅう、`分裂` → ぶんれつ）**且不打任何警告**。
+       修法：换成自制纯中文 `lexicon_final.txt`（66,790 条 = 纯中文 66,395 + 补 395 罕用单字，日文段整段丢弃），加载期 **重复 0 / OOV 0**。
+    2. **数字被整段吞掉**：模型符号表无 0-9，不加载 FST 时 `第2024章⋯12.5元⋯13800138000` 全被静默丢弃。
+       修法：`rule_fsts=date.fst,number.fst,phone.fst` → 该句时长 3.31s→**6.59s**。（`new_heteronym.fst` 实测无效果，不加载。）
+    3. **句末停顿只有 80ms（无呼吸感）**：`silence_scale` 在 VITS 路径**完全无效**（0.2→1.0 输出时长一字不差）；
+       实测**去掉标点后内部停顿直接变 0** → 标点驱动分句，绝不能清。修法：服务端按 `。！？…` 切句 + 自插 `SENTENCE_PAUSE_MS=320`，
+       逗号沿用模型自己的短停顿。实测长段落：句末 **0.41/0.50/0.49s** + 逗号 0.06–0.21s。
+  - **服务端实测（`POST /tts` 端到端）**：24kHz✓ / −18.0 dBFS / 峰值 0.48–0.89 / **0% 削顶** /
+    长段落（123 字 / 4 段）22.96s **RTF 0.576**（ZipVoice steps=3 是 0.834，降 31% 且长文不再掉速）。
+  - **内存**：加载 196→317MB，soak 稳态 441MB，**100 次请求零增长**（干净 soak 确证），**无逐请求泄漏**。
+    「6 天涨到 2513MB」的元凶是 v1.1.0 之前**每请求**新建重采样器（已修）。
+  - **保留回滚**：`ENGINE=zipvoice` 可切回旧引擎（代码分支完整保留）。
+  - 证据：`server/app.py`（v2.0.0）、`server/tts.service`（`ENGINE`/`VITS_*`/`SPEED_SCALE`/`SENTENCE_PAUSE_MS`）、
+    [`../remote-tts-deploy.md`](../remote-tts-deploy.md)、VPS `/root/tts/genshin-vits/`（`mklex2.py` / `lexcheck.py` / `smoke.py` / `out_live/`）、
+    试听包 `~/Desktop/tts-abtest7-换引擎/`（线上成品，5 音色 × 3 用例）。
+  - **待办（设备上线后）**：① 真机端到端听感验收；② `RemoteTtsClient.ets` 的 `readTimeout: 60000 → ≥120000`；
+    ③ `Const.ets` 的 `TTS_REMOTE_VOICE_OPTIONS` 由 `[流萤,花火,卡芙卡]` 换成 5 个新音色名；④ 用户确认后定 `SPEED_SCALE` 终值（当前 0.85 ≈ 325–368 字/分）。
 
 ## 书源管理（BookSourceManage）
 
