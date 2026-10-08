@@ -1,3 +1,8 @@
+> **2026-10-08 第十二次同步**：⑪ 登记 **T-TTS-5（P1）远端 TTS 引擎切换**（即 T-TTS-4 删除时所指的「整体重做」）。
+> 本轮实测把「杂音 + 跟不上」两个症状收敛到同一个根因：ZipVoice 在本机**没有任何一档 `num_steps` 能同时实时与不浑浊**；
+> 同时实测出唯一可行替代（`sherpa-onnx-vits-zh-ll` RTF 0.40 / RSS 250MB），结论与训练链路见 [`../research/TTS-ENGINE-COMPARISON.md`](../research/TTS-ENGINE-COMPARISON.md)。
+> 已顺带上线 v1.1.0 后处理（EQ + 限幅 + 响度归一），不依赖换引擎也先把音质拉起来。
+
 # TASKS.md — 跨模块 Bug 修复任务清单
 
 > 由早期只读审计（原 `AUDIT.md`，已归档删除）派生；按模块分组。
@@ -168,6 +173,22 @@
   - 证据：`model/TtsController.ets:705-721`、`:880-907`
 - [x] **T-TTS-3 错误态恢复**：`onError` 后 `playing=false`，确认 UI 与 `AVSession` 状态一致、可重试。
   - 证据：`model/TtsController.ets:585-590`、`pages/Listening.ets:359-374`
+- [ ] **T-TTS-5（P1）远端 TTS：ZipVoice → VITS 架构切换**（即 T-TTS-4 删除时所指的「整体重做」）。
+  - 背景与实测：见 [`../research/TTS-ENGINE-COMPARISON.md`](../research/TTS-ENGINE-COMPARISON.md)。
+    ZipVoice 在本机（4C Xeon / 3.9G）**没有任何一档 `num_steps` 同时做到实时与不浑浊** ——
+    steps=2 RTF 0.558 / 200–300Hz 占 47.3%；steps=3 RTF 0.834 / 47.8%（吞吐余量仅 1.2×）；steps=6 RTF 1.485 已不能实时。
+    即：用户反馈的「大量杂音」与「朗读跟不上」是**同一个架构根因**，不是两个可分别调参的问题。
+  - 已上线的部分（v1.1.0，不依赖换引擎）：去浑浊 EQ（280Hz −3.5dB）+ 临场提升（2800Hz +3.5dB）+ 块级峰值限幅（包络用膨胀而非均值）
+    + −18 dBFS 响度归一 → 200–300Hz 47.8%→**24–32%**、600–1500Hz 8–12%→**15–23%**、三音色响度离散 5.5dB→**0.62dB**、**0% 削波**。
+  - 目标模型：`sherpa-onnx-vits-zh-ll` 同构（实测 **RTF 0.398–0.431、RSS 184–294MB**，比 ZipVoice 快 2.1×、内存低 2.7×，
+    且是单次前向、没有「步数 vs 音质」矛盾）。
+  - 两个分支：① 现成 5 个说话人之一可接受 → 直接换引擎，**零训练**（试听样本在 `~/Desktop/tts-abtest/`）；
+    ② 必须要角色音色 → 微调 VITS 后导出（VITS-fast-fine-tuning → `export_vits_fast_fine_tuning_onnx.py`，
+    导出物结构与现用模型**完全一致**；底模与工具均无需访问 HF，见对比文档 §5）。
+    ⚠️ 微调前提：需要每角色 100+ 条带文本短音频，**现有参考包每角色只有 4–6 条，不够**。
+  - 验证（待设备上线）：换模型后复核 RTF < 1 且余量 ≥2×、`/health` 回显 `steps/post/eq` 生效、
+    204 字段落不再触发客户端 60s `readTimeout` → 不中途 `fallbackToSystem()` 换音色。
+  - 证据：`server/app.py`（v1.1.0 后处理链）、`server/tts.service`（内存加固）、[`../remote-tts-deploy.md`](../remote-tts-deploy.md) §7、VPS `/root/tts/vits-zh-ll/`
 
 ## 书源管理（BookSourceManage）
 
