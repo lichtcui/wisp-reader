@@ -6,21 +6,25 @@
 
 <!-- TOC:BEGIN -->
 - 0. 结论先行 — L26
-- 1. 症状一：「杂音」到底是什么 — L37
-- 2. 步数 ↔ RTF ↔ 音质（实测，卡芙卡，VPS 4C） — L53
-- 3. 症状二：RTF 与内存（ZipVoice 时期的 v1.1.0 管线） — L64
-- 4. 换引擎：VITS 已上线（v2.0.0） — L92
-  - 4.1 音色：804 说话人预导模型，**不需要微调** — L105
-  - 4.2 症状三：「像日本人说话」= 词典 bug — L138
-  - 4.3 数字被整段吞掉 = 缺 `rule_fsts` — L162
-  - 4.4 句末停顿只有 80ms = 服务端自己切句 — L176
-  - 4.5 上线实测 — L191
-- 5. 引擎矩阵（本机实测 / 硬约束筛选） — L207
-- 6. 方法论修正：「200–300Hz 占比」被 F0 污染 — L224
-- 7. 残余风险（与文件位置） — L239
-- 8. 内存与稳定性 — L249
-- 9. 复现与维护入口 — L255
-- 10. 参考 — L273
+- 1. 症状一：「杂音」到底是什么 — L39
+- 2. 步数 ↔ RTF ↔ 音质（实测，卡芙卡，VPS 4C） — L55
+- 3. 症状二：RTF 与内存（ZipVoice 时期的 v1.1.0 管线） — L66
+- 4. 换引擎：VITS 已上线（v2.0.0） — L94
+  - 4.1 音色：804 说话人预导模型，**不需要微调** — L107
+  - 4.2 症状三（上）：「像日本人说话」的一半是词典 bug — L140
+  - 4.3 数字被整段吞掉 = 缺 `rule_fsts` — L165
+  - 4.4 句末停顿只有 80ms = 服务端自己切句 — L179
+  - 4.5 上线实测 — L194
+- 5. 引擎矩阵（本机实测 / 硬约束筛选） — L210
+- 6. 方法论修正：「200–300Hz 占比」被 F0 污染 — L230
+- 7. 残余风险（与文件位置） — L246
+- 8. 内存与稳定性 — L257
+- 9. 复现与维护入口 — L263
+- 10. 症状三（下）：口音的真正根因 = 模型基座（CER 客观评测） — L287
+  - 10.1 说话人表从哪来 — L313
+  - 10.2 环境依赖（踩到的两处） — L323
+  - 10.3 这个裁判的局限 — L329
+- 11. 参考 — L333
 <!-- TOC:END -->
 
 ## 0. 结论先行
@@ -29,10 +33,12 @@
 2. **引擎已换成 VITS**（`vits-hf-zh-jp-zomehwh.onnx`，804 说话人，原生 22050 Hz），线上实测 **RTF 0.576**、RSS ≈ 300MB、**长段落不掉速**。
 3. **音色没有花钱微调**：这个 804 说话人底模里**自带 64 个原神声线**（含钟离/胡桃/甘雨/刻晴/雷电将军/八重神子/可莉/派蒙…），F0 分布正常（男 118–139 Hz、女 208–312 Hz）。原先规划的「微调 VITS」整条路线**作废**。
 4. **真正花时间的不是引擎，是三个上游坑**：
-   - **词典**：模型自带 lexicon 是「中文单字表 + 日文词表」两遍拼接，**没有一个中文词组** → 多字词全部吃日文读音（`追求` 读成 ついきゅう）。这是「像日本人说话」的唯一原因。
+   - **词典**：模型自带 lexicon 是「中文单字表 + 日文词表」两遍拼接，**没有一个中文词组** → 多字词全部吃日文读音（`追求` 读成 ついきゅう）。
+     但**这只解释了一半**：词典修好后口音仍在 —— 根因在模型基座，见 §10。
    - **`rule_fsts`**：模型符号表没有 0-9，不加载 `date/number/phone.fst` 时**数字被整段静默丢弃**（`第2024章` → `第章`）。
    - **停顿**：sherpa 句间只插 ~80ms 静音，`silence_scale` 调不动 → 改为**服务端自己切句 + 自插 320ms**。
 5. **客户端零改动**：服务器仍出 24kHz S16LE mono RIFF，且旧音色名（流萤/花火/卡芙卡）作为别名保留。
+6. **「像日本人说话」的真正根因是模型基座（§10 新结论）**：用中文 ASR 做回环（合成→识别→算 CER），现用 804 模型 **CER 12.62%**（≈每 8 个字错 1 个），而**纯中文模型 melo 3.95% / fanchen-C 4.80%**。整条 804 说话人谱系（含 sherpa 官方标注为「中文」的 `theresa` 11.96% / `eula` 10.17%）都是日文基座 —— **换导出无用，必须换模型**。§4.2 的词典修复只解决了「读音」，没解决「口音」。
 
 ## 1. 症状一：「杂音」到底是什么
 
@@ -135,7 +141,7 @@ clean soak start rss=354636 kB
 **上线声线（4 女 + 1 男）**：胡桃 119 / 甘雨 111 / 刻晴 115 / 雷电将军 125 / 钟离 104。
 旧名兼容（App 端 `TTS_REMOTE_VOICE_OPTIONS` 未改也能播）：**流萤→甘雨、花火→胡桃、卡芙卡→雷电将军**。
 
-### 4.2 症状三：「像日本人说话」= 词典 bug
+### 4.2 症状三（上）：「像日本人说话」的一半是词典 bug
 
 模型自带的 `zome_lexicon.txt`（36,787 行 / 782 KB）是**两遍拼接**、每遍按 Unicode 码点排序：
 
@@ -158,6 +164,7 @@ sherpa 的 `InitLexicon` **保留首次出现**（另 1,376 条日文重复项�
 
 > 可互换性已验证：两份 `tokens.txt`（`zome_tokens.txt` vs `tokens.txt`）**`diff` 完全一致**（都 268 B，同一套 52 符号表），所以换词典不会破坏 phoneme→id 映射。
 > 生成脚本：`/root/tts/genshin-vits/mklex2.py`（按码点回绕点自动切 pass 1/pass 2，别手工数行号）。
+> **本节只修掉了「读错字」**。修完之后口音依旧 —— 另一半原因见 **§10**。
 
 ### 4.3 数字被整段吞掉 = 缺 `rule_fsts`
 
@@ -211,10 +218,13 @@ sherpa 的 `InitLexicon` **保留首次出现**（另 1,376 条日文重复项�
 | 引擎 | 中文 | 角色音色 | 本机实测 RTF | 判定 |
 |---|---|---|---|---|
 | **sherpa-onnx VITS（804 说话人）** | ✓ | **✓ 自带 64 个原神声线** | **0.576** | ✓ **已上线** |
-| sherpa-onnx VITS（`vits-zh-ll`） | ✓ | 固定 5 说话人 | 0.398–0.431 | 同架构备选 |
+| **`vits-zh-hf-fanchen-C`（187 说话人）** | ✓ **CER 4.80%** | ✓ **187 声线（含原神中文）** | **0.462** | ✓ **多音色首选（§10）** |
+| **`vits-melo-tts-zh_en`** | ✓ **CER 3.95%** | 固定 1 说话人（女） | **0.613** | ✓ 最准，但单音色 |
+| sherpa-onnx VITS（`vits-zh-ll`） | ✓ CER 8.70% | 固定 5 说话人 | 0.398–0.431 | ✗ 口音偏重 |
 | ZipVoice | ✓ 中英 | 零样本克隆 ✓ | 0.834 (steps=3) / 1.485 (steps=6) | ✗ 实时与干净互斥 |
-| `vits-melo-tts-zh_en` | ✓ 中英 | 固定 1 说话人 | （未测） | 同族备选 |
-| Kokoro / Matcha / Supertonic 3 | 部分 | 固定音色 ✗ | — | ✗ 无角色音色 |
+| Kokoro multi-lang v1.0/v1.1 | ✓ CER 7.9–8.2% | 8 / 100 中文声线 | **3.17–3.23** | ✗ **RTF 超硬约束 3 倍** |
+| Matcha / Supertonic 3 | 部分 | 固定音色 ✗ | — | ✗ 无角色音色 |
+| `vits-zh-aishell3` | ✓ CER 13.84% | 174 真人说话人 | 0.233 | ✗ **原生 8 kHz** |
 | PocketTTS | **✗ 无中文** | 零样本克隆 ✓ | — | ✗ 语言不支持 |
 | Bert-VITS2 | ✓ | 可训练 | — | ✗ 需 1.3B BERT 前端，4C/4G 不可能 |
 | **GPT-SoVITS** | ✓ | **最好，且已有成品模型** | 未测 | ✗ 需要 torch + 自回归 GPT 解码，4C/4G 上 RTF 大概率 ≫1，**与"必须 RTF<1"直接冲突** |
@@ -233,7 +243,8 @@ sherpa 的 `InitLexicon` **保留首次出现**（另 1,376 条日文重复项�
 
 **正确用法**：
 - 该指标只能用于**同一说话人、同一文本**的 A/B（同 F0 基准），不能跨音色比较 —— 本文 §1 的 ZipVoice 结论属于前者，有效。
-- 判断男声是否正常，**看 F0 绝对值**最直接：男声应在 **90–140 Hz**。`theresa.onnx` 的男声落在 190–220 Hz，这才是它的致命伤（§4.1）。
+- 判断男声是否正常，**看 F0 绝对值**最直接：男声应在 **90–140 Hz**。
+- **反例修正（§10）**：曾据「`theresa.onnx` 的男声落在 190–220 Hz」判它是**坏文件**。实际它是官方原版（md5 一致），只是**它的 804 说话人编号顺序与 `lkz_G_CJ.json` 完全不同**（同一 sid 104：zomehwh 121 Hz 男声 vs theresa 216 Hz）。**跨模型比 F0 前必须先确认 sid 表是否通用**，否则测得的是「另一个角色」。
 - 跨音色的响度和削顶用 **RMS + peak + 削顶率**，不要用分带占比。
 
 ## 7. 残余风险（与文件位置）
@@ -244,6 +255,7 @@ sherpa 的 `InitLexicon` **保留首次出现**（另 1,376 条日文重复项�
 | App 端音色列表还是旧的 | `Const.ets` `TTS_REMOTE_VOICE_OPTIONS=[流萤,花火,卡芙卡]` | 服务端做了别名映射，App 不改也能播；待设备可用时替换为 5 个新名 |
 | 段落未按长度切分 | `BookContent.ets:20` 仅按 `\n` 切行 | 服务端已按标点切句并限长，暂不动客户端 |
 | 崩铁角色音色不存在 | VITS 系无 HSR 数据 | 已改用原神音色（用户确认） |
+| **现用 804 模型有日文口音** | CER 12.62%（§10） | 待定：换 `fanchen-C`（多音色）或 `melo`（单音色最准）；换模型只动服务端 `ENGINE`/`VITS_MODEL` 环境变量，**客户端零改动** |
 | 罕用字仍可能 OOV | 词典为简体常用字 + 词组 | 残留 OOV 实测 1 条/请求（全角冒号 `：`，不影响听感） |
 
 ## 8. 内存与稳定性
@@ -266,15 +278,70 @@ VPS（`ssh -p 40860 root@103.236.96.53`）上 `/root/tts/genshin-vits/`：
 | `rules_test.py` | `rule_fsts` × `max_num_sentences` × `silence_scale` 对照 |
 | `final_test.py` / `smoke.py` / `fetch_live.py` | 配置验证 / 端到端冒烟 / 出试听包 |
 | `f0.py` / `measure_model.py` | F0 与分带指标测量（F0 估计器已用真值校准） |
-| `out_lexab/` `out_final/` `out_live/` | 各轮试听样本 |
+| **`cer_eval.py`** | **口音裁判**：VITS 候选 × 20 句 → ASR 回环算 CER + RTF（§10） |
+| **`cer_kokoro.py`** | 同上，Kokoro 分支（需 `data_dir=/usr/lib/x86_64-linux-gnu/espeak-ng-data`） |
+| **`voice_sweep.py`** | 扫某模型全部 sid 的 F0，给出男/女分布（挑音色用） |
+| **`pkg.py`** | 照线上后处理（-18 dBFS → 限幅 → 淡入出 → 24 kHz）出试听包 |
+| `out_lexab/` `out_final/` `out_live/` `models/cer_out/` | 各轮试听样本 |
+
+模型仓库（VPS `/root/tts/models/`）：`fanchen-C/`、`melo/`、`kokoro-v1_0/`、`kokoro-v1_1/`、`eula/`、`aishell3/`、`asr/`（paraformer-zh 裁判）。
 
 试听包（Mac）：`~/Desktop/tts-abtest/`（最早 VITS 5 说话人）、`tts-abtest4-修正/`、`tts-abtest5-语速/`、`tts-abtest6-词典/`（词典 A/B）、**`tts-abtest7-换引擎/`（线上成品，5 音色 × 3 用例）**。
 
-## 10. 参考
+## 10. 症状三（下）：口音的真正根因 = 模型基座（CER 客观评测）
+
+§4.2 的词典修复只解决了「读错字」，**听感上的外国口音依旧**。用一个客观裁判来定位：
+
+**方法：中文 ASR 回环。** 合成中文 → 用只在母语普通话上训练的 `paraformer-zh` 识别 → 与原文算 **CER（字错误率）**。
+模型发音不到位时，母语 ASR 会听成别的字。**同一组 20 句、同一 `speed=0.85`、同一 ASR**，纵向比较才有效。
+
+| 模型 | 采样率 | 说话人 | **CER ↓** | RTF | 判定 |
+|---|---|---|---|---|---|
+| **`vits-melo-tts-zh_en`** | **44100** | 1（女） | **3.95%** | 0.613 | ✓ 最准，但只有 1 个声线 |
+| **`vits-zh-hf-fanchen-C`** | 16000 | **187**（24 男 / 19 中 / 144 女） | **4.80%** | 0.462 | ✓ **多音色首选** |
+| `kokoro-multi-lang-v1_0`（int8） | **24000** | 8 中（4 女 / 4 男） | 7.91–8.19% | **3.17–3.23** | ✗ **RTF 超硬约束 3 倍** |
+| `sherpa-onnx-vits-zh-ll` | 16000 | 5 | 8.70% | 0.427 | ✗ |
+| `vits-zh-hf-eula`（官方标「中文 804」） | 22050 | 804 | 10.17% | 0.518 | ✗ 同一谱系 |
+| `vits-zh-hf-theresa`（官方标「中文 804」） | 22050 | 804 | 11.96% | 0.553 | ✗ 同一谱系 |
+| **`vits-hf-zh-jp-zomehwh`（当时线上）** | 22050 | 804 | **12.62%** | 0.507 | ✗ **有口音** |
+| `vits-zh-aishell3` | **8000** | 174 | 13.84% | 0.233 | ✗ 8 kHz 太窄 |
+
+**三条结论**：
+
+1. **「像日本人说话」是模型基座问题，词典修不掉**：词典修好后现用模型仍有 **12.62%** 的字被母语 ASR 听错（≈每 8 字错 1 字）。换成纯中文模型直接降到 1/3。
+2. **整个 804 说话人谱系都是日文基座**：sherpa 官方把它们标注为 “Chinese, 804 speakers”，但 `theresa`(11.96%) / `eula`(10.17%) 与现用(12.62%) **同档** —— 它们只是同一批角色的中日混合训练的**不同导出**（三者 `tokens.txt` 完全一致，268 B；`theresa.onnx` md5 `6c2071c0b7907f4328000ab3acb8363c` 与本地一致）。**不要再在这条线上试新导出。**
+3. **可用的纯中文模型只有两个**：`fanchen-C`（187 声线 / 16 kHz）与 `melo`（1 声线 / 44.1 kHz）。
+
+> **顺带推翻的一个判断**：§6 曾据「男声 F0 190–220 Hz」判 `theresa.onnx` 是**坏文件**。它其实是官方原版，只是**说话人编号顺序与 `lkz_G_CJ.json` 完全不同**（同一 sid 104：zomehwh 121 Hz 男声 vs theresa 216 Hz）。**判「坏文件」前先确认 sid 表是否通用。**
+
+### 10.1 说话人表从哪来
+
+| 模型 | 获取渠道 | 说话人表 |
+|---|---|---|
+| `fanchen-C` | `csukuangfj/vits-zh-hf-fanchen-C`（HF，走 hf-mirror） | `G_C.json` 里说话人**已是编号 `"0".."186"`** —— 名字在导出前就丢了。男女分布由 `voice_sweep.py` 扫全部 187 个 sid 的 F0 得到 |
+| `melo` | `csukuangfj/vits-melo-tts-zh_en` | 单说话人 |
+| `kokoro` | `csukuangfj/kokoro-int8-multi-lang-v1_0` / `v1_1` | 从 ONNX 元数据 `speaker_names` 解析（`strings model.onnx \| grep -oE '[a-z]{2}_[a-z0-9_]+(,...)+'`）：v1.0 中文 = **45–52**；v1.1 中文 = **3–102** |
+
+`fanchen-C` 的出身决定了它的价值：用 **Plachtaa/VITS-fast-fine-tuning** 训练，`text_cleaners: ["chinese_cleaners"]`、`sampling_rate: 16000`；而该项目底模写明「涵盖常见二次元男/女配音声线（来自**原神数据集**）以及现实世界常见男/女声线（来自 VCTK）」。**所以它的 187 个声线里既有原神中文声线也有真人声线** —— 正是「原神音色 + 母语中文」的组合。
+
+### 10.2 环境依赖（踩到的两处）
+
+- **Kokoro 必须有 espeak-ng 数据**：`apt-get install -y espeak-ng-data`（清华源），然后把 `data_dir` 指向 `/usr/lib/x86_64-linux-gnu/espeak-ng-data`。不装则 init 直接报 `Error processing file '/usr/share/espeak-ng-data/phontab'`。
+- **Kokoro 的 `lang` 参数对中文无影响**：`lang=''` 与 `lang='zh'` 的输出逐字节一致，不用设。
+- `fanchen-C` / `aishell3` 都没有 `dict/`，`dict_dir` 复用 `vits-zh-ll` 的 jieba 词典即可。
+
+### 10.3 这个裁判的局限
+
+CER 只衡量**可懂度**，不衡量**好听**。语速慢的样本对 ASR 更友好（现用模型 110 字段落 17.6s vs `fanchen-C` sid000 29.7s），跨音色比较时需一并看时长。**最终音色仍必须人耳决定**；CER 的作用是先把「明显有口音」的选项筛掉（省掉 8 组试听）。
+
+## 11. 参考
 
 - sherpa-onnx TTS 文档：<https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/vits.html>
 - 官方 ONNX 导出源（`lkz99/tts_model` HF space）：`zh/G_C.json`(187) / `zh_japanese/G_CJ.json`(804) / `zh_japanese_en/G_CJE.json`(147)
 - 底模仓库（含原神声线）：`Plachta/VITS-Umamusume-voice-synthesizer`(147)、`sayashi/vits-uma-genshin-honkai`(804)
+- 纯中文候选：`csukuangfj/vits-zh-hf-fanchen-C`(187) / `csukuangfj/vits-melo-tts-zh_en`(1) / `csukuangfj/kokoro-int8-multi-lang-v1_0`、`v1_1`
+- 口音裁判 ASR：`csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14`（`model.int8.onnx` 232 MB）
+- Plachtaa 底模说明（底模声线来源）：<https://github.com/Plachtaa/VITS-fast-fine-tuning>
 - VFFT → sherpa-onnx 导出说明：<https://github.com/Plachtaa/VITS-fast-fine-tuning/issues/518>
 - VITS-fast-fine-tuning 词典生成脚本：`generate-lexicon-zh-hf-fanchen-models.py`（`pinyin_dict` + `phrases_dict` → 单字表 + 词组表，**纯中文**）
 - 早期调研：[`TTS-PLAN.md`](./TTS-PLAN.md)
