@@ -1,3 +1,9 @@
+> **2026-10-08 第十四次同步**：⑬ 登记 **T-TTS-6（P1）远端 TTS 音色：中文原神模型到底有没有** —— 调查完成，结论是「**有，但进不了现有 CPU 管线**」。
+> 同时**修正 T-TTS-5 的两处记录**：① 上线声线用的 sid（胡桃 119 / 甘雨 111 / 刻晴 115 / 雷电将军 125 / 钟离 104）在刚拿到的原神 sid 表里**是没有名字的空洞号**，
+> 「804 底模自带原神声线」的说法降级为**未验证**；② 「像日本人说话」**不是词典没修好，而是模型基座中/日混训**（`zh_ja_mixture_cleaners` + `uma_genshin_genshinjp_bh3`）——
+> 用**正确** sid（钟离 106 / 甘雨 161 / 胡桃 160 / 刻晴 165 / 雷电将军 107 / 魈 115）重测 CER **反而更差（14.36% vs 12.62%）**，且 F0 与角色完全对不上。
+> 调查全文、模型清单与可选路线见 [`../research/TTS-VOICE-SOURCES.md`](../research/TTS-VOICE-SOURCES.md)。
+
 > **2026-10-08 第十三次同步**：⑫ **T-TTS-5 服务端部分完成** —— 远端 TTS 已切到 VITS 并上线，服务端三个真 bug（词典 / 数字 / 停顿）修复，`/health` 返回 `{ok,engine,version,sample_rate,voices,speed_scale,post,eq}`。
 > 关键转折：**不需要微调** —— 804 说话人底模自带原神声线（含钟离/胡桃/甘雨/刻晴/雷电将军），F0 正常；原先规划的「微调 VITS」路线作废。
 > 线上实测 RTF **0.576**（硬约束 <1 达标）、RSS 441MB 零增长、24kHz 契约与旧音色名兼容均保持不变。剩余：真机端到端 + `readTimeout` 整改（设备离线）。
@@ -34,7 +40,7 @@
 > 频繁切章时同一章只发一次引擎请求、只写一次盘（内存 LRU 挡不住并发：`warmNeighbors` 只判「已解析缓存」，两条路径在缓存都未命中时并发进来）；
 > 顺带删除死代码 `prefetch`（全仓库无调用）。本机已验（编译 / `make check` / 转译产物 / 调用面 `rg`），**真机待复验**（设备未连接）→ [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §15。
 > 同时：**T-TTS-4 条目已按用户决定移除**（远端 TTS 链路后续会整体重做，不再单独治理其并发预取的 RTF 劣化；相关部署事实已记入 [`../remote-tts-deploy.md`](../remote-tts-deploy.md) §0/§3）。
-> 当前 open：**1 项 `[~]`**（T-READ-3 已实现，待真机复验），**无 `[ ]` 未开始项**。
+> 当前 open：**1 项 `[~]`**（T-READ-3 已实现，待真机复验）+ **1 项 `[ ]`**（T-TTS-6 调查完成、待选路线；T-TTS-5 剩余真机项受设备离线阻塞）。
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
 ---
@@ -184,6 +190,8 @@
   - **实际落地（与计划不同）**：计划是「5 说话人之一 → 或微调 VITS」，**实际发现 804 说话人预导模型自带原神声线，零训练、零微调**。
     模型 `vits-hf-zh-jp-zomehwh.onnx`（804 说话人，原生 22050Hz，经 `_resample_fft()` 升到 24000Hz，**客户端零改动**）。
   - **上线声线**：胡桃 119 / 甘雨 111 / 刻晴 115 / 雷电将军 125 / 钟离 104（4 女 + 1 男）。
+    ⚠️ **2026-10-08 修正**：这 5 个 sid 在社区公开的 804 说话人表里**没有名字**（是空洞号），所以「这个 sid 对应这个角色」**未经验证**；
+    同期发现**即使换成表里有名字的原神 sid，CER 也反而更差**（见 T-TTS-6 与 [`../research/TTS-VOICE-SOURCES.md`](../research/TTS-VOICE-SOURCES.md) §3）。音色名目前只是**标签**，不代表真实角色。
     旧名别名兜底（App 端未改也能播）：**流萤→甘雨、花火→胡桃、卡芙卡→雷电将军**。
   - **期间修掉的三个上游真 bug**（详见 [`../research/TTS-ENGINE-COMPARISON.md`](../research/TTS-ENGINE-COMPARISON.md) §4.2–4.4）：
     1. **「发音像日本人」= 词典**：模型自带 lexicon 是「中文单字表（21,287）+ 日文词表（15,500）」两遍拼接，**没有一个中文词组**，
@@ -204,6 +212,23 @@
     试听包 `~/Desktop/tts-abtest7-换引擎/`（线上成品，5 音色 × 3 用例）。
   - **待办（设备上线后）**：① 真机端到端听感验收；② `RemoteTtsClient.ets` 的 `readTimeout: 60000 → ≥120000`；
     ③ `Const.ets` 的 `TTS_REMOTE_VOICE_OPTIONS` 由 `[流萤,花火,卡芙卡]` 换成 5 个新音色名；④ 用户确认后定 `SPEED_SCALE` 终值（当前 0.85 ≈ 325–368 字/分）。
+
+- [ ] **T-TTS-6（P1）远端 TTS 音色：中文原神角色音色到底拿不拿得到** —— **调查完成，待选路线**。
+  - **答「有没有」：有，而且很多** —— ModelScope `aihobbyist/GPT-SoVITS_Model_Collection`：
+    **原神/中文 263 角色 / 56.1 GB**（钟离·甘雨·胡桃·刻晴·雷电将军·魈·迪卢克·派蒙·可莉·纳西妲·八重神子… **重点角色 40/40 全在库**）、
+    **星穹铁道/中文 118 角色 / 36.0 GB（含 `流萤` / `花火` / `卡芙卡`）**，另有日语/英语/韩语，原神共 877 文件；作者 红血球AE3803 与 白菜工厂1145号员工，License CC-BY-NC。
+    VPS 可直连 ModelScope（HTTP 200 / 0.54 s），实测下载 `钟离_ZH.zip` 213MB / 18.8 s、`流萤.zip` 305MB / 25.9 s。
+  - **但格式是 GPT-SoVITS，进不了 sherpa 管线**：sherpa-onnx 只支持 VITS/Matcha/Kokoro/ZipVoice/Kitten/Pocket/Supertonic；
+    且 GPT-SoVITS 在本机 **RTF ≈ 4.5**（i5-8250U 10 s 语音需 45 s；官方 M4 CPU 0.526；CPUFast 分支再 −45%）→ 与「RTF<1」硬约束**直接冲突**，要上就必须换 GPU 服务器。
+    唯一的纯 VITS 原神模型（Gitee `TimeRainStarSky/GenshinVoice`，51 角色）**模型与 API 均已停止发布**，只留数据集。
+  - **这台 Mac 不能自训**：`MacBookPro16,2` = Intel i5-1038NG7 + Iris Plus，**无 CUDA、也无 Apple Silicon 的 MPS**（MPS 只支持 Apple Silicon/AMD），
+    GPT-SoVITS 与 VFFT 均要求这类 Mac 只能 CPU 推理；估算 20–50 h/角色。替代：租 GPU（¥1–2/h，~1 h/角色）。
+  - **顺带修正上一轮结论**：现用 804 模型**本身就是原神模型**（`G_CJ.json` 的 `training_files: filelists/uma_genshin_genshinjp_bh3_train.txt.cleaned`；
+    sid 92–230 = 原神中文 144 角色），但**中/日混训的基座决定了它出不了干净普通话**，换 sid 无效。
+  - **待选路线**（调研 §7）：**A 声纹匹配 `fanchen-C` 的 187 声线**（零成本，命中即得「中文原神 + RTF 0.462」）
+    → B ZipVoice + ModelScope 中文参考音频（现成、RTF 0.83）→ C 租 GPU 跑 GPT-SoVITS → D 租 GPU 自训 VITS 导 ONNX 回灌 sherpa。
+  - 证据：[`../research/TTS-VOICE-SOURCES.md`](../research/TTS-VOICE-SOURCES.md)；VPS `/root/tts/genshin-vits/cer_gen.py`、`/root/tts/gsv/{钟离_ZH,流萤}.zip`、`/root/tts/dlchars.sh`。
+  - 验证：路线 A 以声纹 top-1 命中率判定；C/D 以 `POST /tts` 端到端 RTF + 24kHz/−18 dBFS 契约判定。
 
 ## 书源管理（BookSourceManage）
 
