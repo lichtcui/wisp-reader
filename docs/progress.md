@@ -179,5 +179,6 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 - **底部抽屉规范见 [`specs/UI-SPEC.md`](./specs/UI-SPEC.md)**（唯一权威；改动抽屉必须全项目同步）。
 - 引擎复用清单与门禁见 [`engine.md`](./engine.md)。
 - 架构与 NAPI 边界见 [`architecture.md`](./architecture.md)。
-- 端侧自建 TTS（本地 GPT-SoVITS 音色）调研与原型计划见 [`research/TTS-PLAN.md`](./research/TTS-PLAN.md)
-  （与 M5 系统 TTS 并行、未立项；下一步 = TTS-PLAN §9 P0）。
+- 端侧自建 TTS（本地 GPT-SoVITS 音色）**已于 2026-10-12 封存**（不再推进）：原型真机跑通但 OHOS ORT 动态
+  shape 根因无解，记 D12；证据、脚本、测量结果与未推送代码见 [`archive/TTS-LOCAL-ONNX/`](./archive/TTS-LOCAL-ONNX/README.md)
+  （原计划 [`research/TTS-PLAN.md`](./research/TTS-PLAN.md)）。

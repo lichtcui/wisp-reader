@@ -16,7 +16,7 @@
 | D9 | bundle `com.lichtcui.sourcereader`；`compatibleSdkVersion 5.0.0(12)` / `targetSdkVersion 6.1.1(24)` | 目标设备与 SDK 约束 | `AppScope`、`build-profile.json5` |
 | D10 | JS 例外：`@js:` 的 **L1 字符串模式**仍走 `resolve_js_l1` 解析，失败才排除（非 L1 才直接排除）；v1 不做 JS 运行时 | 内置 13 个源里有 L1 用法，一律砍掉会误伤 | `search_url.rs`、`gate.rs` |
 | D11 | v1 不做：JS 运行时、登录型源、换源、发现(explore)、真分页、在线 TTS | 控制范围，先跑通主链路 | 全局 |
-| D12 | 端侧自建 TTS（GPT-SoVITS 音色替代系统 TTS）是**并行增量**、未立项，不改动 M5 代码 | 与 M5 系统 TTS 路线不冲突，可独立推进 | [`research/TTS-PLAN.md`](./research/TTS-PLAN.md) |
+| D12 | 端侧自建 TTS（GPT-SoVITS 音色替代系统 TTS）是**并行增量**、未立项，不改动 M5 代码 | 与 M5 系统 TTS 路线不冲突，可独立推进。**→ 2026-10-12 已封存**：P4–P6 原型真机跑通（ZipVoice 端侧 RTF 0.49–0.54），但 OHOS 交叉编译的 ORT 对一切动态 shape 输出的 `GetShape()` 返回 ~4× 虚高帧数（mel 1614 vs 正确 400）⇒ 波形全 NaN / 电流声；升级 ORT、降级、换 vocoder、换模型四条路同因堵死，**重启前提 = ORT 上游修复**。证据与可恢复产物见 [`archive/TTS-LOCAL-ONNX/`](./archive/TTS-LOCAL-ONNX/README.md) | [`research/TTS-PLAN.md`](./research/TTS-PLAN.md)（原计划）、[`archive/TTS-LOCAL-ONNX/`](./archive/TTS-LOCAL-ONNX/README.md)（封存记录） |
 | D13 | 门禁只在导入时做（`gate::run`）：非文字/禁用/登录/JS 源排除，可选字段含 JS 则**降级丢规则**而非排除整源 | 保源数量与可用性平衡（13 源 filter 后保留） | `gate.rs` |
 | D14 | **不追原神角色音色**：远端 TTS 声线就用 804 底模自带的 5 个 sid，且它们只是**标签名**（不代表真实角色）；不再投入「贴角色标签」的调研与实现 | 现有 VPS（4C Xeon / 无 GPU）上三条路线全部撞墙：**A** 声纹匹配 = 证伪（187 声线非原神角色，已做真阳性对照排除假阴性）、**B** ZipVoice + 官方中配参考音频 = 音色 7/7 命中且 RTF<1，但 `num_steps=3` 的 few-step 毛刺属听感风险（用户不接受）、**C/D** 租 GPU 跑 GPT-SoVITS 或自训 VITS 导 ONNX = 需换硬件；收益（像不像角色）远小于成本 | `server/app.py`（VITS 分支）、[`research/TTS-VOICE-SOURCES.md`](./research/TTS-VOICE-SOURCES.md)（纯参考） |
 

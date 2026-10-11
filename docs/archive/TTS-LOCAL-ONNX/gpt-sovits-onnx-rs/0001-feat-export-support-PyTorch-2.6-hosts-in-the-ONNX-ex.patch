@@ -1,0 +1,293 @@
+From 859c33a18413c348c8935918584d7183b535c0ae Mon Sep 17 00:00:00 2001
+From: licht <7687742+licht3345@user.noreply.gitee.com>
+Date: Sun, 27 Sep 2026 00:02:49 +0800
+Subject: [PATCH 1/3] feat(export): support PyTorch < 2.6 hosts in the ONNX
+ export path
+
+The patched exporter targets PyTorch >= 2.6 (it passes dynamo=False to
+torch.onnx.export and pins opset 20). PyTorch 2.2.2 is the final release with
+an Intel macOS (x86_64) wheel, so those assumptions break four ways:
+
+  1. transformers >= 4.54 refuses torch.load on .bin checkpoints unless
+     torch >= 2.6 (CVE-2025-32434) -> add model.safetensors alongside.
+  2. torch.onnx.export rejects the 'dynamo' kwarg on < 2.6 -> drop it.
+  3. opset 20 is unsupported there; lowering to 19 emits legacy
+     ReduceMean(axes=...) which only passes the checker up to opset 17.
+     optimize_aio.py converts every artifact to opset 21 downstream, so the
+     final bundle is unchanged.
+  4. transformers defaults to SDPA attention, which the legacy exporter cannot
+     translate -> force attn_implementation="eager" (mathematically identical).
+
+Both compat steps are additive, idempotent, and only run when torch < 2.6, so
+hosts on >= 2.6 behave exactly as before. The patch/GPT_SoVITS/ overlay is left
+untouched; only the upstream clone copy is adapted, and 02_patch.sh restores it.
+
+Verified by exporting v2ProPlus bundles for three voices (liuying, huahuo,
+kafuka), each passing validate_bundle.sh --expect-v2pro and loading in
+onnxruntime at opset 21.
+---
+ .gitignore                                    |   3 +-
+ scripts/export/05_export.sh                   |   3 +
+ scripts/export/lib/common.sh                  |  25 ++++
+ scripts/export/lib/ensure_safetensors.py      |  54 ++++++++
+ .../export/lib/patch_torch_legacy_export.py   | 131 ++++++++++++++++++
+ 5 files changed, 215 insertions(+), 1 deletion(-)
+ create mode 100755 scripts/export/lib/ensure_safetensors.py
+ create mode 100755 scripts/export/lib/patch_torch_legacy_export.py
+
+diff --git a/.gitignore b/.gitignore
+index 3005c10..d3b54f3 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -9,4 +9,5 @@ MNN*
+ .vscode/
+ onnx_build/
+ gpt-sovits-upstream/
+-scripts/reports/
+\ No newline at end of file
++scripts/reports/
++__pycache__/
+diff --git a/scripts/export/05_export.sh b/scripts/export/05_export.sh
+index 3679f93..7c06019 100755
+--- a/scripts/export/05_export.sh
++++ b/scripts/export/05_export.sh
+@@ -82,6 +82,9 @@ MODEL_STAGE="${GPT_SOVITS_ROOT}/models/export/${VERSION}"
+ [[ -f "${MODEL_STAGE}/gpt.ckpt" && -f "${MODEL_STAGE}/sovits.pth" ]] || \
+     die "gpt.ckpt or sovits.pth missing in ${MODEL_STAGE}"
+ 
++patch_legacy_onnx_export
++ensure_pretrained_safetensors
++
+ RAW_DIR="${GPT_SOVITS_ROOT}/onnx/${EXPORT_NAME}"
+ PATCHED_DIR="${GPT_SOVITS_ROOT}/onnx-patched/${EXPORT_NAME}"
+ 
+diff --git a/scripts/export/lib/common.sh b/scripts/export/lib/common.sh
+index a1f596e..b28dbb9 100755
+--- a/scripts/export/lib/common.sh
++++ b/scripts/export/lib/common.sh
+@@ -197,3 +197,28 @@ version_weight_paths() {
+         ;;
+     esac
+ }
++
++# PyTorch < 2.6 predates the `dynamo` kwarg in torch.onnx.export, which the
++# patched exporter (targeting 2.6+) always passes. Drop it on such hosts so the
++# legacy TorchScript path (the one GPT-SoVITS needs) is used as-is.
++patch_legacy_onnx_export() {
++    [[ -f "${GPT_SOVITS_ROOT}/GPT_SoVITS/export_onnx_v2.py" ]] || return 0
++    if [[ "$(run_python -c 'import torch; print(int(torch.__version__.split(".")[1]))')" -lt 6 ]]; then
++        log_info "PyTorch < 2.6 detected; applying legacy ONNX-export compatibility"
++        run_python "${EXPORT_LIB_DIR}/patch_torch_legacy_export.py" \
++            --opset "${LEGACY_EXPORT_OPSET:-17}" \
++            "${GPT_SOVITS_ROOT}/GPT_SoVITS"
++    fi
++}
++
++# transformers >= 4.54 blocks torch.load on .bin checkpoints for torch < 2.6
++# (CVE-2025-32434), and Intel macOS tops out at torch 2.2.2. Providing
++# model.safetensors alongside lets from_pretrained() use the safe format.
++ensure_pretrained_safetensors() {
++    local pretrained="${GPT_SOVITS_ROOT}/GPT_SoVITS/pretrained_models"
++    if [[ "$(run_python -c 'import torch; print(int(torch.__version__.split(".")[1]))')" -lt 6 ]]; then
++        run_python "${EXPORT_LIB_DIR}/ensure_safetensors.py" \
++            "${pretrained}/chinese-hubert-base/pytorch_model.bin" \
++            "${pretrained}/chinese-roberta-wwm-ext-large/pytorch_model.bin"
++    fi
++}
+diff --git a/scripts/export/lib/ensure_safetensors.py b/scripts/export/lib/ensure_safetensors.py
+new file mode 100755
+index 0000000..ac7a0b7
+--- /dev/null
++++ b/scripts/export/lib/ensure_safetensors.py
+@@ -0,0 +1,54 @@
++#!/usr/bin/env python3
++"""Add a ``model.safetensors`` next to a ``pytorch_model.bin`` checkpoint.
++
++transformers >= 4.54 refuses to ``torch.load`` plain ``.bin`` checkpoints unless
++torch >= 2.6 (CVE-2025-32434), but the final Intel-macOS torch wheel is 2.2.2.
++transformers prefers ``model.safetensors`` when present and never touches the
++version guard for that format, so we convert once and leave the original ``.bin``
++in place. Idempotent, and a no-op when the ``.bin`` is absent.
++"""
++
++from __future__ import annotations
++
++import argparse
++import pathlib
++import sys
++
++
++def convert(bin_path: pathlib.Path) -> int:
++    import torch
++    from safetensors.torch import save_file
++
++    out = bin_path.with_name("model.safetensors")
++    if out.exists():
++        print(f"[INFO] already present: {out}")
++        return 0
++
++    state = torch.load(bin_path, map_location="cpu", weights_only=True)
++    if not isinstance(state, dict):
++        state = state.get("state_dict", state)
++    state = {k: v.contiguous().clone() for k, v in state.items()}
++    save_file(state, out, metadata={"format": "pt"})
++    print(f"[INFO] wrote {out} ({len(state)} tensors)")
++    return 0
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("bin_paths", nargs="+", help="pytorch_model.bin paths")
++    args = parser.parse_args()
++    for raw in args.bin_paths:
++        path = pathlib.Path(raw)
++        if not path.is_file():
++            print(f"[INFO] skip (no such file): {path}")
++            continue
++        convert(path)
++    return 0
++
++
++if __name__ == "__main__":
++    try:
++        raise SystemExit(main())
++    except Exception as exc:  # pragma: no cover - surfaced to the caller
++        print(f"[ERROR] safetensors conversion failed: {exc}", file=sys.stderr)
++        raise SystemExit(1)
+diff --git a/scripts/export/lib/patch_torch_legacy_export.py b/scripts/export/lib/patch_torch_legacy_export.py
+new file mode 100755
+index 0000000..9f02f59
+--- /dev/null
++++ b/scripts/export/lib/patch_torch_legacy_export.py
+@@ -0,0 +1,131 @@
++#!/usr/bin/env python3
++"""Adapt the patched GPT-SoVITS ONNX exporter for PyTorch < 2.6 hosts.
++
++Why this exists
++---------------
++Upstream GPT-SoVITS / this repo's patch overlay targets PyTorch >= 2.6:
++
++  * ``torch.onnx.export`` gained the ``dynamo`` kwarg there (defaulting to the new
++    dynamo exporter), so the patched exporter passes ``{"dynamo": False}`` to stay
++    on the legacy TorchScript exporter these graphs are written for.
++  * transformers defaults to SDPA/efficient attention, which that exporter cannot
++    translate (``TypeError ... z_()`` on the fused attention path).
++  * It also pins ``opset_version=20``.
++
++PyTorch 2.2.2 is the final release with an Intel macOS (x86_64) wheel and predates
++all three. Every edit below is semantics-preserving:
++
++  * Dropping ``dynamo`` only removes a *disable* flag for an exporter that does not
++    exist yet -- the legacy exporter is already the default.
++  * Forcing ``attn_implementation="eager"`` selects plain ``matmul``/``softmax``
++    attention instead of SDPA. The math is identical (attention here is exact; the
++    dummy graph traces carry no masked/padded positions), and it is the only
++    formulation torch 2.2.2 can export.
++  * Lowering the export opset changes graph *representation*, not the model. The
++    downstream ``scripts/optimize_aio.py`` unconditionally runs
++    ``version_converter.convert_version(model, 21)`` on every artifact, so the final
++    bundle still lands at opset 21 exactly as on a 2.6+ host. 17 is the highest opset
++    torch 2.2.2 can *emit and validate*: it advertises 19, but emits legacy
++    ``ReduceMean(axes=...)`` attributes that only became an input at opset 18, so the
++    exporter's own checker rejects those graphs above 17. ``version_converter``
++    migrates the attribute/input split when it lifts the graph to 21.
++
++Idempotent, and scoped to the upstream clone only: ``patch/GPT_SoVITS/`` (the source
++overlay) is never touched, so ``02_patch.sh`` restores the pristine files if needed.
++"""
++
++from __future__ import annotations
++
++import argparse
++import pathlib
++import re
++import sys
++
++# target file (relative to GPT_SoVITS/) -> list of (pristine, replacement, note).
++# Replacements must be idempotent: re-running must not find the pristine snippet
++# again.
++REWRITES = {
++    "export_onnx_v2.py": [
++        (
++            '_LEGACY_ONNX_KWARGS = {"dynamo": False}',
++            "_LEGACY_ONNX_KWARGS = {}",
++            "dropped 'dynamo' kwarg",
++        ),
++        (
++            "bert_model = AutoModelForMaskedLM.from_pretrained(\n"
++            "        bert_path, output_hidden_states=True,\n"
++            "    )",
++            "bert_model = AutoModelForMaskedLM.from_pretrained(\n"
++            "        bert_path,\n"
++            "        output_hidden_states=True,\n"
++            '        attn_implementation="eager",\n'
++            "    )",
++            "BERT attention -> eager",
++        ),
++    ],
++    "feature_extractor/cnhubert.py": [
++        (
++            "HubertModel.from_pretrained(base_path, local_files_only=True)",
++            "HubertModel.from_pretrained(\n"
++            "            base_path, local_files_only=True, "
++            'attn_implementation="eager"\n'
++            "        )",
++            "SSL/HuBERT attention -> eager",
++        ),
++    ],
++}
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("gpt_sovits_dir", help="path to the GPT_SoVITS directory")
++    parser.add_argument(
++        "--opset",
++        type=int,
++        default=None,
++        help="rewrite opset_version=20 to this value (e.g. 19)",
++    )
++    args = parser.parse_args()
++
++    root = pathlib.Path(args.gpt_sovits_dir)
++    if not root.is_dir():
++        print(f"[ERROR] not a directory: {root}", file=sys.stderr)
++        return 2
++
++    changed_any = False
++    for rel, rewrites in REWRITES.items():
++        path = root / rel
++        if not path.is_file():
++            print(f"[ERROR] missing expected file: {path}", file=sys.stderr)
++            return 3
++
++        original = text = path.read_text(encoding="utf-8")
++        notes: list[str] = []
++
++        for canonical, replacement, note in rewrites:
++            if canonical in text:
++                text = text.replace(canonical, replacement)
++                notes.append(note)
++
++        if args.opset is not None and rel == "export_onnx_v2.py":
++            pattern = re.compile(r"opset_version=(\d+)")
++            hits = pattern.findall(text)
++            if any(int(v) != args.opset for v in hits):
++                text = pattern.sub(f"opset_version={args.opset}", text)
++                notes.append(f"opset_version {sorted(set(hits))} -> {args.opset}")
++
++        if text == original:
++            print(f"[INFO] up to date: {rel}")
++            continue
++
++        path.write_text(text, encoding="utf-8")
++        changed_any = True
++        print(f"[INFO] adapted {rel}: " + "; ".join(notes))
++
++    if not changed_any:
++        print("[INFO] no changes needed")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

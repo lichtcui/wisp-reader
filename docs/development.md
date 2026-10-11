@@ -44,7 +44,8 @@ ohrs build --arch arm64 --release       # 产物 dist/arm64-v8a/liblegado_core.s
 cp dist/arm64-v8a/liblegado_core.so ../../entry/libs/arm64-v8a/
 ```
 
-- 首次构建依赖树大，约 10–15 分钟；之后增量很快。
+- 首次构建依赖树大，约 10–15 分钟；之后**改 1 个 `.rs` 约 4 分钟**——`lto = true`（fat LTO）会在每次改动后全量重链，
+  这是引擎侧迭代的主要开销；调规则优先用 `make probe`（主机直跑，秒级），别为了试一行规则等 4 分钟。
 - `ohrs build` 会顺带生成 `dist/index.d.ts`（NAPI 类型声明，由 Rust 的 `///` doc comment 来）。
   **改接口说明改 Rust 的 `///`**，手工分步时记得一并拷贝：
   `cp rust/legado-core/dist/index.d.ts entry/src/main/cpp/types/liblegado_core/`。
@@ -55,9 +56,13 @@ cp dist/arm64-v8a/liblegado_core.so ../../entry/libs/arm64-v8a/
 export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk
 export PATH="/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applications/DevEco-Studio.app/Contents/tools/ohpm/bin:$PATH"
 /Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw assembleHap \
-  --mode module -p product=default -p buildMode=debug --no-daemon
+  --mode module -p product=default -p buildMode=debug
 # 产物：entry/build/default/outputs/default/entry-default-signed.hap
 ```
+
+- **不要加 `--no-daemon`**：加上后 ArkTS 编译进程每次冷启，改 1 个 `.ets` 后重编 **13.1s → 3.5s**（2026-10-11 实测，
+  无 `--incremental`/`--parallel` 的额外收益）。默认（常驻 daemon）才是快的那档。
+- 需要一次性干净复现时用 `make hap NO_DAEMON=1`；换 SDK / 构建行为诡异时 `make daemon-stop`（`make daemon-status` 查看）。
 
 ## 签名
 

@@ -1,0 +1,84 @@
+[package]
+name = "gpt-sovits-onnx-rs"
+version = "0.2.0"
+edition = "2024"
+
+[lib]
+crate-type = ["rlib"] # Supports rlib  outputs
+
+[[example]]
+name = "gpt_sovits_demo_jni"
+crate-type = ["cdylib"]      # cdylib
+required-features = ["jni"]
+
+
+[dependencies]
+ort-sys = { version = "=2.0.0-rc.12" } # https://github.com/pykeio/ort/issues/399
+# Host adaptation (Intel macOS / P2): ort rc.12 defaults to api-24 (ORT 1.24),
+# but Microsoft ships no x86_64-macOS ORT build >= 1.24 (last Intel build is
+# 1.23.2 / API 23). Pin api-23 + link the 1.23.2 dylib via ORT_LIB_LOCATION.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = [
+    "std",
+    "ndarray",
+    "tracing",
+    "copy-dylibs",
+    "half",
+    "api-23",
+] }
+arpabet = "2.0.0"
+jieba-rs = "0.7.2"
+ndarray = "0.17.2"
+pinyin = "0.10.0"
+log = "0.4.25"
+hound = "3.5.1"
+half = "2.6.0"
+anyhow = "1.0.86"
+fancy-regex = "0.14.0"
+futures = "0.3"
+async-stream = "0.3"
+tokio = { version = "1.45.1", features = ["full"] }
+env_logger = "0.10"
+serde_json = "1.0"
+num2en = "1.0.0"
+serde = { version = "1.0", features = ["derive"] }
+lazy_static = "1.5.0"
+pest = "2.7"
+pest_derive = "2.7"
+tokenizers = { version = "0.20.0", default-features = false, features = [
+    "onig",
+] }
+jni = { version = "0.21", optional = true }
+once_cell = "1.21.3"
+clap = { version = "4.5", features = ["derive"] }
+rand = "0.9.1"
+smallvec = "1.15"
+regex = "1.11"
+rubato = "0.16" # For audio resampling
+unicode-segmentation = "1.10.1"
+knf-rs-sys = "0.3.2"
+
+[features]
+jni = ["dep:jni"] # Enables JNI and dynamic ONNX loading for Android
+
+# P4 OHOS target: `ort` rc.12 must be built with api-24 (ORT >= 1.24) and
+# dynamic loading (we ship our own cross-compiled libonnxruntime.so; there is no
+# OHOS prebuilt from Microsoft, and the crate cannot link it at build time).
+[target.'cfg(target_env = "ohos")'.dependencies]
+ort = { version = "=2.0.0-rc.12", default-features = false, features = [
+    "std",
+    "ndarray",
+    "tracing",
+    "half",
+    "api-24",
+    "load-dynamic",
+] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ort = { version = "2.0.0-rc.12", features = [
+    "ndarray",
+    "download-binaries",
+    "copy-dylibs",
+    "half",
+    "load-dynamic",
+] }
+android_logger = "0.15"

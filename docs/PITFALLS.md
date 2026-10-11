@@ -10,6 +10,8 @@
 | 锁屏无媒体卡 / 媒体键无反应 / AVSession 不是 top session | **系统 TTS「直连播报」路线不可行**（系统 TTS 自持音频焦点）。必须让 App 自己播 PCM（`STREAM_USAGE_AUDIOBOOK`）才能成为 top session | `docs/progress.md` §M5 |
 | 抽屉错乱：tab 栏被盖住 / 面板从中间冒出 / 关不干净 | tab 页（`TabContent`）用 `mode: 'cover'`，`NavDestination` 用 `overlay`；唯一实现 `ui/common/BottomDrawer.ets`，**禁止**裸 `bindSheet` 与条件挂载 | `docs/specs/UI-SPEC.md` |
 | 改了 ArkTS，设备上行为没变 | ① 只编译没安装 ② 没 `aa force-stop`（`aboutToAppear` 不重跑）→ 统一用 `make run` | `docs/development.md` |
+| `make hap` 明显比 IDE 里慢（改一个 `.ets` 要十几秒） | 多半是命令行带了 **`--no-daemon`**：ArkTS 编译进程每次冷启。不加该 flag（= 常驻 daemon）同一改动 **13.1s → 3.5s**；`make daemon-status` / `make daemon-stop` 管理该进程 | `docs/development.md` §构建 HAP |
+| 改了一行 Rust 规则却要等 ~4 分钟才出 `.so` | `lto = true`（fat LTO）在每次改动后**全量重链**；不是编译慢而是链接慢。试规则用 `make probe`（秒级、不产 `.so`） | `docs/development.md` §构建 native |
 | `make devices` / `hdc list targets` 返回 `[Empty]` | 未连上（插线、开 USB 调试、信任本机）；**跑测试中突然变空**则是掉线/U 口抖动 → `hdc kill -r` 后自动重连（重连前所有 `uitest` 命令只会报 `need connect-key`）。无设备时改完 ArkTS 至少跑 `make hap` 确认能编译。⚠️ **写脚本时不要让 hdc 失败静默**：失败的 `dumpLayout` 会把上一份 `layout.json` 留着，看起来像「点了没反应 / 菜单没弹出」——每次 dump 后必须确认命令成功（或比对 mtime） | skill `harmony-device-run` |
 | Makefile 里拿到的 hdc/NDK 路径不对 | **变量不要用 `?=`**：本机环境已有 `NDK_HOME`/`SDK` 等同名变量，`?=` 会当成“已定义”而不赋值；用 `:=` | 根目录 `Makefile` 顶部注释 |
 | `index.d.ts` 的接口说明/参数与引擎实际行为不一致 | 那份是**产物**：真源是 `rust/legado-core/src/lib.rs` 的 `///` doc comment，改完 `make rust` 会拷过来；**勿手改** `entry/.../index.d.ts` | `docs/engine.md` |

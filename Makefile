@@ -26,8 +26,13 @@ export DEVECO_SDK_HOME := $(SDK)
 export OHOS_NDK_HOME   := $(NDK_HOME)
 export PATH := $(DEVECO)/Contents/tools/node/bin:$(DEVECO)/Contents/tools/ohpm/bin:$(PATH)
 
+# hvigor 一律走**常驻 daemon**（默认行为）：编译进程复用，改 1 个 .ets 后重编 **13.1s → 3.5s**
+# （2026-10-11 实测；`--no-daemon` 时 ArkTS 编译进程每次冷启多花 ~4.3s）。
+# 需要「一次性、干净复现」（如 T-VER-1 那种 clean 构建复验）时：`make hap NO_DAEMON=1`。
+DAEMON_FLAG := $(if $(NO_DAEMON),--no-daemon,)
+
 .DEFAULT_GOAL := help
-.PHONY: help rust test probe hap hap-release install restart run run-release log devices doctor check docs-toc
+.PHONY: help rust test probe hap hap-release daemon-status daemon-stop install restart run run-release log devices doctor check docs-toc
 
 help: ## 显示所有可用命令
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -49,11 +54,17 @@ probe: ## 主机上直接跑引擎，不上设备（例：make probe ARGS='源.j
 
 ## ── HAP ─────────────────────────────────────────────────────────────────────
 
-hap: ## 编译 debug HAP
-	$(HVIGORW) assembleHap --mode module -p product=default -p buildMode=debug --no-daemon
+hap: ## 编译 debug HAP（NO_DAEMON=1 可关 daemon）
+	$(HVIGORW) assembleHap --mode module -p product=default -p buildMode=debug $(DAEMON_FLAG)
 
 hap-release: ## 编译 release HAP（含混淆 + 签名）
-	$(HVIGORW) assembleHap --mode module -p product=default -p buildMode=release --no-daemon
+	$(HVIGORW) assembleHap --mode module -p product=default -p buildMode=release $(DAEMON_FLAG)
+
+daemon-status: ## 查看本项目 hvigor 常驻进程状态
+	$(HVIGORW) --status-daemon
+
+daemon-stop: ## 停掉本项目 hvigor daemon（换 SDK / 构建行为诡异时用）
+	-$(HVIGORW) --stop-daemon
 
 ## ── 真机 ────────────────────────────────────────────────────────────────────
 

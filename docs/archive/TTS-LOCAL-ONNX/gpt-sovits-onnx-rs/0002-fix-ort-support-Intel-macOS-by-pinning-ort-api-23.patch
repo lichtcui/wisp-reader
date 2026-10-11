@@ -1,0 +1,44 @@
+From ca9005957bacbb16a42842cca27f22a5e914f38a Mon Sep 17 00:00:00 2001
+From: licht <7687742+licht3345@user.noreply.gitee.com>
+Date: Sun, 27 Sep 2026 16:34:37 +0800
+Subject: [PATCH 2/3] fix(ort): support Intel macOS by pinning ort api-23
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+ort rc.12 defaults to api-24 (ORT 1.24), but Microsoft stopped shipping
+x86_64-macOS ONNX Runtime builds at 1.24 — the last Intel build is
+1.23.2 (API 23). The default `download-binaries` path therefore fails on
+Intel macOS with "ort does not provide prebuilt binaries for the target
+x86_64-apple-darwin".
+
+Pin `api-23` (default-features = false) and dynamic-link the 1.23.2
+dylib via ORT_LIB_LOCATION. Revert restores the upstream default; no
+source/ONNX changes. Needed to run the P2 Mac inference on this host.
+---
+ Cargo.toml | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index de38d30..d38027b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -14,11 +14,16 @@ required-features = ["jni"]
+ 
+ [dependencies]
+ ort-sys = { version = "=2.0.0-rc.12" } # https://github.com/pykeio/ort/issues/399
+-ort = { version = "=2.0.0-rc.12", features = [
++# Host adaptation (Intel macOS / P2): ort rc.12 defaults to api-24 (ORT 1.24),
++# but Microsoft ships no x86_64-macOS ORT build >= 1.24 (last Intel build is
++# 1.23.2 / API 23). Pin api-23 + link the 1.23.2 dylib via ORT_LIB_LOCATION.
++ort = { version = "=2.0.0-rc.12", default-features = false, features = [
++    "std",
+     "ndarray",
+-    "download-binaries",
++    "tracing",
+     "copy-dylibs",
+     "half",
++    "api-23",
+ ] }
+ arpabet = "2.0.0"
+ jieba-rs = "0.7.2"

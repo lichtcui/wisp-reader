@@ -1,0 +1,49 @@
+{
+  "audio_sec": 14.04,
+  "chunks": [
+    {
+      "audio_sec": 3.3,
+      "chars": 12,
+      "idx": 0,
+      "ms": 2902.43,
+      "samples": 105600,
+      "text": "。你好啊,这是一个测试."
+    },
+    {
+      "audio_sec": 4.9,
+      "chars": 19,
+      "idx": 1,
+      "ms": 4151.21,
+      "samples": 156800,
+      "text": "吃葡萄不吐葡萄皮,不吃葡萄倒吐葡萄皮."
+    },
+    {
+      "audio_sec": 3.06,
+      "chars": 34,
+      "idx": 2,
+      "ms": 2484.34,
+      "samples": 97920,
+      "text": "This demo is only for test  usage."
+    },
+    {
+      "audio_sec": 2.78,
+      "chars": 25,
+      "idx": 3,
+      "ms": 2209.92,
+      "samples": 88960,
+      "text": "If you find any 问题, 请修复它."
+    }
+  ],
+  "infer_params": {
+    "repetition_penalty": 1.350000023841858,
+    "temperature": 1.0,
+    "top_k": 4,
+    "top_p": 0.8999999761581421
+  },
+  "max_len": 510,
+  "n_chunks": 4,
+  "no_seed": true,
+  "rtf": 0.8367,
+  "seed": null,
+  "total_ms": 11747.9
+}

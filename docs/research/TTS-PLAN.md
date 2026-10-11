@@ -1,7 +1,15 @@
 # TTS-PLAN — 鸿蒙听书端侧自建 TTS 尽调与原型计划
 
-日期：2026-09-26
-状态：**调查完成，原型未开始**（下一步 = §10 的 P0）
+> **状态：已封存（2026-10-12），不再是待办计划。** 本计划已执行到 P6：原型真机跑通（ZipVoice 端侧 RTF 0.49–0.54，快于实时），
+> 但 OHOS 交叉编译的 ORT 对一切动态 shape 输出的 `GetShape()` 返回 ~4× 虚高帧数 ⇒ 波形全 NaN / 电流声；
+> 升级 ORT、降级、换 vocoder、换模型四条路同因堵死。**重启前提 = ORT 上游修复**。
+> 决策见 [`decisions.md` D12](../decisions.md)；证据、脚本、测量结果与未推送代码见
+> [`archive/TTS-LOCAL-ONNX/`](../archive/TTS-LOCAL-ONNX/README.md)；当前线上方案见
+> [`TTS-ENGINE-COMPARISON.md`](./TTS-ENGINE-COMPARISON.md) 与 [`../remote-tts-deploy.md`](../remote-tts-deploy.md)。
+> **本文只作历史调研留存**：下方「下一步 = §10 的 P0」等表述是撰写当时的状态，勿当待办执行。
+
+日期：2026-09-26（状态更新：2026-10-12 封存）
+状态：**已封存**（撰写时为「调查完成，原型未开始」；P0–P6 已跑完并封存，见顶部横幅与 D12）
 范围：**只做调查与计划**。本轮未改动任何代码（`entry/`、`rust/`、`.so` 全部未动）。
 关系：现有 M5 用的是**系统 TTS**（Core Speech Kit `textToSpeech` → `AudioRenderer` → `AVSession`，见 `docs/progress.md` §「M5 结果」）。
 本文档是**端侧自建 TTS 的并行增量调研**，与 M5 不冲突、不改动 M5。

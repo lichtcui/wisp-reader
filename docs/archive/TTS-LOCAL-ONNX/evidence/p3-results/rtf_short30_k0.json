@@ -1,0 +1,33 @@
+{
+  "audio_sec": 7.44,
+  "chunks": [
+    {
+      "audio_sec": 2.62,
+      "chars": 12,
+      "idx": 0,
+      "ms": 3212.02,
+      "samples": 83840,
+      "text": "。你好啊,这是一个测试."
+    },
+    {
+      "audio_sec": 4.82,
+      "chars": 19,
+      "idx": 1,
+      "ms": 3829.23,
+      "samples": 154240,
+      "text": "吃葡萄不吐葡萄皮,不吃葡萄倒吐葡萄皮."
+    }
+  ],
+  "infer_params": {
+    "repetition_penalty": 1.350000023841858,
+    "temperature": 1.0,
+    "top_k": 4,
+    "top_p": 0.8999999761581421
+  },
+  "max_len": 510,
+  "n_chunks": 2,
+  "no_seed": true,
+  "rtf": 0.9464,
+  "seed": null,
+  "total_ms": 7041.25
+}

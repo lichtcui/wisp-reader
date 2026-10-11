@@ -18,7 +18,7 @@
 | 技术决策与理由 / 参考项目 | [`docs/decisions.md`](./docs/decisions.md) |
 | 架构 / 目录结构 / **改什么动哪些文件** | [`docs/architecture.md`](./docs/architecture.md)（末尾有「改动定位」表） |
 | bug / 发布 / 调研 / 交接 | **待修清单先看 [`docs/bugfix/TASKS.md`](./docs/bugfix/TASKS.md)**（P0→P2，每项带证据与验证方式）；发布说明 [`RELEASE-NOTES.md`](./docs/bugfix/RELEASE-NOTES.md)、[`docs/research/`](./docs/research/)、[`docs/handoff/`](./docs/handoff/) |
-| 已完结的历史（**默认不读**） | `docs/archive/`（含 105KB `SHELF-EDIT-PLAN.md`、61KB `ARCHIVE-S3-S8.md`） |
+| 已完结的历史（**默认不读**） | `docs/archive/`（含 105KB `SHELF-EDIT-PLAN.md`、61KB `ARCHIVE-S3-S8.md`、**已封存的端侧 TTS 路线** [`TTS-LOCAL-ONNX/`](./docs/archive/TTS-LOCAL-ONNX/README.md)） |
 
 ## 上下文卫生（省 token：本文件 + 全部历史每轮都要重发）
 

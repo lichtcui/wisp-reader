@@ -1,0 +1,306 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index d38027b..d1aba4a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -60,6 +60,19 @@ knf-rs-sys = "0.3.2"
+ [features]
+ jni = ["dep:jni"] # Enables JNI and dynamic ONNX loading for Android
+ 
++# P4 OHOS target: `ort` rc.12 must be built with api-24 (ORT >= 1.24) and
++# dynamic loading (we ship our own cross-compiled libonnxruntime.so; there is no
++# OHOS prebuilt from Microsoft, and the crate cannot link it at build time).
++[target.'cfg(target_env = "ohos")'.dependencies]
++ort = { version = "=2.0.0-rc.12", default-features = false, features = [
++    "std",
++    "ndarray",
++    "tracing",
++    "half",
++    "api-24",
++    "load-dynamic",
++] }
++
+ [target.'cfg(target_os = "android")'.dependencies]
+ ort = { version = "2.0.0-rc.12", features = [
+     "ndarray",
+diff --git a/src/lib.rs b/src/lib.rs
+index e818c96..2a684e2 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -19,16 +19,17 @@ use std::time::SystemTime;
+ use std::{fs::File, path::Path};
+ use tokio::task::block_in_place;
+ 
+-mod cpu_info;
++pub mod cpu_info;
+ mod error;
+ mod infer_params;
+ mod logits_sampler;
+-mod onnx_builder;
++pub mod onnx_builder;
+ mod postprocess;
+ mod preprocessor;
+ mod sv;
+ 
+ use onnx_builder::create_onnx_cpu_session;
++pub use onnx_builder::{set_session_tuning, SessionTuning};
+ pub use postprocess::{PostprocessParams, audio_postprocess, recovery_order};
+ pub use preprocessor::LangId;
+ pub use preprocessor::lang::Lang;
+@@ -39,6 +40,7 @@ use preprocessor::{bert::BertModel, en::g2p_en::G2pEn, zh::g2pw::G2PW};
+ 
+ pub use error::GSVError;
+ pub use infer_params::InferParams;
++pub use preprocessor::seg::chunk_for_limit;
+ pub use logits_sampler::{SamplingParams, SamplingParamsBuilder};
+ 
+ use crate::{onnx_builder::BIG_CORES, sv::SvModel};
+@@ -748,6 +750,71 @@ impl TTSModel {
+             Ok((spec, samples))
+         })
+     }
++
++    /// Synthesize one chunk with the §8 duration guard and sentence-level retry.
++    ///
++    /// The guard threshold applies to the **predicted VITS waveform length**
++    /// (`1280 * semanticLen / 32000 s`), which is the span the constant tail
++    /// artefact can overlay — not the post-processed buffer, which still carries
++    /// the trailing fragment interval. A chunk over the threshold is retried up
++    /// to `max_retries` times (the artefact length is not reproducible, so a
++    /// retry usually lands under the threshold); a still-over chunk is reported
++    /// as `over_limit` for the host to hand to the system TTS.
++    pub fn synthesize_guarded(
++        &mut self,
++        text: &str,
++        sampling_param: SamplingParams,
++        lang_id: LangId,
++        postprocess_params: PostprocessParams,
++        max_audio_sec: f64,
++        max_retries: u32,
++    ) -> Result<GuardedChunk, GSVError> {
++        let mut attempts = 0u32;
++        let mut best: Option<(Vec<f32>, usize)> = None;
++        let over_limit = loop {
++            attempts += 1;
++            let (_spec, samples) =
++                self.synthesize_sync(text, sampling_param, lang_id, postprocess_params)?;
++            let speech_samples = samples
++                .len()
++                .saturating_sub(fragment_interval_samples(self.output_spec.sample_rate, postprocess_params.fragment_interval));
++            let semantic_len = (speech_samples / (2 * VITS_UPSAMPLE_RATE)).max(1);
++            let keep = vits_output_samples(semantic_len) as f64
++                / self.output_spec.sample_rate as f64
++                <= max_audio_sec;
++            if best.is_none() || keep {
++                best = Some((samples, semantic_len));
++            }
++            if keep || attempts > max_retries {
++                break !keep;
++            }
++        };
++        let (samples, semantic_len) = best.ok_or_else(|| GSVError::from("no audio produced"))?;
++        Ok(GuardedChunk {
++            samples,
++            semantic_len,
++            attempts,
++            over_limit,
++            recovered_by_retry: attempts > 1 && !over_limit,
++        })
++    }
++}
++
++/// Outcome of [`TTSModel::synthesize_guarded`].
++pub struct GuardedChunk {
++    pub samples: Vec<f32>,
++    pub semantic_len: usize,
++    pub attempts: u32,
++    pub over_limit: bool,
++    pub recovered_by_retry: bool,
++}
++
++fn fragment_interval_samples(sample_rate: u32, fragment_interval: f32) -> usize {
++    if fragment_interval > 0.0 {
++        (sample_rate as f32 * fragment_interval) as usize
++    } else {
++        0
++    }
+ }
+ 
+ fn ensure_punctuation(text: &str) -> String {
+diff --git a/src/onnx_builder.rs b/src/onnx_builder.rs
+index 50ab4ff..2db528b 100644
+--- a/src/onnx_builder.rs
++++ b/src/onnx_builder.rs
+@@ -1,6 +1,7 @@
+ use crate::cpu_info::get_hw_big_cores;
+ use lazy_static::lazy_static;
+ use std::path::Path;
++use std::sync::RwLock;
+ 
+ use ort::{
+     execution_providers::CPUExecutionProvider,
+@@ -13,16 +14,90 @@ lazy_static! {
+         get_hw_big_cores().unwrap_or((0..8).map(|id| (id, 0)).collect());
+ }
+ 
++/// Session tuning for mobile targets. HarmonyOS app processes cannot have
++/// environment variables injected, so the host passes these through
++/// `ttsInit`'s options JSON instead. `None` ⇒ P3/Mac defaults.
++#[derive(Debug, Clone, Copy, Default)]
++pub struct SessionTuning {
++    pub intra_threads: Option<usize>,
++    /// `false` ⇒ one shared pool instead of a per-session spinning pool.
++    pub independent_pool: Option<bool>,
++    pub spin: Option<bool>,
++    pub inter_threads: Option<usize>,
++}
++
++static TUNING: RwLock<Option<SessionTuning>> = RwLock::new(None);
++
++/// Override session tuning for every session created afterwards. Call before
++/// building a `TTSModel`.
++pub fn set_session_tuning(tuning: SessionTuning) {
++    if let Ok(mut guard) = TUNING.write() {
++        *guard = Some(tuning);
++    }
++}
++
++fn tuning() -> SessionTuning {
++    TUNING.read().ok().and_then(|g| *g).unwrap_or_default()
++}
++
++/// Intra-op thread count for the ONNX sessions.
++///
++/// Auto-detection reads `/sys/devices/system/cpu/*/cpufreq`, which HarmonyOS
++/// does not expose to app processes; `BIG_CORES` then falls back to a hardcoded
++/// 8 and the sessions oversubscribe a 4-core phone (spinning threads + cache
++/// thrash ⇒ RTF > 1). `GSV_INTRA_THREADS` overrides it, which is how the P4
++/// device runs are tuned.
++fn intra_threads() -> usize {
++    tuning()
++        .intra_threads
++        .or_else(|| env_usize("GSV_INTRA_THREADS"))
++        .unwrap_or_else(|| BIG_CORES.len())
++}
++
++fn env_usize(key: &str) -> Option<usize> {
++    std::env::var(key)
++        .ok()
++        .and_then(|v| v.trim().parse::<usize>().ok())
++        .filter(|n| *n > 0)
++}
++
++fn env_flag(key: &str) -> Option<bool> {
++    std::env::var(key).ok().map(|v| {
++        matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "on")
++    })
++}
++
+ pub fn create_onnx_cpu_session<P: AsRef<Path>>(path: P) -> Result<Session, GSVError> {
+-    Ok(Session::builder()?
++    let t = tuning();
++    let independent_pool = t
++        .independent_pool
++        .or_else(|| env_flag("GSV_NO_INDEPENDENT_POOL").map(|no| !no))
++        .unwrap_or(true);
++    let spin = t.spin.or_else(|| env_flag("GSV_SPIN")).unwrap_or(true);
++    let inter_threads = t
++        .inter_threads
++        .or_else(|| env_usize("GSV_INTER_THREADS"))
++        .unwrap_or(1);
++
++    let mut builder = Session::builder()?
+         .with_execution_providers([CPUExecutionProvider::default()
+             .with_arena_allocator(true)
+             .build()])?
+         .with_optimization_level(GraphOptimizationLevel::Level3)?
+-        .with_intra_threads(BIG_CORES.len())?
++        .with_intra_threads(intra_threads())?;
++    // HarmonyOS app processes see 12 CPUs but only 4 big cores; 8 sessions
++    // each owning a spinning pool oversubscribes badly (P4 measured RTF 1.2–1.9
++    // vs the 0.78–0.92 Mac baseline). These stay at the P3 defaults unless the
++    // env flags are set, so Mac numbers are unaffected.
++    if independent_pool {
++        builder = builder.with_independent_thread_pool()?;
++    }
++    builder = builder.with_intra_op_spinning(spin)?;
++    Ok(builder
++        // 8 sessions otherwise each park a spinning inter-op pool; on device
++        // that alone costs ~100 MB per session and adds scheduler noise.
++        .with_inter_threads(inter_threads)?
+         .with_prepacking(true)?
+         .with_config_entry("session.enable_mem_reuse", "1")?
+-        .with_independent_thread_pool()?
+-        .with_intra_op_spinning(true)?
+         .commit_from_file(path)?)
+ }
+diff --git a/src/preprocessor/seg.rs b/src/preprocessor/seg.rs
+index c5d9df3..9874eb9 100644
+--- a/src/preprocessor/seg.rs
++++ b/src/preprocessor/seg.rs
+@@ -232,3 +232,66 @@ mod tests {
+         assert!(chunks.iter().any(|c| c.contains("If you find any 问题")));
+     }
+ }
++
++
++/// P3 定稿 chunking policy, ported from `p3/harness/chunker.py`.
++///
++/// `pre_seg_text` splits on sentence-ending punctuation; `enforce_max` then
++/// splits any chunk still longer than `max_len` at the *last* punctuation at or
++/// before the limit. TTS-PLAN §9 P3 §7 定稿 uses `max_len = 30` (conservative,
++/// 0/5 复读) or `45` (cheaper preprocessing, ≤0.3 s residual).
++///
++/// This mirrors the harness exactly so the device and the Mac benchmarks agree
++/// on where a chunk boundary falls (the "0.3 s silence gap" contract).
++pub fn chunk_for_limit(text: &str, max_len: usize) -> Vec<String> {
++    enforce_max(&pre_seg_text(text, false), max_len)
++}
++
++/// Split every chunk longer than `max_len` at the last punctuation <= `max_len`.
++pub fn enforce_max(chunks: &[String], max_len: usize) -> Vec<String> {
++    let mut out = Vec::new();
++    for chunk in chunks {
++        let mut rest: String = chunk.clone();
++        loop {
++            let chars: Vec<char> = rest.chars().collect();
++            if chars.len() <= max_len {
++                if !rest.is_empty() {
++                    out.push(rest);
++                }
++                break;
++            }
++            let window = &chars[..max_len];
++            match window.iter().rposition(|c| is_split(*c)).map(|i| i + 1) {
++                Some(0) | None => {
++                    out.push(chars[..max_len].iter().collect());
++                    rest = chars[max_len..].iter().collect();
++                }
++                Some(idx) => {
++                    out.push(chars[..idx].iter().collect());
++                    rest = chars[idx..].iter().collect();
++                }
++            }
++        }
++    }
++    out
++}
++
++#[cfg(test)]
++mod p4_chunk_tests {
++    use super::*;
++
++    #[test]
++    fn chunk_for_limit_matches_harness_counts() {
++        // P3 harness README: the 444-char `page_long` page yields
++        // 11 / 15 / 21 chunks at max_len 510 / 45 / 30.
++        let page = include_str!("testdata/page_long.txt");
++        let cases = [(510usize, 11usize), (45, 15), (30, 21)];
++        for (cap, expected) in cases {
++            let got = chunk_for_limit(page, cap);
++            assert_eq!(got.len(), expected, "cap={cap}");
++            for c in &got {
++                assert!(c.chars().count() <= cap, "chunk over cap: {c:?}");
++            }
++        }
++    }
++}

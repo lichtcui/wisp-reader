@@ -1,0 +1,89 @@
+{
+  "audio_sec": 41.14,
+  "chunks": [
+    {
+      "audio_sec": 3.66,
+      "chars": 34,
+      "idx": 0,
+      "ms": 2611.47,
+      "samples": 117120,
+      "text": "这本书的英文原名是 The Old Man and the Sea,"
+    },
+    {
+      "audio_sec": 3.62,
+      "chars": 30,
+      "idx": 1,
+      "ms": 2869.25,
+      "samples": 115840,
+      "text": "作者 Ernest Hemingway 在一九五二年写完它,"
+    },
+    {
+      "audio_sec": 2.82,
+      "chars": 34,
+      "idx": 2,
+      "ms": 2251.65,
+      "samples": 90240,
+      "text": "第二年就拿到了 Nobel Prize in Literature."
+    },
+    {
+      "audio_sec": 8.06,
+      "chars": 36,
+      "idx": 3,
+      "ms": 6347.78,
+      "samples": 257920,
+      "text": "译者在序言里写道:真正的勇敢不是没有恐惧,而是明知会失败仍然要坚持下去."
+    },
+    {
+      "audio_sec": 1.74,
+      "chars": 10,
+      "idx": 4,
+      "ms": 1592.01,
+      "samples": 55680,
+      "text": "他引用了一句原文——"
+    },
+    {
+      "audio_sec": 2.74,
+      "chars": 40,
+      "idx": 5,
+      "ms": 2028.4,
+      "samples": 87680,
+      "text": "A man can be destroyed but not defeated,"
+    },
+    {
+      "audio_sec": 3.94,
+      "chars": 20,
+      "idx": 6,
+      "ms": 3066.36,
+      "samples": 126080,
+      "text": "并且认为这句话几乎概括了整部小说的精神."
+    },
+    {
+      "audio_sec": 7.62,
+      "chars": 33,
+      "idx": 7,
+      "ms": 5721.82,
+      "samples": 243840,
+      "text": "书里那位老人连续八十四天没有捕到鱼,第八十五天他独自驾船驶向深海,"
+    },
+    {
+      "audio_sec": 6.94,
+      "chars": 34,
+      "idx": 8,
+      "ms": 5267.0,
+      "samples": 222080,
+      "text": "终于钓到一条比自己小船还长的大马林鱼,代价是双手被钓线割得血肉模糊."
+    }
+  ],
+  "infer_params": {
+    "repetition_penalty": 1.350000023841858,
+    "temperature": 1.0,
+    "top_k": 4,
+    "top_p": 0.8999999761581421
+  },
+  "max_len": 510,
+  "n_chunks": 9,
+  "no_seed": true,
+  "rtf": 0.7719,
+  "seed": null,
+  "total_ms": 31755.74
+}

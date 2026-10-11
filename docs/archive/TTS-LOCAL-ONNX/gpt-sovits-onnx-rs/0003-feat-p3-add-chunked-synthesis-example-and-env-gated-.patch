@@ -1,0 +1,194 @@
+From 12bfc9ecb7be0a48cd66f965b59ff38198d6943e Mon Sep 17 00:00:00 2001
+From: licht <7687742+licht3345@user.noreply.gitee.com>
+Date: Sun, 27 Sep 2026 22:09:16 +0800
+Subject: [PATCH 3/3] feat(p3): add chunked-synthesis example and env-gated
+ semantic dump
+
+P3 harness support, both additive and inert by default:
+
+- examples/gpt_sovits_p3.rs: load the bundle once, then synthesize a supplied
+  list of text chunks one at a time and concatenate them with the standard
+  0.3 s fragment interval. Emits a per-chunk JSON report (chars, ms, samples,
+  audio sec) plus total RTF, so P3 can measure per-chunk cost and map repeat
+  events onto chunk boundaries. Equivalent chunking to the engine's own
+  pre_seg_text contract (callers pass the already-split chunks).
+- src/lib.rs: opt-in dump of the full pred_semantic token stream, written to
+  $GSV_DUMP_SEMANTIC/semantic_tokens.jsonl. No behaviour change unless the
+  env var is set (no I/O, no allocation on the default path).
+
+Used to show the "repeat" is a VITS output-tail artefact rather than a
+semantic loop-back: the repeated audio spans correspond to differing
+semantic tokens (0/120 identical).
+---
+ examples/gpt_sovits_p3.rs | 136 ++++++++++++++++++++++++++++++++++++++
+ src/lib.rs                |  14 ++++
+ 2 files changed, 150 insertions(+)
+ create mode 100644 examples/gpt_sovits_p3.rs
+
+diff --git a/examples/gpt_sovits_p3.rs b/examples/gpt_sovits_p3.rs
+new file mode 100644
+index 0000000..4659f16
+--- /dev/null
++++ b/examples/gpt_sovits_p3.rs
+@@ -0,0 +1,136 @@
++//! P3 harness example: load the bundle once, then synthesize a supplied list of
++//! text chunks one at a time (exactly matching the engine chunking contract),
++//! and concatenate the results with the same 0.3 s fragment interval.
++//!
++//! It also dumps the T2S semantic-token count per chunk (from `pred_semantic`),
++//! which the CLI demo only logs at DEBUG level.
++use clap::Parser;
++use gpt_sovits_onnx_rs::*;
++use hound::{WavSpec, WavWriter};
++use std::path::{Path, PathBuf};
++use std::time::Instant;
++
++#[derive(Parser, Debug)]
++struct Args {
++    #[arg(long)]
++    model_path: PathBuf,
++    #[arg(long)]
++    ref_text: String,
++    /// One chunk per `--chunk` flag; if none given, use `--text` as a single chunk.
++    #[arg(long = "chunk")]
++    chunks: Vec<String>,
++    #[arg(long)]
++    text: Option<String>,
++    #[arg(long, default_value = "zh")]
++    lang: String,
++    #[arg(long, default_value_t = 510)]
++    max_len: usize,
++    #[arg(long)]
++    top_k: Option<usize>,
++    #[arg(long)]
++    top_p: Option<f32>,
++    #[arg(long)]
++    temperature: Option<f32>,
++    #[arg(long)]
++    repetition_penalty: Option<f32>,
++    #[arg(long)]
++    seed: Option<u64>,
++    /// Omit the seed argument: random seed per call (still deterministic chunking).
++    #[arg(long, default_value_t = false)]
++    no_seed: bool,
++    #[arg(long, default_value = "p3.wav")]
++    output: String,
++    /// Optional JSON report path (per-chunk timing + semantic-token counts).
++    #[arg(long)]
++    report: Option<PathBuf>,
++}
++
++fn find_model_prefix(assets_dir: &Path) -> Result<String, GSVError> {
++    for entry in std::fs::read_dir(assets_dir)? {
++        let entry = entry?;
++        let name = entry.file_name().to_string_lossy().into_owned();
++        if let Some(prefix) = name.strip_suffix("_vits.onnx") {
++            return Ok(prefix.to_string());
++        }
++    }
++    Err(GSVError::from("no *_vits.onnx in model path"))
++}
++
++fn create_model(assets_dir: &Path) -> Result<TTSModel, GSVError> {
++    let prefix = find_model_prefix(assets_dir)?;
++    TTSModel::new(
++        assets_dir.join(format!("{prefix}_vits.onnx")),
++        assets_dir.join("ssl.onnx"),
++        assets_dir.join(format!("{prefix}_t2s_encoder.onnx")),
++        assets_dir.join(format!("{prefix}_t2s_fs_decoder.onnx")),
++        assets_dir.join(format!("{prefix}_t2s_s_decoder.onnx")),
++        Some(assets_dir.join("bert.onnx")),
++        Some(assets_dir.join("g2pW.onnx")),
++        Some(assets_dir.join("g2p_en")),
++        if assets_dir.join("sv.onnx").exists() { Some(assets_dir.join("sv.onnx")) } else { None },
++    )
++}
++
++fn main() -> Result<(), GSVError> {
++    env_logger::init();
++    let args = Args::parse();
++
++    let chunks: Vec<String> = if !args.chunks.is_empty() {
++        args.chunks.clone()
++    } else if let Some(t) = &args.text {
++        vec![t.clone()]
++    } else {
++        return Err(GSVError::from("provide --text or --chunk"));
++    };
++
++    let mut model = create_model(&args.model_path)?;
++    model.process_reference_sync(args.model_path.join("ref.wav"), &args.ref_text, LangId::Auto)?;
++    let spec = WavSpec { channels: 1, sample_rate: 32000, bits_per_sample: 32,
++                         sample_format: hound::SampleFormat::Float };
++
++    let mut params = InferParams::default();
++    if let Some(v) = args.top_k { params.top_k = v; }
++    if let Some(v) = args.top_p { params.top_p = v; }
++    if let Some(v) = args.temperature { params.temperature = v; }
++    if let Some(v) = args.repetition_penalty { params.repetition_penalty = v; }
++    if !args.no_seed { params.seed = args.seed; }
++
++    let mut all: Vec<f32> = Vec::new();
++    let mut report = Vec::new();
++    for (i, chunk) in chunks.iter().enumerate() {
++        let t0 = Instant::now();
++        let (_s, samples) =
++            model.synthesize_sync(chunk, params.to_sampling_params(), LangId::Auto,
++                                  PostprocessParams::default())?;
++        let ms = t0.elapsed().as_secs_f64() * 1000.0;
++        report.push(serde_json::json!({
++            "idx": i, "chars": chunk.chars().count(), "text": chunk,
++            "ms": (ms * 100.0).round() / 100.0, "samples": samples.len(),
++            "audio_sec": (samples.len() as f64 / 32000.0 * 1000.0).round() / 1000.0,
++        }));
++        all.extend_from_slice(&samples);
++    }
++
++    let mut w = WavWriter::create(&args.output, spec)?;
++    for s in &all { w.write_sample(*s)?; }
++    w.finalize()?;
++
++    let total_ms: f64 = report.iter().map(|r| r["ms"].as_f64().unwrap_or(0.0)).sum();
++    let out = serde_json::json!({
++        "seed": params.seed, "no_seed": args.no_seed, "max_len": args.max_len,
++        "infer_params": {"top_k": params.top_k, "top_p": params.top_p,
++                          "temperature": params.temperature,
++                          "repetition_penalty": params.repetition_penalty},
++        "n_chunks": chunks.len(), "total_ms": (total_ms * 100.0).round() / 100.0,
++        "audio_sec": (all.len() as f64 / 32000.0 * 1000.0).round() / 1000.0,
++        "rtf": ((total_ms / 1000.0) / (all.len() as f64 / 32000.0) * 10000.0).round() / 10000.0,
++        "chunks": report,
++    });
++    let text = serde_json::to_string_pretty(&out).map_err(|e| GSVError::from(e.to_string()))?;
++    match &args.report {
++        Some(p) => std::fs::write(p, &text)?,
++        None => println!("{text}"),
++    }
++    println!("Wrote {}", args.output);
++    Ok(())
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index c59b697..e818c96 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -688,6 +688,20 @@ impl TTSModel {
+         if let Some(slice) = pred_semantic.as_slice() {
+             let preview: Vec<_> = slice.iter().take(8).copied().collect();
+             debug!("pred_semantic len={}, head={:?}", semantic_len, preview);
++            // P3 diag: opt-in dump of the full semantic-token stream (env-gated, no
++            // effect unless GSV_DUMP_SEMANTIC is set).
++            if let Ok(dir) = std::env::var("GSV_DUMP_SEMANTIC") {
++                let path = std::path::Path::new(&dir).join("semantic_tokens.jsonl");
++                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
++                    use std::io::Write;
++                    let toks: Vec<i64> = slice.iter().copied().collect();
++                    let _ = writeln!(f, "{}", serde_json::json!({
++                        "text": _text,
++                        "semantic_len": semantic_len,
++                        "tokens": toks,
++                    }));
++                }
++            }
+         }
+         let output_audio = outputs["audio"].try_extract_array::<f32>()?;
+         let (mut audio, _) = output_audio.into_owned().into_raw_vec_and_offset();
