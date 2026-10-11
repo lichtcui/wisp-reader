@@ -15,7 +15,7 @@
 - M5 结果（2026-09-25，真机验证） — L37
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
 - 未决 / 风险 — L111
-- 交接备忘 — L159
+- 交接备忘 — L161
 <!-- TOC:END -->
 
 ---
@@ -142,10 +142,12 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 
 **未决**
 
-- （当前无阻塞性未决项；待做清单与状态以 [`bugfix/TASKS.md`](./bugfix/TASKS.md) 头部摘要为准。）
+- （当前无阻塞性未决项；待做清单与状态以 [`bugfix/TASKS.md`](./bugfix/TASKS.md) 头部摘要为准。
+  **设备现已在线（`33Z0224424136564`）**，T-TTS-5 / T-TTS-6 剩余的真机项（端到端听感、`readTimeout`、音色选项）现在可做。）
 
-- **T-READ-3（预取去重）已实现、待真机复验（2026-10-08）**：`Reader.fetchContent` 加 `bookId#index` 单飞表，并发切章时同一章只请求一次、只写一次盘；顺带删死代码 `prefetch`。
-  本机已验（编译 / `make check` / 转译产物 / 调用面 `rg`），**设备未连接**故未上真机 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-READ-3、[`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §15。
+- **T-READ-3（预取去重）已关闭（2026-10-08 实现 + 2026-10-11 真机复验）**：`Reader.fetchContent` 加 `bookId#index` 单飞表，并发切章时同一章只请求一次、只写一次盘。
+  真机正/反对照（设备 `33Z0224424136564`，插桩已还原）：修复后 key `#11` = miss×2 + **join×1 + engine×1**；修复前对照（旁路 `inflight.set`）key `#39`/`#45` = miss×2 + **engine×2**、join 0 次。
+  顺带删死代码 `prefetch` → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-READ-3、[`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §15。
 
 - 目录分页 `nextTocUrl` / 卷 `isVolume` 已在引擎实现（真机 detect 覆盖当页路径），多页目录待复验。
 - 书源持久化仍用 `preferences` JSON（书籍/进度已用 `relationalStore`）；后续可迁移统一。

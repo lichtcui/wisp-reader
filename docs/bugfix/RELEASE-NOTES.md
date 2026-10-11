@@ -538,14 +538,33 @@ T-READ-2 的内存 LRU 只压低「撞车概率」，**挡不住并发**：`warm
 
 **验证（2026-10-08 · 本机；设备未连接，真机项待复验）**
 
+> **⚠️ 真机部分已于 2026-10-11 补齐 —— 见本节末「真机复验」；下表是当时（本机）的证据快照。**
+
 | 断言 | 证据 |
 |---|---|
 | 编译 | `make hap` → `BUILD SUCCESSFUL`（14.6s）；122 条 ArkTS 告警**无一在 `Reader.ets`**（均为既有的 `Window.ets` / `ShelfRepository.ets`） |
 | 契约 | `make check` ✓（145 个 keep 名字覆盖全部 JSON 字段、目录与链接均最新）、`make doctor` 无阻断项 |
 | 转译产物未被改写 | `entry/build/.../esmodule/debug/.../pages/Reader.ts:443-454`：`inflight.get` → 早退 `return running` + `set` + `finally delete` 均在；全文件已无 `prefetch` 残留 |
 | 调用面闭合 | `rg` 复核 `fetchContent` 的全部调用点（`loadChapter`、`warmNeighbors`）与定义（唯一 `bookEngine.content` 在 `fetchRemote` 内）⇒ 无绕过去重的路径 |
-| 真机行为 | ⏳ **未做**（`hdc list targets` = `[Empty]`）：需连续快速切章，确认同一 `bookId#index` 只出现一次引擎请求、章节缓存文件只写一次 |
+| 真机行为 | ✅ **2026-10-11 已验**（设备 `33Z0224424136564`）：修复后 key `#11` = miss×2 + join×1 + engine×1；修复前对照（旁路 `inflight.set`）key `#39`/`#45` = miss×2 + engine×2、join 0 次 → 见下方「真机复验」 |
 
-**未覆盖**：真机与 release 包均未跑（改动纯 ArkTS 内存层，不触 JSON 契约与混淆面）。
+**真机复验（2026-10-11 · 设备 `33Z0224424136564` · debug HAP · `make run`）**
+
+场景：《剑来》（`bookId=5b4fad87`，联网源，远程章节），`uitest uiInput doubleClick 1159 2434` 连点底栏「下一章」制造并发索要。
+临时插桩三行（验证后随 `git checkout` 全部还原）：`fetchContent` 缓存未命中 → `TEMP-TR3 miss`；命中在飞表 → `TEMP-TR3 join`；`fetchRemote` 真正打引擎 → `TEMP-TR3 engine`。
+
+| 轮次 | 改动 | 同一 key 的日志 | 结论 |
+|---|---|---|---|
+| A 修复后 | 单飞表生效 | `#11`：`miss` ×2 → `join` ×1 → `engine` ×1 | 两调用方共享同一 promise：**1 次引擎请求 / 1 次写盘** |
+| B 修复前对照 | 临时注释 `this.inflight.set(key, task)` | `#39`：`miss` ×2 → `engine` ×2；`#45`：`miss` ×2 → `engine` ×2；全程 `join` ×0 | 对照确凿：**同一章 2 次引擎请求 / 2 次写盘**（即修复前行为） |
+
+- 关键点：**join 是自然触发的**（无人工延时）—— 单次连点落在「该章引擎请求仍在飞」的窗口内（实测该源单章 ≈200 ms），与 `warmNeighbors` 邻居预取同源并发。
+- 写盘次数：`putCachedChapter` 唯一调用点在 `fetchRemote` 内 ⇒ engine 次数即写盘次数（沙箱对 shell 不可读，故以调用面 + 引擎请求数取证）。
+- 还原复跑（工作区干净、`rg TEMP` 无残留 → `make run` 重装）：应用内「清理全部缓存」归零四类缓存 → 打开《剑来》**第五十章正文由引擎重新拉取并渲染**（缓存为空）、点「上一章」→ **第四十九章正文正常**；全程 **0 JSCRASH/CPPCRASH、0 条应用级 error**（仅框架噪音 `AceStateMgmt: No views to update`）。
+
+**附带观察（与本次改动无关，未定性）**：同次会话中《大唐：李世民求我造反》打开时目录显示「目录加载失败」—— TOC 拉取失败。
+该路径为 `loadToc → bookEngine.toc`，**不经过** `fetchContent`；未定性为源侧失效还是缓存被驱逐后的重拉失败，如需排查另立任务。
+
+**未覆盖**：release 包（改动纯 ArkTS 内存层，不触 JSON 契约与混淆面；真机 debug 已于 2026-10-11 跑过）。
 TTS 侧 `model/BookContent.ets::loadChapterParagraphs` 有同型「未命中即打引擎」写法，但它与阅读页是两条独立调用链、
 没有共享单飞表 ⇒ **本次不合并**（合并需引入共享模块，另立任务）。
