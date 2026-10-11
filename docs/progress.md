@@ -15,7 +15,7 @@
 - M5 结果（2026-09-25，真机验证） — L37
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
 - 未决 / 风险 — L111
-- 交接备忘 — L166
+- 交接备忘 — L169
 <!-- TOC:END -->
 
 ---
@@ -136,6 +136,9 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   每次渲染重试解码 → `ImageSource` / `62980118` 刷屏）。修法：写盘前嗅探图片签名（非图片不落盘，返回 `not_image`）+ 缓存命中先验头 64 B（旧毒文件删除重下 = 自愈）+ ArkTS 解不开就删文件并负缓存（每 URL 每会话只试一次）。
   真机：启动 8s 内该组错误 **15 行 → 0 行**，沙箱 38 个封面缓存**全为合法 JPEG**、中毒文件已消失，封面渲染布局与修复前逐行一致（无回归）→
   [`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §14、[`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-SHELF-5。
+- **T-TTS-6（中文原神角色音色）→ 用户决定不做（2026-10-11）**：当前 VPS 上无解 —— **A** 声纹匹配已证伪（`fanchen-C` 的 187 声线非原神角色，含真阳性对照）、
+  **B** ZipVoice + 官方中配参考音频（音色 7/7 命中、RTF<1，但 `num_steps=3` 的 few-step 毛刺不接受）、**C/D** 需租 GPU（换机器）。
+  任务条目已从 [`bugfix/TASKS.md`](./bugfix/TASKS.md) 移除，决定固化在 [`decisions.md`](./decisions.md) D14；调研全文留在 [`research/TTS-VOICE-SOURCES.md`](./research/TTS-VOICE-SOURCES.md)（纯参考、不再跟进）。
 - **书架编辑模式（多选删除）**：已实施并真机验证（2026-10-07，D1–D21）—— 见上文同名节；
   计划 / 逐步代码 / DoD 逐条证据见 [`archive/SHELF-EDIT-PLAN.md`](./archive/SHELF-EDIT-PLAN.md)（§7 / §8 / §10 / §12.3），
   五轮审计轨迹原文见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §附。

@@ -18,6 +18,7 @@
 | D11 | v1 不做：JS 运行时、登录型源、换源、发现(explore)、真分页、在线 TTS | 控制范围，先跑通主链路 | 全局 |
 | D12 | 端侧自建 TTS（GPT-SoVITS 音色替代系统 TTS）是**并行增量**、未立项，不改动 M5 代码 | 与 M5 系统 TTS 路线不冲突，可独立推进 | [`research/TTS-PLAN.md`](./research/TTS-PLAN.md) |
 | D13 | 门禁只在导入时做（`gate::run`）：非文字/禁用/登录/JS 源排除，可选字段含 JS 则**降级丢规则**而非排除整源 | 保源数量与可用性平衡（13 源 filter 后保留） | `gate.rs` |
+| D14 | **不追原神角色音色**：远端 TTS 声线就用 804 底模自带的 5 个 sid，且它们只是**标签名**（不代表真实角色）；不再投入「贴角色标签」的调研与实现 | 现有 VPS（4C Xeon / 无 GPU）上三条路线全部撞墙：**A** 声纹匹配 = 证伪（187 声线非原神角色，已做真阳性对照排除假阴性）、**B** ZipVoice + 官方中配参考音频 = 音色 7/7 命中且 RTF<1，但 `num_steps=3` 的 few-step 毛刺属听感风险（用户不接受）、**C/D** 租 GPU 跑 GPT-SoVITS 或自训 VITS 导 ONNX = 需换硬件；收益（像不像角色）远小于成本 | `server/app.py`（VITS 分支）、[`research/TTS-VOICE-SOURCES.md`](./research/TTS-VOICE-SOURCES.md)（纯参考） |
 
 ## 已知取舍（相对 Legado 官方语义）
 

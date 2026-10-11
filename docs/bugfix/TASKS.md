@@ -1,3 +1,10 @@
+> **2026-10-11 第十八次同步**：⑰ **T-TTS-6 条目已按用户决定移除** —— 结论：**在当前 VPS（4C Xeon / 无 GPU）上无解，后续不做**。
+> 三条路线逐条撞墙：**A 声纹匹配**（证伪：`fanchen-C` 的 187 声线不是原神角色，真阳性对照已排除假阴性）、
+> **B ZipVoice + 官方中配参考音频**（音色 7/7 命中、RTF<1，但 `num_steps=3` 的 few-step 毛刺属**听感**风险，用户不采用）、
+> **C/D 租 GPU 跑 GPT-SoVITS 或自训 VITS 导 ONNX**（需换机器，不在当前硬件约束内）。
+> 决定与理由已固化进 [`../decisions.md`](../decisions.md) **D14**；调研证据**整篇保留**在 [`../research/TTS-VOICE-SOURCES.md`](../research/TTS-VOICE-SOURCES.md)（§4/§5/§6/§10/§11，纯参考、不再跟进）。
+> 远端 TTS 声线继续用 804 底模的 5 个 **标签名**（不代表真实角色，见 T-TTS-5 条目），本仓库不再投入「贴角色标签」。
+>
 > **2026-10-11 第十七次同步**：⑯ **T-TTS-5 客户端收尾四项已落地** —— ② `RemoteTtsClient.ets` `readTimeout` 60000→**120000**；
 > ③ `Const.ets` 的音色选项换成 5 个新名（默认 **钟离**，旧值 `流萤/花火/卡芙卡` 由 `normalizeRemoteVoice()` 读取时归一，用户无需重选）；
 > 语速由「服务端空转」改为**客户端真下发**（有效 = `clamp(client,0.5,2.0) × SPEED_SCALE`），④起点值取 **0.75**（≈5.2 字/秒，与客户端 `CHARS_PER_SECOND=5` 巧合对齐）。
@@ -60,7 +67,7 @@
 > 顺带删除死代码 `prefetch`（全仓库无调用）。本机已验（编译 / `make check` / 转译产物 / 调用面 `rg`），**真机待复验**（设备未连接）→ [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §15。
 > 同时：**T-TTS-4 条目已按用户决定移除**（远端 TTS 链路后续会整体重做，不再单独治理其并发预取的 RTF 劣化；相关部署事实已记入 [`../remote-tts-deploy.md`](../remote-tts-deploy.md) §0/§3）。
 > 当时 open：**1 项 `[~]`**（T-READ-3 已实现，待真机复验）+ **1 项 `[~]`**（T-TTS-6：路线 A 已证伪、路线 B 已实测可行，待听感/路线决策；T-TTS-5 剩余真机项受设备离线阻塞）。
-> **（T-READ-3 已于 2026-10-11 真机复验通过 → `[x]`，见文首第十六次同步；设备现已在线，T-TTS-5/6 的真机项可做。）**
+> **（T-READ-3 已于 2026-10-11 真机复验通过 → `[x]`，见文首第十六次同步；设备现已在线，T-TTS-5/6 的真机项可做（T-TTS-6 后于同日按用户决定整体移除，见文首第十八次同步）。）**
 > 优先级：P0（阻断/高影响）→ P1 → P2。每项给出证据位置与验证方式。
 
 ---
@@ -217,7 +224,7 @@
     模型 `vits-hf-zh-jp-zomehwh.onnx`（804 说话人，原生 22050Hz，经 `_resample_fft()` 升到 24000Hz，**客户端零改动**）。
   - **上线声线**：胡桃 119 / 甘雨 111 / 刻晴 115 / 雷电将军 125 / 钟离 104（4 女 + 1 男）。
     ⚠️ **2026-10-08 修正**：这 5 个 sid 在社区公开的 804 说话人表里**没有名字**（是空洞号），所以「这个 sid 对应这个角色」**未经验证**；
-    同期发现**即使换成表里有名字的原神 sid，CER 也反而更差**（见 T-TTS-6 与 [`../research/TTS-VOICE-SOURCES.md`](../research/TTS-VOICE-SOURCES.md) §3）。音色名目前只是**标签**，不代表真实角色。
+    同期发现**即使换成表里有名字的原神 sid，CER 也反而更差**（见 [`../research/TTS-VOICE-SOURCES.md`](../research/TTS-VOICE-SOURCES.md) §3；原任务 T-TTS-6 已于 2026-10-11 按要求移除，见文首第十八次同步）。音色名目前只是**标签**，不代表真实角色。
     旧名别名兜底（App 端未改也能播）：**流萤→甘雨、花火→胡桃、卡芙卡→雷电将军**。
   - **期间修掉的三个上游真 bug**（详见 [`../research/TTS-ENGINE-COMPARISON.md`](../research/TTS-ENGINE-COMPARISON.md) §4.2–4.4）：
     1. **「发音像日本人」= 词典**：模型自带 lexicon 是「中文单字表（21,287）+ 日文词表（15,500）」两遍拼接，**没有一个中文词组**，
@@ -261,38 +268,6 @@
     - 音色改名与归一：设备 pref 里残留 `tts_remote_voice=流萤` → 界面显示「远端音色 · 甘雨」，播放请求 `voice=甘雨`（服务端日志确认）。
     - 服务端 5 音色逐个 `POST /tts` 均 200 / 24kHz mono 16bit（样本 378–449 KB）；`/health` 返回 `speed_scale=0.75` + 5 个新名。
     - **未覆盖**：真机上 5 音色的**逐个切换**（走到一半设备掉线，`uitest` 命令只回 `need connect-key`）；听感结论本身需要用户耳朵。
-
-- [~] **T-TTS-6（P1）远端 TTS 音色：中文原神角色音色到底拿不拿得到** —— **路线 A 已跑完并证伪；路线 B 已实测可行，卡在听感决策**。
-  - **答「有没有」：有，而且很多** —— ModelScope `aihobbyist/GPT-SoVITS_Model_Collection`：
-    **原神/中文 263 角色 / 56.1 GB**（钟离·甘雨·胡桃·刻晴·雷电将军·魈·迪卢克·派蒙·可莉·纳西妲·八重神子… **重点角色 40/40 全在库**）、
-    **星穹铁道/中文 118 角色 / 36.0 GB（含 `流萤` / `花火` / `卡芙卡`）**，另有日语/英语/韩语，原神共 877 文件；作者 红血球AE3803 与 白菜工厂1145号员工，License CC-BY-NC。
-    VPS 可直连 ModelScope（HTTP 200 / 0.54 s），实测下载 `钟离_ZH.zip` 213MB / 18.8 s、`流萤.zip` 305MB / 25.9 s。
-  - **但格式是 GPT-SoVITS，进不了 sherpa 管线**：sherpa-onnx 只支持 VITS/Matcha/Kokoro/ZipVoice/Kitten/Pocket/Supertonic；
-    且 GPT-SoVITS 在本机 **RTF ≈ 4.5**（i5-8250U 10 s 语音需 45 s；官方 M4 CPU 0.526；CPUFast 分支再 −45%）→ 与「RTF<1」硬约束**直接冲突**，要上就必须换 GPU 服务器。
-    唯一的纯 VITS 原神模型（Gitee `TimeRainStarSky/GenshinVoice`，51 角色）**模型与 API 均已停止发布**，只留数据集。
-  - **这台 Mac 不能自训**：`MacBookPro16,2` = Intel i5-1038NG7 + Iris Plus，**无 CUDA、也无 Apple Silicon 的 MPS**（MPS 只支持 Apple Silicon/AMD），
-    GPT-SoVITS 与 VFFT 均要求这类 Mac 只能 CPU 推理；估算 20–50 h/角色。替代：租 GPU（¥1–2/h，~1 h/角色）。
-  - **顺带修正上一轮结论**：现用 804 模型**本身就是原神模型**（`G_CJ.json` 的 `training_files: filelists/uma_genshin_genshinjp_bh3_train.txt.cleaned`；
-    sid 92–230 = 原神中文 144 角色），但**中/日混训的基座决定了它出不了干净普通话**，换 sid 无效。
-  - **路线 A（声纹匹配）结论：阴性，而且是决定性的**。从 263 个原神角色包里用 HTTP Range 只抽 `reference_audios/`（150 MB / 224 s，否则 56 GB），
-    对 `fanchen-C` 的 187 个 sid 做声纹比对（`wespeaker_zh_cnceleb_resnet34` + `campplus_zh_en` 交叉）：
-    - `within` 同一人（多段真实录音）= **0.784**；`between` 不同人 = 均值 0.539 / p95 0.778 / 最大 0.911；
-    - **187 个 sid → best 真实角色**：中位 **0.547**、p90 0.664、**最大 0.767 且与次高打平**（sid175 对莱欧斯利和荒泷一斗都是 0.767）→ 直方图单峰、无可贴近 `within` 的簇；
-    - **⇒ `fanchen-C` 的 187 个声线不是原神角色**；`G_C.json` 的 `training_files` 也无 genshin 字样（对比 `G_CJ` 明写），F0 分布 144 女/24 男/19 中性也与角色名单不符。
-    - **关键：方法有效性做了真阳性对照** —— 用 ZipVoice 零样本克隆官方中配参考音频，其产物与其自身参考音频相似度 **0.76–0.88，7/7 全部正确命中** ⇒ 声纹法**能**跨「合成声 ↔ 真实录音」域差，上面的阴性不是假阴性。
-    - 细节：[`../research/TTS-VOICE-SOURCES.md`](../research/TTS-VOICE-SOURCES.md) §10。
-  - **路线 B 重新测量：推翻上一轮的 RTF 判据**。ZipVoice + 官方中配参考音频，音色同样 **7/7 声纹命中**；
-    把参考音频裁到 6 s 后 `num_steps=3` 的 **RTF = 0.655–0.962（重新满足 RTF<1）**，而上一轮 steps=4 的 1.04–1.53 是 8 s 长 prompt 撑上去的。
-    产物套用线上同款后处理（−18 dBFS / 限幅 −1 dBFS / 15+40 ms 淡入淡出）后实测 **0% 削顶**。
-    - 唯一剩余争议：**few-step flow-matching 的毛刺**（上一轮就是被它否掉的）—— 属**听感判断**，已出试听包 `~/Desktop/tts-原神克隆/`（steps 3 vs 6 同批角色 A/B）。
-    - 细节：同文档 §11。
-  - **现状（待用户听感决策）**：能接受 steps=3 的毛刺 → 直接切 ZipVoice + 原神中配参考音频（真·角色音色 + 口音问题天然消失 + RTF 达标）；
-    不能接受 → 只剩租 GPU（路线 C 跑 GPT-SoVITS / D 自训 VITS 导 ONNX 回灌 sherpa）。
-    旁注：路线 A 阴性并**不**杀死 `fanchen-C`（纯中文 / CER 4.80% / RTF 0.462 / 187 声线），它只是**不能贴角色标签**，选声线得靠人耳。
-  - 证据：[`../research/TTS-VOICE-SOURCES.md`](../research/TTS-VOICE-SOURCES.md)（§4 清单 / §5 慢速证据 / §6 不能自训 / §10 路线 A / §11 路线 B）；
-    VPS `/root/tts/gsv/getrefs.py`、`/root/tts/genshin-vits/{cer_gen,spk_match,spk_diag,zip_gen,pp}.py`、`/root/tts/gsv/refs/`、`/root/tts/gsv/{zs3,zs6,pp3,pp6}/`；
-    旧入口 `/root/tts/gsv/{钟离_ZH,流萤}.zip`、`/root/tts/dlchars.sh`。
-  - 验证：路线 B 以「`POST /tts` 端到端 RTF < 1 + 24 kHz/−18 dBFS 契约 + 人耳听感」判定。
 
 ## 书源管理（BookSourceManage）
 
