@@ -5,18 +5,25 @@
 > 本文回答这两问，并给出上一轮结论需要修正的地方。引擎/管线的其余细节见 [`TTS-ENGINE-COMPARISON.md`](./TTS-ENGINE-COMPARISON.md)，部署见 [`../remote-tts-deploy.md`](../remote-tts-deploy.md)。
 
 <!-- TOC:BEGIN -->
-- 0. 结论先行 — L20
-- 1. 上一轮为什么得出「找不到」——那是「sherpa 能跑的」口径 — L29
-- 2. 现用 804 模型**本来就是原神模型**（新证据） — L35
-- 3. 但它仍然出不了母语普通话（三次评测证据） — L67
-- 4. 公开的中文原神／星铁模型清单 — L85
-  - 4.1 ModelScope `aihobbyist/GPT-SoVITS_Model_Collection` —— **最全，可直接下载** — L87
-  - 4.2 其余来源（多为「模型已下架」或非 TTS） — L113
-- 5. GPT-SoVITS 在 CPU 上有多慢（RTF≈4.5 的证据链） — L124
-- 6. 这台 Mac 能不能自己训练 — L136
-- 7. 可选路线与推荐顺序 — L154
-- 8. 复现入口 — L167
-- 9. 参考 — L179
+- 0. 结论先行 — L29
+- 1. 上一轮为什么得出「找不到」——那是「sherpa 能跑的」口径 — L41
+- 2. 现用 804 模型**本来就是原神模型**（新证据） — L47
+- 3. 但它仍然出不了母语普通话（三次评测证据） — L79
+- 4. 公开的中文原神／星铁模型清单 — L97
+  - 4.1 ModelScope `aihobbyist/GPT-SoVITS_Model_Collection` —— **最全，可直接下载** — L99
+  - 4.2 其余来源（多为「模型已下架」或非 TTS） — L125
+- 5. GPT-SoVITS 在 CPU 上有多慢（RTF≈4.5 的证据链） — L136
+- 6. 这台 Mac 能不能自己训练 — L148
+- 7. 可选路线与推荐顺序 — L166
+- 8. 复现入口 — L179
+- 9. 参考 — L195
+- 10. 路线 A 判定：`fanchen-C` 的 187 个声线**不是**原神角色（决定性） — L207
+  - 10.1 做法 — L209
+  - 10.2 结果（wespeaker_zh，266 角色 / 277 段 real，187 sid） — L219
+  - 10.3 真阳性对照：证明「匹配不到」不是域差造成的假阴性 — L235
+  - 10.4 交叉旁证 — L255
+  - 10.5 这个阴性结论**不**杀死 `fanchen-C` — L262
+- 11. 路线 B 校正：ZipVoice + 官方中配参考音频（音色命中，RTF 回到 <1） — L267
 <!-- TOC:END -->
 
 ## 0. 结论先行
@@ -26,7 +33,10 @@
 3. **新证据：现用的 804 模型本身就是原神模型**（训练集名 `uma_genshin_genshinjp_bh3`，sid 92–230 = 原神中文 144 角色，含钟离/甘雨/胡桃/刻晴/雷电将军/魈/派蒙/可莉…）。见 §2。
 4. **但换了正确 sid 也没救**：用 §2 的表重测，CER 从 12.62% 变成 **14.36%（更差）**，且 F0 与角色对不上 → **口音来自「中/日混训」的模型基座 + `zh_ja_mixture_cleaners`，与 sid、词典、导出都无关**。§10 of [`TTS-ENGINE-COMPARISON.md`](./TTS-ENGINE-COMPARISON.md) 的这个结论**站得住**。
 5. **这台 Mac 不能自训**（§6）：`MacBookPro16,2` = Intel i5-1038NG7 + Iris Plus，**无 CUDA、也无 Apple Silicon 的 MPS**；GPT-SoVITS 与 VFFT 都要求这类 Mac 只能 CPU **推理**。替代是租 GPU。
-6. 建议的下一步见 §7：**先做声纹匹配验证 `fanchen-C` 的 187 个声线**（零成本，若命中则直接得到「中文原神 + RTF 0.462」）。
+6. **路线 A（声纹匹配）已跑完 = 阴性，而且是决定性的**：`fanchen-C` 的 187 个声线**不是**原神角色 —— 见 §10。
+   最关键的是**方法有效性已做真阳性对照**：同一批参考音频、同一个声纹模型，ZipVoice 零样本克隆的产物与其自身参考音频相似度 **0.76–0.88，7/7 全部正确命中**；而 187 个 sid 对着 266 个真实角色的最大值中位只有 **0.547**、最高 0.767 **且与次高打平**（= 无判别力）。所以「匹配不到」不是域差造成的假阴性。
+7. **路线 B 已实测可行**：ZipVoice + 原神/星铁**官方中配参考音频**，音色同样 **7/7 声纹命中**，且把参考音频裁到 6 s 后 **`num_steps=3` 的 RTF = 0.655–0.962，重新回到 RTF < 1**（§11）。之前 steps=4 的 RTF 1.04–1.53 是 8 s 长参考音频撑上去的。
+8. 于是现状收敛成一个**听感问题**，不是技术问题：**ZipVoice 在 steps=3 的毛刺能不能接受**。能接受 → 立刻拿到真·原神中配音色且 RTF 达标；不能接受 → 只剩租 GPU（路线 C/D）。试听包 `~/Desktop/tts-原神克隆/`。
 
 ## 1. 上一轮为什么得出「找不到」——那是「sherpa 能跑的」口径
 
@@ -157,14 +167,14 @@ v4/钟离_ZH/                       # 流萤 是 v2ProPlus/流萤/
 
 | 路线 | 做法 | 成本 | 风险 |
 |---|---|---|---|
-| **A（首选，零成本）** | **声纹匹配**：用 §4.1 的**中文参考音频**（钟离/甘雨/胡桃/刻晴/雷电将军…）做声纹，与 `fanchen-C` 的 **187 个 sid** 合成样本比对，找出「fanchen-C 的哪个 sid = 哪个角色」 | 0（要加一个中文说话人 embedding ONNX，sherpa 自带 `SpeakerEmbeddingExtractor`，3D-Speaker/Wespeaker zh 约 26–90 MB，hf-mirror 可下） | 若 `fanchen-C` 的 187 声线并非原神档（F0 分布 144 女/24 男/19 中性，更像 Plachtaa VFFT 底模「原神 + VCTK」的泛二次元集合），则匹配不到 |
-| B | **ZipVoice 零样本克隆**：已装、已在线过、RTF 0.83，把 §4.1 的中文参考音频当 prompt → 口音问题自动消失（它本来就是中文 prompt） | 0 | 复现当初被否的「杂音」（few-step flow matching）；且 RTF 余量小 |
+| **A（已跑完）** | **声纹匹配**：用 §4.1 的**中文参考音频**（钟离/甘雨/胡桃/刻晴/雷电将军…）做声纹，与 `fanchen-C` 的 **187 个 sid** 合成样本比对，找出「fanchen-C 的哪个 sid = 哪个角色」 | 0（要加一个中文说话人 embedding ONNX，sherpa 自带 `SpeakerEmbeddingExtractor`，3D-Speaker/Wespeaker zh 约 26–90 MB，hf-mirror 可下） | **已证伪** —— §10：187 个 sid 全部落在「陌生人」区间，且方法经 ZipVoice 真阳性对照验证有效。结论与当初的 F0 分布旁证（144 女/24 男/19 中性，更像 Plachtaa VFFT 底模「原神 + VCTK」的泛二次元集合）一致 |
+| **B（推荐）** | **ZipVoice 零样本克隆**：已装、已在线过，把 §4.1 的中文参考音频当 prompt → 口音问题自动消失（它本来就是中文 prompt） | 0 | **音色已证命中（7/7 声纹，§11）**；参考音频裁到 6 s + `num_steps=3` 时 **RTF 0.655–0.962 ≥ 达标**。剩余风险只有「few-step 毛刺能不能听」——纯听感问题，已出试听包 |
 | C | **租 GPU 跑 GPT-SoVITS**，接 ModelScope 中文原神/星铁模型（含流萤/花火/卡芙卡） | ¥1–2/h（24×7 约 ¥700/月） | 音色最好、工程最重；API 契约要重写 |
 | D | **租 GPU 自训 VITS**：中文原神数据集（§4.2）→ VFFT 训练 → 导 ONNX **回灌 sherpa** | 一次性 ~1 h/角色 + 下载 27 GB 数据 | 长期最优（音色可控 + RTF 0.46），但需训练工程 |
 | ✗ | 继续换 804 导出（theresa/eula/其它） | — | §3 已证无效 |
 | ✗ | 在本 Mac 或本 VPS 上自训 | — | §6 已证不可行 |
 
-**推荐**：先跑 **A**（今天就能出结论，且不需要动线上服务）→ 命中即收工；不命中再按预算选 **B** 或 **C/D**。
+**推荐**：A 已跑完并证伪 → **直接上 B 的听感决策**；若 steps=3 的毛刺不可接受，再按预算选 **C/D**（都要租 GPU）。
 
 ## 8. 复现入口
 
@@ -175,6 +185,10 @@ v4/钟离_ZH/                       # 流萤 是 v2ProPlus/流萤/
 | 原神/星铁模型清单 | `curl -s "https://www.modelscope.cn/api/v1/models/aihobbyist/GPT-SoVITS_Model_Collection/repo/files?Revision=master&Recursive=true&Root=原神/中文"` |
 | 下载一个角色包 | VPS `/root/tts/dlchars.sh`（已下 `钟离_ZH.zip` / `流萤.zip` 到 `/root/tts/gsv/`） |
 | 说话人表原始出处 | `DeSireFire/genshin_vits` README（`configs/uma_trilingual.json` 对应的 `speakers` 字典） |
+| **路线 A**：抽参考音频（HTTP Range 只取 zip 里的 `reference_audios/`） | VPS `/root/tts/gsv/getrefs.py`（`MSROOT=原神/中文` / `星穹铁道/中文`，产物 `/root/tts/gsv/refs/<角色>/{refNN.wav,names.json}`） |
+| **路线 A**：声纹匹配（187 sid × 266 角色，双 embedding 交叉验证） | VPS `/root/tts/genshin-vits/spk_match.py`（→ `/root/tts/models/spk_*.npz`、`spk_match.json`，日志 `/tmp/spk.log`） |
+| **路线 A**：判别力诊断（within/between 基线 + 直方图 + 目标角色） | VPS `/root/tts/genshin-vits/spk_diag.py`（→ `/root/tts/models/spkdiag_*.npz`） |
+| **路线 B**：真阳性对照 + 克隆试听（`NUM_STEPS` / `ZCAP` 秒数可调） | VPS `/root/tts/genshin-vits/zip_gen.py`，后处理 `/root/tts/genshin-vits/pp.py`（→ `/root/tts/gsv/zs3|zs6`、`pp3|pp6`） |
 
 **环境依赖**：`cer_*.py` 依赖 VPS 上已装的 `sherpa-onnx 1.13.8`；FST 在 `/root/tts/vits-zh-ll/sherpa-onnx-vits-zh-ll/{date,number,phone}.fst`；jieba 词典在 `/root/tts/vits-zh-ll/sherpa-onnx-vits-zh-ll/dict/`；ASR（paraformer-zh）在 `/root/tts/models/asr/`。
 
@@ -187,3 +201,83 @@ v4/钟离_ZH/                       # 流萤 是 v2ProPlus/流萤/
 5. 中文技术博客的 CPU 推理实测表（i5-8250U 10 s → 45 s）
 6. HF `NyaNyaBOSS/Genshin_MB_VITS_CJE`、`BigPancake01/GPT-SoVITS_Mihoyo`、`jzsues/genshin-voice-zh`
 7. Plachtaa `VITS-fast-fine-tuning`（底模说明：原神数据集 + VCTK）
+8. 声纹模型：HF `3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx`、`wespeaker_zh_cnceleb_resnet34.onnx`
+9. 说话人确认的 **within / between 基线 + 真阳性对照** 方法论（防止把「无匹配」误判成「匹配不到」）
+
+## 10. 路线 A 判定：`fanchen-C` 的 187 个声线**不是**原神角色（决定性）
+
+### 10.1 做法
+
+1. **抽参考音频**：从 §4.1 的 `原神/中文` 263 个角色包里，用 HTTP Range 只下载 zip 内的
+   `reference_audios/**/*.wav`（ModelScope CDN 支持 `206`），263 个角色共 **150 MB / 224 s**（否则要下 56 GB）。
+   同样方式再取 `星穹铁道/中文` 的流萤(6 段)/卡芙卡(4 段)/花火(4 段) 作**多段阳性对照**（原神包每个角色只有 1 段）。
+2. **合成探针**：`fanchen-C`（187 说话人，16 kHz）用同一段中性文本、`speed=1.0` 生成 **187 个 sid** 的样本（721 s）。
+3. **提声纹**：`so.SpeakerEmbeddingExtractor`，两个模型交叉验证 —— `wespeaker_zh_cnceleb_resnet34`（256 维）
+   与 `3dspeaker_campplus_sv_zh_en_16k-common`（192 维）。
+4. **建基线**：`within` = 同一角色多段真实录音互比；`between` = 不同角色真实录音互比。
+
+### 10.2 结果（wespeaker_zh，266 角色 / 277 段 real，187 sid）
+
+| 量 | 值 |
+|---|---|
+| `within` 同一人（真实↔真实） | 均值 **0.784**，中位 0.776（n=27） |
+| `between` 不同人（真实↔真实） | 均值 **0.539**，中位 ~0.53，p95 0.778，p99 0.835，最大 0.911（n=35245） |
+| **187 个 sid → best 真实角色** | 中位 **0.547**，p90 0.664，**最大 0.767** |
+
+- `between` 的 p95（0.778）**已经高于**所有 sid 的最高值（0.767）⇒ 没有任何一个 sid 能超出「陌生人」的分布。
+- 直方图**单峰**（0.40–0.50 有 50 个、0.50–0.55 有 44 个… 0.75+ 只有 1 个），**没有第二簇贴近 `within`**。
+- 最像的两个还**并列**：`sid175` 对「莱欧斯利」和「荒泷一斗」都是 **0.767**（次高 0.767）⇒ 没有判别力，是巧合。
+- 唯一残留的「性别一致」现象（`wespeaker` 下钟离→sid175 145.5 Hz 男、雷电将军→sid6 219.2 Hz 女…12/12 性别对得上）
+  只说明 embedding 携带 **F0/性别**信息，不构成身份对应 —— 典型特征是 best 与 2nd 的 **margin 极小**（0.767 vs 0.738）
+  以及**大量角色塌缩到同几个 sid**（sid175 被约 25 个男性角色命中）。
+- `campplus_zh_en` 更差：sid→best 中位 **0.307 < `between` 均值 0.370**，即整体还不如随机陌生人。
+
+### 10.3 真阳性对照：证明「匹配不到」不是域差造成的假阴性
+
+这是整条路线里**最关键的一步**。合成声 vs 真实录音有域差，可能让所有相似度一起塌掉；
+所以必须先用一个**已知应该能匹配上**的样本证明方法有效：
+
+- 用 **ZipVoice 零样本克隆**官方中配参考音频（§11），把克隆产物当「合成声」，与其**自身参考音频**比声纹：
+
+| 克隆对象 | 克隆声 ↔ 自身真实参考音频 | 是否正确命中 |
+|---|---|---|
+| 钟离 | **0.876**（steps=3 时 0.871） | ✓ |
+| 甘雨 | **0.848**（0.831） | ✓ |
+| 刻晴 | **0.856** | ✓ |
+| 魈 | 0.758 / 0.804 / 0.805（三次） | ✓ |
+| 胡桃 | 0.756 | ✓ |
+| 流萤 | 0.775 / 0.769 | ✓ |
+
+**7/7 全部正确命中，相似度 0.76–0.88**，明显高于跨性别陌生人（0.27–0.55），也高于同性别陌生人（0.71–0.82）的平均水平。
+⇒ 声纹法**能**跨「TTS 合成声 ↔ 真实录音」工作。既然如此，`fanchen-C` 若含原神角色，必然会出现 0.75–0.88 且 margin 明显的匹
+配；实测却是中位 0.547、最大 0.767 无 margin。**故路线 A 为阴性结论成立。**
+
+### 10.4 交叉旁证
+
+- `G_C.json` 的 `training_files: filelists/train.txt.cleaned` —— **没有 genshin 字样**；而 `G_CJ.json` 明确写
+  `uma_genshin_genshinjp_bh3_train.txt.cleaned`。作者若有原神数据集，命名上不会省略。
+- 187 声线 F0 分布 = **144 女 / 24 男 / 19 中性**，与原神/星铁角色名单的性别比例显著不符。
+- `fanchen-C` 隶属 Plachtaa VFFT 的导出链，其底模说明是「原神数据集 + VCTK」的泛二次元集合，说话人已匿名聚合。
+
+### 10.5 这个阴性结论**不**杀死 `fanchen-C`
+
+它仍然是纯中文（`chinese_cleaners`）、**CER 4.80%**、**RTF 0.462**、187 个可用声线的候选。
+阴性结论只意味着**不能给它贴「钟离/甘雨」这类角色标签**，选声线要靠人耳听感，而非身份识别。
+
+## 11. 路线 B 校正：ZipVoice + 官方中配参考音频（音色命中，RTF 回到 <1）
+
+**本轮对 §7 路线 B 的重新测量推翻了上一轮的 RTF 判据。**
+
+| `num_steps` | 参考音频 | RTF 范围 | 声纹命中 |
+|---|---|---|---|
+| 3 | 裁到 6 s | **0.655 – 0.962** | 4/4 ✓ |
+| 4 | 未裁（3.4–8.2 s） | 1.04 – 1.53 | 6/6 ✓ |
+| 6 | 裁到 6 s | 1.32 – 1.85 | 4/4 ✓ |
+
+- 上一轮「ZipVoice 实时性不够」的一半原因是**参考音频给到 8 s**（钟离那段只有 3.84 s，甘雨那段 8.08 s）。
+  同一 `num_steps` 下，把 prompt 裁到 6 s 能显著压低 RTF。
+- `num_steps=3` + 6 s 参考音频 ⇒ **RTF < 1 且音色正确**，硬约束满足。
+- 产物已套用线上同款后处理（−18 dBFS / 限幅 −1 dBFS / 15+40 ms 淡入淡出），实测 **0% 削顶**。
+- 剩余唯一争议是 **few-step flow-matching 的毛刺/底噪**（上一轮就是被它否掉的）—— 属听感判断，已出试听包
+  `~/Desktop/tts-原神克隆/`（steps 3 vs 6 同一批角色 A/B）。
+
