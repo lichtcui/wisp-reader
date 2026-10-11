@@ -24,12 +24,20 @@
 
 - **大文件只读片段**：`docs/plan.md` 与 `docs/archive/*`（50–105KB）顶部有行号目录（`make docs-toc` 维护），
   用 `read` 的 `offset`/`limit` 取段；**不要**整文件反复重读。
+  `docs/bugfix/TASKS.md`(76KB)、`docs/progress.md`(21KB) 这类中文长文同理：**先 `rg -n` 定位再取段**
+  （一次整读 76KB ≈ 2.3 万 tokens，且此后每轮都重发；实测吃掉一次会话的 17.6%）。
+- **一轮多工具**：同一轮里并行发 2–4 个互相独立的调用（`rg` 定位 + `read` 取段 + 状态检查），别拆成多轮；
+  每轮成本 ≈ 全量上下文（实测平均 73k），与那点输出大小几乎无关。**工具之间不要叙述**，过渡句并进同一轮。
 - **大 `.ets` / `.rs` 先看文件索引**：`Reader.ets`(1.4k 行)、`TtsController.ets`(1.3k)、`SearchResult.ets`(1k)、
   `runtime.rs`(0.9k) 顶部有成员名索引（只有名字没有行号，不会漂）→ 按名字 `grep -n` 取段。
 - **用内置工具而非 bash 同名牌**：`read`/`grep`/`find`/`ls` 尊重 `.gitignore`（本仓库有 3.3GB `rust/**/target`）且输出更紧凑。
 - **外部命令先落盘**：`cmd > /tmp/x.log 2>&1` 后只 `rg -n "ERROR|error\[|FAILED" /tmp/x.log`，只带结论回对话。
+  慢命令（`make probe/test/hap-release/rust`）用 `&` 后台跑再一次性取结果，别每轮探一次。
+- **抓取/搜索先看状态**：404 或拿到 HTML 就别往下带；`web_search` 一家 provider 足够，取段用 `get_search_content` + `findText`，别把整页塞进上下文。
 - **不要 `read` 图片**：当前默认模型不支持图片，只会回占位提示；UI 验证用 `uitest dumpLayout` + `rg`（见 skill `harmony-device-run` §4）。
-- **换任务即 `/new`**：单会话峰值上下文曾达 340k，续用旧会话会让每轮重发全部历史。
+- **换任务即 `/new`**：单会话峰值上下文曾达 340k，续用旧会话会让每轮重发全部历史。实测三个任务同会话时，
+  第三个任务 93 次调用平均上下文 80k、独占全会话 token 的 84.6%；账本见
+  [`docs/research/PI-SESSION-TOKEN-AUDIT.md`](./docs/research/PI-SESSION-TOKEN-AUDIT.md)。
 
 ## 项目禁令（已定，勿擅改；每条的理由与影响面见 [`docs/decisions.md`](./docs/decisions.md) 的 D 编号）
 
