@@ -247,10 +247,13 @@
       客户端 `setSpeed()` 新增远端分支：起播中改档 → `clearInflight()` + `ensureSynthesized()` 让新档位立刻生效（远端没有 `engine`，旧分支原本空转）。
     - ④ **起点值 0.75**（已部署到 VPS 并写入 `server/tts.service` 默认值）：实测有效语速下 **5.2 字/秒**，与客户端 `CHARS_PER_SECOND=5` 的时长估算碰巧吻合。
       **终值待用户听感**（试听包 `~/Desktop/tts-abtest-tts5/`：同一段文字在 App 1.0x 档位下分别对应 SPEED_SCALE 0.75 / 0.85 / 1.00 三个 wav）。
-    - ⚠️ **新发现（未处理，需决策）**：本机（4C）每字合成成本 ≈0.13–0.16s，而有效语速 1.5 时播放仅需 0.136 s/字 → **RTF≈1.2**，
-      即 **App 1.5x / 2.0x 档会断续**（1.0x / 1.2x 稳）。已写入 [`../remote-tts-deploy.md`](../remote-tts-deploy.md) §0，是否给远端单独限制档位由用户决定。
-    - ⚠️ **新发现（未处理，需决策）**：`fallbackToSystem()` 会把 `tts_engine=系统` **写进 preferences** ⇒ 一次瞬时失败（超时/500）就把用户选的「远端」永久改回系统 TTS。
-      当前保留旧行为；改法很小（只翻内存态、不落盘，下次听书自动重试远端），但属产品行为，等用户拍。
+    - **已决（2026-10-11，用户拍板）· 远端语速上限**：本机（4C）每字合成成本 ≈ 0.13–0.16s，有效语速 1.5 时播放仅需 0.136 s/字 →
+      **RTF≈1.2**，即 App 1.5x / 2.0x 档会断续。现新增 `TTS_REMOTE_SPEED_MAX = 1.2`（× 0.75 = 有效 0.9，留 1.4× 余量）：
+      `Const.ets::effectiveSpeed()` 在下发前夹取，听书页 1.5x/2.0x 菜单项 `enabled=false`、设置页档位置灰；
+      系统 TTS 不受影响（仍 5 档全开）。详见 [`../remote-tts-deploy.md`](../remote-tts-deploy.md) §0。
+    - **已决（2026-10-11，用户拍板）· 回退不落盘**：`fallbackToSystem()` 不再 `putNumber(KEY_TTS_ENGINE)`，
+      只在**本次会话**内改用系统 TTS（Toast 文案同步为「远端合成失败，本次已切换回系统 TTS」），
+      pref 保留「远端」⇒ 下次听书自动重试。
   - **验证（2026-10-11 真机 `33Z0224424136564` · debug HAP · `make run`）**：
     - 修复前复现：App 2.0x 播《剑来》第四章时服务端 `ZeroDivisionError`（curl 直连复现：`：`/`“`/`”`/`——` 全部 500、`…` 正常）→ App 日志 `remote synth failed para=3` → `falling back to system TTS` → 重建 16k 系统引擎 → 之后一直 `remoteVoice` 失效。
     - 修复后：`_synth_vits` 跳过 `sample_rate<=0` 的分段（日志 `drop unspeakable segment`），整段无字时回 320ms 静音（HTTP 200）；`_resample_fft` 对 `sr_in<=0` 加硬护栏。

@@ -17,7 +17,9 @@ import {
   TTS_API_KEY_DEFAULT,
   TTS_REMOTE_VOICE_DEFAULT,
   TTS_REMOTE_VOICE_OPTIONS,
-  normalizeRemoteVoice
+  TTS_REMOTE_SPEED_MAX,
+  normalizeRemoteVoice,
+  effectiveSpeed
 } from '../common/Const';
 import { getNumber, putNumber, getString, putString } from '../common/Prefs';
 
@@ -58,8 +60,18 @@ export struct ListeningSettingsPage {
     return labels;
   }
 
+  /** 远端引擎下超过 `TTS_REMOTE_SPEED_MAX` 的档位置灰（服务器合成速度追不上播放）。 */
+  private speedDisabled(): boolean[] {
+    const flags: boolean[] = [];
+    for (const value of TTS_SPEED_OPTIONS) {
+      flags.push(this.engine === TTS_ENGINE_REMOTE && value > TTS_REMOTE_SPEED_MAX);
+    }
+    return flags;
+  }
+
   private speedIndex(): number {
-    const idx: number = TTS_SPEED_OPTIONS.indexOf(this.speed);
+    const active: number = effectiveSpeed(this.speed, this.engine);
+    const idx: number = TTS_SPEED_OPTIONS.indexOf(active);
     return idx >= 0 ? idx : TTS_SPEED_OPTIONS.indexOf(TTS_SPEED_DEFAULT);
   }
 
@@ -116,19 +128,28 @@ export struct ListeningSettingsPage {
   }
 
   @Builder
-  chips(labels: string[], selected: number, onSelect: (index: number) => void) {
+  chips(labels: string[], selected: number, onSelect: (index: number) => void, disabled: boolean[]) {
     Row({ space: 8 }) {
       ForEach(labels, (label: string, index: number) => {
         Text(label)
           .fontSize(14)
           .fontWeight(index === selected ? FontWeight.Medium : FontWeight.Normal)
-          .fontColor(index === selected ? $r('app.color.on_brand') : $r('app.color.text_2'))
-          .backgroundColor(index === selected ? $r('app.color.brand') : $r('app.color.bg_pill'))
+          .fontColor(index === selected && !disabled[index]
+            ? $r('app.color.on_brand')
+            : (disabled[index] ? $r('app.color.text_4') : $r('app.color.text_2')))
+          .backgroundColor(index === selected && !disabled[index]
+            ? $r('app.color.brand')
+            : $r('app.color.bg_pill'))
+          .opacity(disabled[index] ? 0.45 : 1)
           .textAlign(TextAlign.Center)
           .layoutWeight(1)
           .height(34)
           .borderRadius(17)
-          .onClick(() => onSelect(index))
+          .onClick(() => {
+            if (!disabled[index]) {
+              onSelect(index);
+            }
+          })
       }, (label: string, index: number) => index.toString() + '_' + label)
     }
     .width('100%')
@@ -169,7 +190,8 @@ export struct ListeningSettingsPage {
             .width('100%')
             .padding({ left: 16, right: 16, top: 12, bottom: 10 })
           Column() {
-            this.chips(this.speedLabels(), this.speedIndex(), (index: number) => this.setSpeedIndex(index))
+            this.chips(this.speedLabels(), this.speedIndex(), (index: number) => this.setSpeedIndex(index),
+              this.speedDisabled())
           }
           .width('100%')
           .padding({ left: 16, right: 16, bottom: 12 })
@@ -249,7 +271,7 @@ export struct ListeningSettingsPage {
           }
 
           Text(this.engine === TTS_ENGINE_REMOTE
-            ? '远端为 VPS 上的钟离/甘雨/胡桃/刻晴/雷电将军 5 个声线（音色名只是标签），需可访问填入的服务器；失败自动回退系统 TTS。'
+            ? '远端为 VPS 上的钟离/甘雨/胡桃/刻晴/雷电将军 5 个声线（音色名只是标签），需可访问填入的服务器；语速上限 1.2x（服务器合成速度所限）；失败自动回退系统 TTS（仅本次会话）。'
             : '音色与语速为下次开始听书的默认值；男声需系统已下载该音色。后台播放与锁屏控制在开始听书后自动生效。')
             .fontSize(12)
             .fontColor($r('app.color.text_4'))

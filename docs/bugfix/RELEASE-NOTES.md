@@ -613,7 +613,7 @@ TTS 侧 `model/BookContent.ets::loadChapterParagraphs` 有同型「未命中即�
 - **5 音色的真机逐个切换**未走完：验收中途设备掉线（`hdc list targets` 为空、`uitest` 只回 `need connect-key`）。
   服务端侧已逐个 200 验证，试听包 `~/Desktop/tts-abtest-tts5/`（5 音色 + 3 档 `SPEED_SCALE`）。
 - **听感结论**（T-TTS-5 ① 与 ④ 终值）需要用户耳朵，Agent 侧无法判定。
-- ⚠️ **语速上限**：有效语速 ≈1.0 是这台 4C 机器的可持续上限（每字合成 0.13–0.16 s），
-  App 的 **1.5x/2.0x 档会断续**（1.0x/1.2x 稳）。是否给远端单独限制档位待定。
-- ⚠️ **回退会写 pref**：`fallbackToSystem()` 把 `tts_engine=系统` 落盘 ⇒ 一次瞬时失败永久改掉用户选择。
-  改成「只翻内存、不落盘」很小，但属产品行为，等用户拍。
+- ⚠️ **语速上限（已决）**：有效语速 ≈1.0 是这台 4C 机器的可持续上限（每字合成 0.13–0.16 s）→ 新增
+  `TTS_REMOTE_SPEED_MAX = 1.2`（有效 0.9），远端下 1.5x/2.0x 菜单项/档位置灰，`effectiveSpeed()` 下发前夹取。
+- ⚠️ **回退不落盘（已决）**：`fallbackToSystem()` 不再写 `tts_engine` pref，只在本次会话回退系统 TTS，
+  下次听书自动重试远端（Toast 已改为「本次已切换回系统 TTS」）。

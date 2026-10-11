@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { BookCover } from '../components/BookCover';
 import { ListenParam, TTS_SPEED_OPTIONS, TTS_TIMER_OPTIONS, TTS_VOICE_OPTIONS,
-  TTS_ENGINE_REMOTE, TTS_REMOTE_VOICE_OPTIONS } from '../common/Const';
+  TTS_ENGINE_REMOTE, TTS_REMOTE_VOICE_OPTIONS, TTS_REMOTE_SPEED_MAX, effectiveSpeed } from '../common/Const';
 import { Chapter } from '../engine/types';
 import { TtsController } from '../model/TtsController';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
@@ -79,10 +79,13 @@ export struct ListeningPage {
   }
 
   private speedMenuItems(): MenuElement[] {
+    const remote: boolean = this.tts.engineKind === TTS_ENGINE_REMOTE;
     const items: MenuElement[] = [];
     for (const value of TTS_SPEED_OPTIONS) {
       items.push({
         value: value.toFixed(1) + 'x',
+        // 远端服务器单字合成 0.13-0.16s，有效语速 >1.0 就会段间空档（见 TTS_REMOTE_SPEED_MAX）。
+        enabled: !remote || value <= TTS_REMOTE_SPEED_MAX,
         action: () => this.tts.setSpeed(value)
       });
     }
@@ -258,7 +261,7 @@ export struct ListeningPage {
         SymbolGlyph($r('sys.symbol.video_speed'))
           .fontSize(24)
           .fontColor([$r('app.color.listen_text')])
-        Text(this.tts.speed.toFixed(1) + 'x')
+        Text(effectiveSpeed(this.tts.speed, this.tts.engineKind).toFixed(1) + 'x')
           .fontSize(13)
           .fontColor($r('app.color.listen_text_dim'))
           .margin({ top: 6 })

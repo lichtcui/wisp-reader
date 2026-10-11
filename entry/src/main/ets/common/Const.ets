@@ -35,6 +35,17 @@ export const KEY_TTS_VOICE: string = 'tts_voice';
 export const TTS_SPEED_DEFAULT: number = 1.0;
 export const TTS_VOICE_DEFAULT: number = 13;
 export const TTS_SPEED_OPTIONS: number[] = [0.5, 0.8, 1.0, 1.2, 1.5, 2.0];
+/**
+ * 远端引擎的语速上限。VPS（4C）单字合成成本实测 0.13–0.16 s，而有效语速 = 本值 × 服务端
+ * `SPEED_SCALE`（0.75），有效语速 >1.0 时合成追不上播放 → 段间空档。1.2 × 0.75 = 0.9，留了余量。
+ * 见 `docs/remote-tts-deploy.md` §0。
+ */
+export const TTS_REMOTE_SPEED_MAX: number = 1.2;
+
+/** 按引擎夹取有效语速（远端见 `TTS_REMOTE_SPEED_MAX`；系统 TTS 原样返回）。 */
+export function effectiveSpeed(speed: number, engineKind: number): number {
+  return engineKind === TTS_ENGINE_REMOTE && speed > TTS_REMOTE_SPEED_MAX ? TTS_REMOTE_SPEED_MAX : speed;
+}
 export const TTS_VOICE_OPTIONS: number[] = [13, 21];
 export const TTS_TIMER_OPTIONS: number[] = [0, 15, 30, 60];
 

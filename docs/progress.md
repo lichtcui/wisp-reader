@@ -15,7 +15,7 @@
 - M5 结果（2026-09-25，真机验证） — L37
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
 - 未决 / 风险 — L111
-- 交接备忘 — L165
+- 交接备忘 — L166
 <!-- TOC:END -->
 
 ---
@@ -147,7 +147,8 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   真机端到端已跑通（同一章连播 5 段 0 回退，服务端 `speed=0.750/1.500` 与 UI 档位对得上），并顺带修掉服务端「纯标点分段除零 500」
   ——但**设备在验收中途再次掉线**（`hdc list targets` 为空），**5 音色的真机逐个切换**与**听感终值**仍待用户/设备：
   服务端侧 5 音色已逐个 200 验证，试听包 `~/Desktop/tts-abtest-tts5/`（5 音色 + 3 档 `SPEED_SCALE`）→ [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-TTS-5、[`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §16。
-  另记两个待用户拍板的小项：远端 1.5x/2.0x 档会断续（本机有效语速上限 ≈1.0）、`fallbackToSystem()` 会把 `tts_engine` 落盘改回系统 TTS。）
+  另两个小项已按用户决定改掉：远端语速上限 `TTS_REMOTE_SPEED_MAX=1.2`（1.5x/2.0x 档置灰，本机有效语速上限 ≈1.0）、
+  `fallbackToSystem()` 改为**不落盘**（本次会话回退系统 TTS，下次听书自动重试远端）。）
 
 - **T-READ-3（预取去重）已关闭（2026-10-08 实现 + 2026-10-11 真机复验）**：`Reader.fetchContent` 加 `bookId#index` 单飞表，并发切章时同一章只请求一次、只写一次盘。
   真机正/反对照（设备 `33Z0224424136564`，插桩已还原）：修复后 key `#11` = miss×2 + **join×1 + engine×1**；修复前对照（旁路 `inflight.set`）key `#39`/`#45` = miss×2 + **engine×2**、join 0 次。

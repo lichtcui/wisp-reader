@@ -23,14 +23,16 @@ VPS：`ssh -p 40860 root@103.236.96.53`（Ubuntu 22.04 / 4C Xeon 8173M / 3925 MB
   `num_threads=4` 只影响单次推理的核数，**请求之间不会互相抢核**。
 - 超时：`RemoteTtsClient.ets` `connectTimeout=5000` / `readTimeout=120000`（2026-10-11 由 60000 提到 120000）。
   3 段预取 + 服务端串行，实测最坏单请求 wall ≈ 46 s（279 字 / 5 句 / effective 1.5），120 s 有余量。
-  仍然失败时会走 `fallbackToSystem` **并把 `tts_engine` 写成系统 TTS**（见 §5 的注意项）。
+  仍然失败时会走 `fallbackToSystem` → 本次会话改用系统 TTS（**不写 pref**，下次听书自动重试远端；见 §5）。
 - **客户端 `speed` 已真的下发**（2026-10-11）：`remoteSynthesize(..., speed)` 带 `this.speed`，
   服务端有效语速 = `min(2.0, max(0.5, client_speed)) * SPEED_SCALE`。
   例：App 1.0x → 0.75（默认），App 2.0x → clamp 后的 1.5。实测日志 `speed=0.750/1.500` 对得上。
 - ⚠️ **语速越高越可能断续**：本机（4C）实测每字合成成本 ≈ 0.13–0.16 s，而播放速度 = 有效语速下
   的 ~0.19 s/字（0.75）/ 0.136 s/字（1.5）⇒ **有效语速 ≈ 1.0 是可持续上限**。
-  即 App 的 1.0x/1.2x 稳，**1.5x/2.0x 有概率出现段间空档**（预取 3 段缓冲会被吃光）。
-  想再快只能换更快的机器（或改服务端批合成），暂无计划；调 `AHEAD_REMOTE` 不解决问题。
+  **已按此给远端设上限**：App 侧 `TTS_REMOTE_SPEED_MAX = 1.2`（× 0.75 = 有效 0.9，留 ~1.4× 余量），
+  `common/Const.ets::effectiveSpeed()` 在**下发前**夹取，听书页的 1.5x/2.0x 菜单项 `enabled=false`、
+  设置页对应档位置灰；系统 TTS 不受影响（仍 5 档全开）。想再快只能换更快的机器（或改服务端批合成），
+  调 `AHEAD_REMOTE` 不解决问题。
 - ⚠️ 状态：这条远端链路**已知会整体重做**，本文件只按现状记录，不代表最终方案。
 
 ## 1. 现场（勿动）
@@ -139,9 +141,9 @@ engine=vits post: enabled=True eq=(off) target=-18.0dBFS ceiling=-1.0dBFS
 | 输出无声/杂音 | 确认模型在 `VITS_DIR`；`POST_ENABLE=0` 时输出是裸模型音频（正常但更浑浊） |
 | **播到带引号/破折号的段落就中断，App 弹「远端合成失败，已切换回系统 TTS」** | 2026-10-11 已修：纯标点分段（`：“”`、`——`）sherpa 返回 `sample_rate=0` 的空音频，旧代码在 `_resample_fft` **除零 → HTTP 500**。现在跳过该分段（日志 `drop unspeakable segment`），整段无字时返回 320ms 静音。**这条极常见**：`他说：“你来了。”` 会分出一个独立的 `”` 段，即每个对白段都曾 500。查 `journalctl -u tts \| grep "drop unspeakable"` |
 
-> ⚠️ **注意（App 侧未改）**：`fallbackToSystem()` 会把 `tts_engine` **写入 preferences**，
-> 一次瞬时失败 = 用户选的「远端」被永久改回系统 TTS（需手动再切）。当前保留该行为（属产品决策，
-> 见 `docs/bugfix/TASKS.md` §T-TTS-5 的待定项）。
+> ⚠️ **回退语义（2026-10-11 已按用户决定改）**：`fallbackToSystem()` **不再写 pref** ——
+> 一次瞬时失败（超时 / 500）只在**本次会话**内改用系统 TTS，`tts_engine` 仍是「远端」，
+> 下次开始听书会自动重试远端。若哪天改成落盘，请同时考虑上面的标点类 500（已修但不保证穷尽）。
 
 ## 6. 网络（已落定：公网映射 39680）
 

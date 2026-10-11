@@ -45,6 +45,7 @@ import {
   TTS_API_KEY_DEFAULT,
   TTS_REMOTE_VOICE_DEFAULT,
   normalizeRemoteVoice,
+  effectiveSpeed,
   AHEAD_REMOTE
 } from '../common/Const';
 import { remoteSynthesize } from './RemoteTtsClient';
@@ -715,7 +716,8 @@ export class TtsController {
   private async remoteSynth(idx: number, text: string): Promise<void> {
     let pcm: ArrayBuffer;
     try {
-      pcm = await remoteSynthesize(this.serverUrl, this.apiKey, text, this.remoteVoice, this.speed);
+      pcm = await remoteSynthesize(this.serverUrl, this.apiKey, text, this.remoteVoice,
+        effectiveSpeed(this.speed, TTS_ENGINE_REMOTE));
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'remote synth failed para=%{public}d', idx);
       this.fallbackToSystem();
@@ -737,14 +739,14 @@ export class TtsController {
     }
     this.fallingBack = true;
     hilog.warn(DOMAIN, TAG, 'remote synth failed, falling back to system TTS');
-    const ctx: common.UIAbilityContext | undefined = this.ctx;
     const resumeIdx: number = this.currentIndex;
     this.pause();
     this.engineKind = TTS_ENGINE_SYSTEM;
-    if (ctx !== undefined) {
-      putNumber(ctx, KEY_TTS_ENGINE, TTS_ENGINE_SYSTEM);
-    }
-    this.error = '远端合成失败，已切换回系统 TTS';
+    // Deliberately NOT persisted: a transient failure (timeout / server 500) must not silently
+    // overwrite the user's engine choice forever -- otherwise one bad paragraph downgrades
+    // them to system TTS until they dig into 听书设置. The preference keeps 远端 so the next
+    // 听书 session retries it; this session stays on the system engine.
+    this.error = '远端合成失败，本次已切换回系统 TTS';
     this.releaseRenderer();
     try {
       await this.ensureEngine();
