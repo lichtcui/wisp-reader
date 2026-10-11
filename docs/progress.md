@@ -15,7 +15,7 @@
 - M5 结果（2026-09-25，真机验证） — L37
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
 - 未决 / 风险 — L111
-- 交接备忘 — L169
+- 交接备忘 — L174
 <!-- TOC:END -->
 
 ---
@@ -139,6 +139,11 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 - **T-TTS-6（中文原神角色音色）→ 用户决定不做（2026-10-11）**：当前 VPS 上无解 —— **A** 声纹匹配已证伪（`fanchen-C` 的 187 声线非原神角色，含真阳性对照）、
   **B** ZipVoice + 官方中配参考音频（音色 7/7 命中、RTF<1，但 `num_steps=3` 的 few-step 毛刺不接受）、**C/D** 需租 GPU（换机器）。
   任务条目已从 [`bugfix/TASKS.md`](./bugfix/TASKS.md) 移除，决定固化在 [`decisions.md`](./decisions.md) D14；调研全文留在 [`research/TTS-VOICE-SOURCES.md`](./research/TTS-VOICE-SOURCES.md)（纯参考、不再跟进）。
+- **T-READ-4 引擎不支持 Legado `text.` 前缀 → 目录/正文只取第一页（2026-10-11 已修，纯主机侧验证）**：DSL 只认 `class.` / `id.` / `tag.`，`text.下一页@href` 被当 CSS 选择器 →
+  **0 结果且无诊断** → 翻页循环第一页后 break；内置源 **9 条规则 / 8 个源**命中（《剑来》目录 **50 条 vs 实际 1308 章**，真机书架的 `3章/50章` 即此）。
+  修法：新增 `RuleToken::TextContains` + `html_extractor::apply_text_filter`（自身文本包含关键字、大小写不敏感）；`make test` **56 → 58 项全过**、`probe search 剑来` 零回归、`make rust` 成功。
+  **设备侧复跑待设备上线**；同批定性的「《大唐》目录加载失败」在主机侧无法复现（`probe toc` 正常 1449 条）⇒ 非引擎缺陷。
+  证据 → [`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §17、[`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-READ-4、[`PITFALLS.md`](./PITFALLS.md)。
 - **书架编辑模式（多选删除）**：已实施并真机验证（2026-10-07，D1–D21）—— 见上文同名节；
   计划 / 逐步代码 / DoD 逐条证据见 [`archive/SHELF-EDIT-PLAN.md`](./archive/SHELF-EDIT-PLAN.md)（§7 / §8 / §10 / §12.3），
   五轮审计轨迹原文见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §附。

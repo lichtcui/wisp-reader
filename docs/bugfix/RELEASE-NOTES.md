@@ -617,3 +617,60 @@ TTS 侧 `model/BookContent.ets::loadChapterParagraphs` 有同型「未命中即�
   `TTS_REMOTE_SPEED_MAX = 1.2`（有效 0.9），远端下 1.5x/2.0x 菜单项/档位置灰，`effectiveSpeed()` 下发前夹取。
 - ⚠️ **回退不落盘（已决）**：`fallbackToSystem()` 不再写 `tts_engine` pref，只在本次会话回退系统 TTS，
   下次听书自动重试远端（Toast 已改为「本次已切换回系统 TTS」）。
+
+## 17. 增量（2026-10-11）：Legado `text.` 前缀未实现（目录 / 正文只取第一页）
+
+范围：`rust/legado-engine/src/rule_dsl/parser.rs`（新增 `RuleToken::TextContains`）、
+`rust/legado-engine/src/rule_dsl/html_extractor.rs`（新增 `apply_text_filter`）。
+验证环境：**纯主机侧**（`make test` / `make probe`），本轮设备离线（`hdc list targets` = `[Empty]`），未上真机。
+
+### 17.1 症状与影响面
+
+规则 DSL 只认 `class.` / `id.` / `tag.`，`text.关键字@href` 这类 Legado 文本选择器落入裸 CSS 兜底 →
+选择器 `text.下一页` 永远匹配不到元素 → **0 结果且无诊断**（`diagnose` 只校验 CSS 语法，`text` 恰好是合法标签名）
+→ `runtime.rs` 的 `nextTocUrl` / `nextContentUrl` 翻页循环在第一页后 `break`。翻页循环本身（`MAX_TOC_PAGES=50`、
+`seen` 去重、`resolve_url` 后自引用比较）**逻辑没错**，缺的就是这一步提取。
+
+内置 13 源里 **9 条规则 / 8 个源**命中：
+
+| 字段 | 源 |
+|---|---|
+| `ruleToc.nextTocUrl = text.下一页@href` | 爱下书 · bbiquge8 · 笔趣阁8 |
+| `ruleContent.nextContentUrl = text.下一页@href` / `text.下一章@href` | 小说 · 🔖天堂向左 深圳往右 · 爱下书 · bbiquge8 · 笔趣阁8 |
+| `ruleBookInfo.tocUrl = text.目录@href` | 💯 连尚读书 |
+
+语义依据（Legado 官方规则说明）：「第一段是类型，如 `class,id,tag,text`…`text` 可以根据文本内容获取」，
+即 `text.关键字` = 选取**自身文本包含关键字**的元素（对应 jsoup `:containsOwn`）—— 是真源常用写法，不是坏规则。
+
+### 17.2 修复前后对照（《剑来》@ bbiquge8，`info` 报最新章节「第83章 今日无事」）
+
+| 场景 | 修复前 | 修复后 |
+|---|---|---|
+| `probe toc http://m.bbiquge8.net/dir/814/ --index 8` | **50 条**（末条「第一卷 笼中雀 第五十章 天行健」） | **1308 条**，末条 = 最新章「第83章 今日无事」 |
+| 同上 @ 笔趣阁8（另一源、同写法） | 50 条 | 1308 条 |
+| `probe toc http://m.aixiawx.com/63/63398/ --index 5`（爱下书） | 20 条 | **58 条** |
+| **对照**：爱下书 `nextTocUrl` 置空后跑（修复后） | — | 20 条 ⇒ 差异只来自该规则（唯一变量） |
+| `probe content` bbiquge8 首章（`(第1/3页)`） | 只第 1 页 | 拼到 **第 3/3 页**，结尾出现 `ps3:好久不见，剑来！` |
+| `probe parse text/html 'text.下一页@href'`（剑来目录页） | 0 个结果 + **无诊断** | 命中分页 `<a>` |
+
+站点侧复核：`curl '…/dir/814/?page=4&sort=asc'` 已到「第200章」⇒ 该源目录确实多页，App 侧 50 条是缺章。
+附带解释：真机书架《剑来》此前的 **`3章/50章`**（T-SHELF-3 三态取证记下的）就是本 bug 的表现，目录修好后总章数为 1308。
+
+### 17.3 修法与验证
+
+`parser.rs` 新增 `RuleToken::TextContains`，**必须在裸 CSS 兜底之前**判断（否则仍会静默退化成 CSS 选择器）；
+`html_extractor.rs` 新增 `apply_text_filter`：按**直接文本子节点**匹配、ASCII 大小写不敏感、按文档序返回外层 HTML、
+**排除 fragment 包装节点 `<html>`**（否则关键字命中包装节点时会把整页当结果返回）。
+`json_extractor` / `diagnose` 的兜底分支不动 ⇒ JSON 路径与诊断行为零变化。
+
+- `make test`：**56 → 58 项全通过**（新增 parser / html_extractor 用例：关键字只在子孙里不命中、命中多个可用 `.n` 取第 n 个、未命中返回空而非整页兜底）。
+- `make probe ARGS='… search 剑来'`：**588 条 / 成功 11-13，与修复前逐源一致**（纯增补，零回归）。
+- `make rust`：交叉编译 `.so` 成功（设备可用，签名面 / NAPI 签名均未变）。
+
+### 17.4 未覆盖 / 附注
+
+- **设备侧复跑待设备上线**：`make run` 后打开《剑来》应看到目录 >1000 章、正文一次拉全 3 页；release 包未复跑（纯 Rust 改动，不涉混淆面）。
+- 💯 连尚读书的 `ruleBookInfo.tocUrl = text.目录@href` 在**现行站点**上本就无命中（目录页 HTML 里「目录」二字出现 **0 次**）
+  ⇒ 属源规则过期，与本次前缀修复无关（该源目录仍回退 `bookUrl`）。
+- 本轮同批「不接设备」任务的另两项结论：多页目录问题=本 bug；《大唐》目录加载失败在主机侧 **无法复现**
+  （`probe toc` 正常返回 1449 条 / 30 KB / 0.7 s）⇒ 非引擎缺陷，最终定性需设备日志（见 TASKS.md §T-READ-3）。

@@ -53,6 +53,9 @@ fn extract_segment(html: &str, tokens: &[RuleToken]) -> Vec<String> {
             RuleToken::TagShort(tag) => {
                 current_html = apply_selector_all(&current_html, tag);
             }
+            RuleToken::TextContains(keyword) => {
+                current_html = apply_text_filter(&current_html, keyword);
+            }
 
             // ── Index ──
             RuleToken::Index(n) => {
@@ -177,6 +180,40 @@ fn extract_segment(html: &str, tokens: &[RuleToken]) -> Vec<String> {
 /// elements. This preserves the element context (including all attributes,
 /// which `element.html()` serializes) for subsequent locator and extractor
 /// steps.
+/**
+ * Legado `text.关键字` 定位器：保留**自身文本**（直接文本子节点，不含子孙）
+ * 包含关键字的元素。大小写不敏感与 jsoup `:containsOwn` 对齐。
+ *
+ * 典型用法 `text.下一页@href`（分页目录 / 分页正文的“下一页”链接）。
+ * 注意：必须排除 fragment 的包装节点 `<html>`，否则关键字命中包装节点时
+ * 会返回整页 HTML。
+ */
+fn apply_text_filter(snippets: &[String], keyword: &str) -> Vec<String> {
+    let needle = keyword.to_lowercase();
+    let mut results = Vec::new();
+    let all = Selector::parse("*").unwrap();
+
+    for snippet in snippets {
+        let doc = Html::parse_fragment(snippet);
+        for element in doc.root_element().select(&all) {
+            if element.value().name() == "html" {
+                continue;
+            }
+            let own: String = element
+                .children()
+                .filter_map(|child| match child.value() {
+                    scraper::node::Node::Text(t) => Some(t.text.as_ref()),
+                    _ => None,
+                })
+                .collect();
+            if own.to_lowercase().contains(&needle) {
+                results.push(element.html());
+            }
+        }
+    }
+    results
+}
+
 fn apply_selector_all(snippets: &[String], selector_str: &str) -> Vec<String> {
     let mut results = Vec::new();
     let selector = match Selector::parse(selector_str) {
@@ -257,6 +294,38 @@ mod tests {
         assert_eq!(results, vec!["/b/1", "/b/2"]);
         let results = extract(html, &tokenize("a@text"));
         assert_eq!(results, vec!["一", "二"]);
+    }
+
+    #[test]
+    fn test_text_contains_locator() {
+        // 真实场景：目录页分页链接（bbiquge8 / 爱下书 / 笔趣阁8 的 nextTocUrl）
+        let html = r#"<div class="pager">
+            <a class="ptm-btn" href="/dir/814/?page=1&sort=desc">上一页</a>
+            <a class="ptm-btn" href="/dir/814/?page=2&sort=asc">下一页</a>
+        </div>"#;
+        let results = extract(html, &tokenize("text.下一页@href"));
+        assert_eq!(results, vec!["/dir/814/?page=2&sort=asc"]);
+
+        // 自身文本 vs 子孙文本：关键字只在子孙里时不应命中
+        let nested = r#"<div><span>下一页</span><a href="/wrong">别的</a></div>"#;
+        assert_eq!(extract(nested, &tokenize("text.下一页@href")), Vec::<String>::new());
+
+        // 命中多个时按文档顺序返回全部（后续 Index 可再筛）
+        let many = r#"<a href="/1">下一章</a><a href="/2">下一章</a>"#;
+        assert_eq!(
+            extract(many, &tokenize("text.下一章@href")),
+            vec!["/1", "/2"]
+        );
+        assert_eq!(
+            extract(many, &tokenize("text.下一章.1@href")),
+            vec!["/2"]
+        );
+
+        // 关键字未命中：返回空（而不是整页兜底）
+        assert_eq!(
+            extract(html, &tokenize("text.不存在的按钮@href")),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

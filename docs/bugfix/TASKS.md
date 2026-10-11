@@ -1,3 +1,12 @@
+> **2026-10-11 第十九次同步**：⑱ 新登记并**当日修复** **T-READ-4（P1）Legado `text.` 前缀未实现** —— 按「不接设备的主机侧任务」复验多页目录时查出**真 bug**：
+> 引擎规则 DSL 只认 `class.` / `id.` / `tag.`，`text.下一页@href` 被当成 CSS 选择器 → **0 结果且无诊断** → 目录/正文翻页循环在第一页后 `break`。
+> 影响 **9 条规则 / 8 个内置源**（`ruleToc.nextTocUrl` × 3、`ruleContent.nextContentUrl` × 5、`ruleBookInfo.tocUrl` × 1）。决定性证据（《剑来》@ bbiquge8，`info` 报最新章节「第83章 今日无事」）：
+> 修复前 `toc` = **50 条**（末条「第50章 天行健」），站点侧实为 **1308 章**；修复后 = **1308 条**（末条即最新章）。对照实验（唯一变量）：爱下书 `nextTocUrl` 置空 → **20 条**，规则原样 → **58 条**；bbiquge8 首章正文「(第1/3页)」现拼到**第 3/3 页**结尾。
+> 修法（纯 Rust）：`rule_dsl/parser.rs` 加 `RuleToken::TextContains`（必须在裸 CSS 兜底**之前**判断）+ `rule_dsl/html_extractor.rs` 加 `apply_text_filter`（自身文本包含关键字、大小写不敏感、排除 fragment 包装 `<html>`）。
+> 验证（纯主机侧，未上设备）：`make test` **56 → 58 项全过**、`probe search 剑来` 逐源零回归（588 条 / 11-13 与修复前一致）、`make rust` 交叉编译成功；**设备侧复跑待设备上线**（本轮 `hdc list targets` = `[Empty]`）。
+> 顺带定性第十六次同步里 T-READ-3 记的「《大唐》目录加载失败」：主机侧 `probe toc` **正常返回 1449 条**（页面 30 KB / 0.7 s）⇒ 无法复现，非引擎缺陷（详见 T-READ-3 条目）。
+> 证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §17。
+>
 > **2026-10-11 第十八次同步**：⑰ **T-TTS-6 条目已按用户决定移除** —— 结论：**在当前 VPS（4C Xeon / 无 GPU）上无解，后续不做**。
 > 三条路线逐条撞墙：**A 声纹匹配**（证伪：`fanchen-C` 的 187 声线不是原神角色，真阳性对照已排除假阴性）、
 > **B ZipVoice + 官方中配参考音频**（音色 7/7 命中、RTF<1，但 `num_steps=3` 的 few-step 毛刺属**听感**风险，用户不采用）、
@@ -203,10 +212,31 @@
     ② **修复前对照**（临时注释 `this.inflight.set(key, task)`，同手势、同一本书）：key `#39` = `miss`×2 + **`engine`×2**、key `#45` = `miss`×2 + **`engine`×2**，全程 **`join` 0 次** ⇒ 对照确凿（修复前同一章确实请求两次、写盘两次）。
     ③ 还原（`git checkout` + `rg TEMP` 无残留）后重装复跑：应用内「清理全部缓存」（四类缓存归零）→ 打开《剑来》：**第五十章正文由引擎重新拉取并渲染**（缓存为空，证明取正文链路完好）、点「上一章」→ **第四十九章正文正常**；
     全程 **0 JSCRASH/CPPCRASH、0 条应用级 error**（仅框架噪音 `AceStateMgmt: No views to update`）。
-  - 顺带观察（与本次改动无关，未定性）：同一台设备上《大唐：李世民求我造反》打开时目录显示「目录加载失败」——TOC 拉取失败，该路径（`loadToc`/`engine.toc`）**不经过** `fetchContent`；如需排查另立任务。
+  - 顺带观察（与本次改动无关）：同一台设备上《大唐：李世民求我造反》打开时目录显示「目录加载失败」——TOC 拉取失败，该路径（`loadToc`/`engine.toc`）**不经过** `fetchContent`。
+    **2026-10-11 主机侧定性（未上设备）**：该书源（`小说` / yetianlian.info）目录在 `probe toc` 下**正常返回 1449 条**（页面 30 KB / 0.7 s；设备上该书进度 `153章/1441章` 与本源同源，只是站点又更了 8 章）⇒ **无法复现**「目录加载失败」，**非引擎缺陷**；剩余可能=当时瞬时网络失败/超时，最终定性需设备侧日志。
+    主机侧直接不可用的内置源只有 `🎉 蚂蚁阅读`（`network_error`，站点不可达）与 `掌阅小说💯`（`no_results`）；若该书是从这两源加入的，目录必然失败（无设备日志无法排除此分支）。
   - 未覆盖：release 包（不涉混淆面）；TTS 侧 `BookContent.loadChapterParagraphs` 有同型「未命中即打引擎」写法，
     但与阅读页是两条独立调用链、无共享单飞表，本次**不合并**（要合并需引入共享模块，另立任务）。
   - 证据：`pages/Reader.ets`（`inflight` 字段 / `fetchContent` / `fetchRemote`、`prefetch` 已删）、[`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §15
+
+- [x] **T-READ-4（P1）Legado `text.` 前缀未实现 → 目录/正文只取第一页（缺章）**：引擎规则 DSL 只认 `class.` / `id.` / `tag.`，`text.下一页@href` 落到无效 CSS 选择器 → **0 结果 + 无诊断**（静默失败）→ 翻页循环第一页后 `break`。
+  - 发现（2026-10-11 · 纯主机侧 `make probe`，未上设备）：内置 13 源里 **9 条规则 / 8 个源**用了 `text.` 前缀 ——
+    `ruleToc.nextTocUrl`：爱下书 / bbiquge8 / 笔趣阁8；`ruleContent.nextContentUrl`：小说 / 🔖天堂向左 深圳往右 / 爱下书 / bbiquge8 / 笔趣阁8；`ruleBookInfo.tocUrl`：💯 连尚读书。
+  - 决定性证据（《剑来》@ bbiquge8，`info` 报最新章节「第83章 今日无事」）：
+    ① 修复前 `toc` = **50 条**（末条「第一卷 笼中雀 第五十章 天行健」），`probe parse text/html 'text.下一页@href'` = **0 个结果 + 无诊断**；
+    ② 站点侧目录实为 **≥4 页**（`curl '?page=4'` 已到「第200章」）→ 整本 **1308 章**；
+    ③ 修复后同一条命令 = **1308 条**，末条正是「第83章 今日无事」⇒ 翻页一直走到最后一页（`runtime.rs` 的 `MAX_TOC_PAGES=50` / `seen` 去重逻辑本身没错）。
+  - 对照实验（证明唯一变量是该前缀）：把爱下书 `ruleToc.nextTocUrl` 置空 → `toc` = **20 条**；规则原样 → **58 条**。正文同理：bbiquge8 首章「(第1/3页)」修复后拼到**第 3/3 页**结尾（`ps3:好久不见，剑来！`）⇒ `nextContentUrl` 生效（修复前只返回第 1 页）。
+  - 语义依据（Legado 官方规则说明）：「第一段是类型，如 `class,id,tag,text`…`text` 可以根据文本内容获取」⇒ `text.关键字` = 选取**自身文本包含关键字**的元素（对应 jsoup `:containsOwn`），是真实书源里的常用写法，**不是**坏规则。
+  - 修法（Rust，`rust/legado-engine/src/rule_dsl/`）：`parser.rs` 新增 `RuleToken::TextContains` 并**在裸 CSS 兜底之前**判断（否则 `text.下一页` 仍会静默退化成 CSS 选择器）；
+    `html_extractor.rs` 新增 `apply_text_filter`（按**直接文本子节点**匹配、ASCII 大小写不敏感、按文档序返回外层 HTML、**排除 fragment 包装节点 `<html>`**，否则关键字命中包装节点会返回整页）。
+    JSON 与诊断路径不动：`json_extractor` / `diagnose` 的兜底分支都不会误报。
+  - 验证（2026-10-11 · 主机侧，无设备）：`make test` **56 → 58 项全通过**（新增 parser + html_extractor 用例，含「关键字只在子孙里不命中」「命中多个可用 `.n` 取第 n 个」「未命中返回空而不是整页兜底」）；
+    `probe search 剑来` 回归 **588 条 / 成功 11-13 与修复前逐源一致**（纯增补，零回归）；`make rust` 交叉编译 `.so` 成功（设备侧可直接用）。
+  - 附带影响：真机书架《剑来》显示的 **`3章/50章`**（T-SHELF-3 三态取证时记下的）就是本源目录只取到第一页所致 —— 目录修好后总章数变为 **1308**。
+  - 未覆盖：**设备侧复跑**（`make run` 后打开《剑来》：目录应 >1000 章、正文应一次拉全 3 页）——本轮设备离线（`hdc list targets` = `[Empty]`）；release 包未复跑（纯 Rust 改动，不涉混淆面）。
+  - 未修（另一件事，已定性）：💯 连尚读书 `ruleBookInfo.tocUrl = text.目录@href` 在**现行站点**上本就无命中（目录页 HTML 里「目录」二字出现 **0 次**）⇒ 属源规则过期，与本次前缀修复无关（该源目录仍回退 `bookUrl`，可另立源规则更新任务）。
+  - 证据：`rust/legado-engine/src/rule_dsl/parser.rs`、`rust/legado-engine/src/rule_dsl/html_extractor.rs`、[`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §17
 
 ## 听书（Listening / TTS）
 
@@ -284,6 +314,11 @@
   - 验证：导入两条同 URL 不同名的书源 → 列表显示两行、各自可启停/删除。**2026-10-07 release 真机复验通过**：同 URL 两条（`bbiquge8` / `笔趣阁8`）分别渲染，列表头计数与备份 JSON 逐条对账一致（[`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §9）（原先记「待补」是设备离线时快照，已更正）。
   - 残留语义（非缺陷）：一键「关闭/删除全部不可用」仍按 `bookSourceUrl` 聚合，同 URL 的两条会一起处理。
   - 证据：`pages/BookSourceManage.ets:65-70,175-198,343-386`、`model/SourceRepository.ets:39-47`
+- [ ] **T-SRC-3（P2）规则调试器：未支持的前缀 / 后缀没有任何诊断（静默失败）**：`diagnose` 只校验 CSS 语法 / 正则编译 / JS 规则，对**未实现的 Legado 前缀与尾缀**（`children.`、`ownText`、`all`、任意未知 `xxx.`）以及「整条规则 0 结果」不发任何提示 —— T-READ-4（`text.` 前缀静态下降 = 8/13 源目录缺章）就藏在这里。
+  - 本轮（2026-10-11）`probe parse` 实测矩阵（text/html，同一份 bbiquge8 目录页 HTML）：`class.ptm-list-view-cell@tag.a@text` = 50 结果/无诊断（正常）；`@css:div.nope@text` = 0 结果/无诊断（合法选择器未命中，**不应报错**）；`class.not-exist-xyz@text` = 0 结果/无诊断（同上）；`css.#no-such-id@text` = **有**诊断 `CSS 选择器解析失败`（因为合法写法是 `@css:`，`css.` 是未知前缀，恰好因 CSS 解析失败才被抓到）；修复前的 `text.下一页@href` = **0 结果 + 无诊断**（静默）。
+  - 建议修法（未做）：`diagnose` 先对第一段前缀做白名单校验（`class.` / `id.` / `tag.` / `text.` / `@css:` / `$.` / `data.` / `<js>`），命中未知前缀发 `kind: "rule"` 告警；`@` 尾缀同理（`text` / `textNodes` / `href` / `src` / `html` / `@css:` / `js:` / `JSon:` / `tag.` / 裸标签）。**不**对「0 结果」告警（选择器合法但未命中是正常情况）。
+  - 数据面已核对（主机侧）：`pages/RuleDebugger.ets:46` 调 `bookEngine.parseWithDiagnostics` → Rust `parse_with_diagnostics` ⇒ 与 `make probe ARGS='… parse <ct> <rule>'` **同一条链路**；仅 UI 渲染未验（设备离线）。
+  - 证据：`rust/legado-engine/src/rule_dsl/mod.rs`（`diagnose`）、`pages/RuleDebugger.ets:46`
 - [x] **T-SRC-2 检测并发/超时**：确认 `detect`（并发 4）无源级串扰，`busy` 态防重入。
   - 证据：`pages/BookSourceManage.ets:200-222`
 

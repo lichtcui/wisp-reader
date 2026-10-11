@@ -66,6 +66,10 @@ rust/
 - **`@js:` L1 丢 keyword**（原实现只取路径不拼关键词）已在 `resolve_js_l1` 修复。
 - **诊断**：`diagnose` 收集 regex 编译失败（Java lookaround）、CSS 解析失败、JS 规则，随 `parseWithDiagnostics` 返回。
 - **安全红线**：`danger_accept_invalid_certs` 已移除；每源独立 `Client`（Cookie 隔离，上限 64 后整体回收）+ `concurrentRate` 限速。
+- **`text.关键字` 文本定位器**（2026-10-11 修）：DSL 曾只认 `class.` / `id.` / `tag.`，`text.下一页@href` 被当成 CSS 选择器 →
+  **0 结果且无诊断**（静默失败）→ 目录/正文翻页在第一页后停止（《剑来》目录 50 条 vs 实际 1308 章；8/13 内置源命中）。
+  现 `RuleToken::TextContains` + `html_extractor::apply_text_filter`：按 Legado 语义取「**自身文本**包含关键字」的元素（大小写不敏感），
+  `json_extractor` / `diagnose` 不受影响。详见 [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-READ-4。
 - **known_gaps（相对 Legado 官方语义）**：负索引、区间选取、`&&`、`children`、`ownText/all` 未支持。
 
 ## JSON 契约（跨 NAPI / 落盘的字段名）

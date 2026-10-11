@@ -1,7 +1,7 @@
 // ─── 文件索引（改本文件先看这里）─────────────────────────────────────
 //   入口：      tokenize / parse_rule → Vec<RuleToken>
 //   切分：      split_fallback（`||`）/ split_segments（`&&`）/ split_index（下标与区间）/ extract_index
-//   单段解析：  parse_locator（tag/class/id）/ parse_annotation（text/html/正则等）/ index_token /
+//   单段解析：  parse_locator（tag/class/id/text）/ parse_annotation（text/html/正则等）/ index_token /
 //                parse_regex_replace / tokenize_at_chain
 //   类型：      RuleToken / IndexSpec
 //   上层用法见同目录 mod.rs（extract_single）、html_extractor.rs、json_extractor.rs
@@ -21,6 +21,9 @@ pub enum RuleToken {
     CssId(String),
     /// `tag.name`
     TagName(String),
+    /// `text.关键字` — keep elements whose OWN text contains 关键字
+    /// (Legado 文本选择器；对应 jsoup `:containsOwn`)
+    TextContains(String),
     /// `@css:selector`
     CssOverride(String),
     /// `$.path` or `@JSon:path`
@@ -246,6 +249,11 @@ fn parse_locator(s: &str) -> RuleToken {
         RuleToken::CssId(rest.to_string())
     } else if let Some(rest) = s.strip_prefix("tag.") {
         RuleToken::TagName(rest.to_string())
+    } else if let Some(rest) = s.strip_prefix("text.") {
+        // Legado 文本选择器：按元素自身文本内容选取（如 `text.下一页@href`）。
+        // 必须在裸 CSS 兜底之前判断，否则会被当成 CSS 选择器 `text.下一页`
+        // 而静默返回空（曾导致 8/13 内置源目录只取到第一页）。
+        RuleToken::TextContains(rest.to_string())
     } else if s.starts_with("$.") || s.starts_with("$[") {
         RuleToken::JsonPath(s.to_string())
     } else if let Some(rest) = s.strip_prefix("data.") {
@@ -425,6 +433,22 @@ mod tests {
         // A CSS descendant selector stays a single tag token.
         let t = tokenize("h2 a@href");
         assert_eq!(t[0], RuleToken::TagName("h2 a".into()));
+    }
+
+    #[test]
+    fn test_text_contains_locator() {
+        // Legado 文本选择器：`text.关键字@href`
+        let t = tokenize("text.下一页@href");
+        assert_eq!(t[0], RuleToken::TextContains("下一页".into()));
+        assert_eq!(t[1], RuleToken::Href);
+
+        // 带下标（虽然罕用）仍要能解析出 Index
+        let t = tokenize("text.下一章.0@href");
+        assert_eq!(t[0], RuleToken::TextContains("下一章".into()));
+        assert_eq!(t[1], RuleToken::Index(0));
+
+        // 不能退化成 CSS 选择器 `text.下一页`（那是本 bug 的老行为）
+        assert!(!t.iter().any(|x| matches!(x, RuleToken::TagName(_))));
     }
 
     #[test]
