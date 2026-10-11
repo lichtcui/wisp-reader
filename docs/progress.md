@@ -15,7 +15,7 @@
 - M5 结果（2026-09-25，真机验证） — L37
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
 - 未决 / 风险 — L111
-- 交接备忘 — L174
+- 交接备忘 — L182
 <!-- TOC:END -->
 
 ---
@@ -139,6 +139,7 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 - **T-TTS-6（中文原神角色音色）→ 用户决定不做（2026-10-11）**：当前 VPS 上无解 —— **A** 声纹匹配已证伪（`fanchen-C` 的 187 声线非原神角色，含真阳性对照）、
   **B** ZipVoice + 官方中配参考音频（音色 7/7 命中、RTF<1，但 `num_steps=3` 的 few-step 毛刺不接受）、**C/D** 需租 GPU（换机器）。
   任务条目已从 [`bugfix/TASKS.md`](./bugfix/TASKS.md) 移除，决定固化在 [`decisions.md`](./decisions.md) D14；调研全文留在 [`research/TTS-VOICE-SOURCES.md`](./research/TTS-VOICE-SOURCES.md)（纯参考、不再跟进）。
+  **→ 2026-10-11 晚更新：D14 已部分重开**（离线批量预生成这个新前提下，ZipVoice `steps=12` 过了用户听感）→ [`research/TTS-PREGEN-PLAN.md`](./research/TTS-PREGEN-PLAN.md)、[`decisions.md`](./decisions.md) **D15**。
 - **T-READ-4 引擎不支持 Legado `text.` 前缀 → 目录/正文只取第一页（2026-10-11 已修，纯主机侧验证）**：DSL 只认 `class.` / `id.` / `tag.`，`text.下一页@href` 被当 CSS 选择器 →
   **0 结果且无诊断** → 翻页循环第一页后 break；内置源 **9 条规则 / 8 个源**命中（《剑来》目录 **50 条 vs 实际 1308 章**，真机书架的 `3章/50章` 即此）。
   修法：新增 `RuleToken::TextContains` + `html_extractor::apply_text_filter`（自身文本包含关键字、大小写不敏感）；`make test` **56 → 58 项全过**、`probe search 剑来` 零回归、`make rust` 成功。
@@ -149,6 +150,13 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   五轮审计轨迹原文见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §附。
 
 **未决**
+
+- **TTS 离线批量预生成（2026-10-11 评估完成，未立项、仓库零改动）**：用户提「VPS 空闲时批量预生成 50–100 章，听书优先读缓存音频」。
+  评估结论：**约束搬家** —— `RTF<1` 只属于实时流式，批量改用 `RTF ≤ 24 ÷ 每日收听小时数`（听 2 h/天 → ≤12）；因此
+  **ZipVoice `num_steps=12` 可用且已过用户听感**（实测 RTF **3.07–4.11**、100 章 55 h ≈ 2.3 天预热、峰值 RSS **1.0 GB**，与常驻 VITS 441 M 共存无压力），
+  即「批量让我们用得起更慢的好引擎」（GPT-SoVITS 由「唯一可行」降级为「保真更好但贵一个数量级」，**不再是必选项**）。
+  方案草图（内容寻址缓存 + job worker + 章级原子切换 + 让出 CPU + 批量 QC）与坑（ZipVoice 词典缺 `“ ” …`、流萤参考音频仅 3.38 s）→
+  [`research/TTS-PREGEN-PLAN.md`](./research/TTS-PREGEN-PLAN.md)、决策 [`decisions.md`](./decisions.md) **D15**（**D14 部分重开**，实时链路不变）；试听包 `~/Desktop/tts-zipvoice-batch/`。
 
 - （当前无阻塞性未决项；待做清单与状态以 [`bugfix/TASKS.md`](./bugfix/TASKS.md) 头部摘要为准。
   **T-TTS-5 的客户端四项已于 2026-10-11 落地**（`readTimeout` 120s / 5 音色改名 + 旧名归一 / 语速客户端下发 / `SPEED_SCALE` 起点 0.75），

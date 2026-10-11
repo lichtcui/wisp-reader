@@ -33,6 +33,7 @@ FILES=(
   docs/archive/SHELF-EDIT-PLAN.md
   docs/research/TTS-ENGINE-COMPARISON.md
   docs/research/TTS-VOICE-SOURCES.md
+  docs/research/TTS-PREGEN-PLAN.md
 )
 if [ "$#" -gt 0 ]; then
   FILES=("$@")

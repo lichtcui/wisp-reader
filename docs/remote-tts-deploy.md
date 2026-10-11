@@ -7,6 +7,9 @@ VPS：`ssh -p 40860 root@103.236.96.53`（Ubuntu 22.04 / 4C Xeon 8173M / 3925 MB
 > [`research/TTS-ENGINE-COMPARISON.md`](./research/TTS-ENGINE-COMPARISON.md)。**
 > 本文件只记录**现状部署与运维**。
 
+> **规划中的「离线批量预生成」（VPS 空闲时批量出整章音频 + 章节级缓存）**——判据、实测与方案草图见
+> [`research/TTS-PREGEN-PLAN.md`](./research/TTS-PREGEN-PLAN.md)（**尚未实现，线上行为不变**）。
+
 ## 0. App 侧接入（`feat/remote-tts` 分支）
 
 远端是**可选增强，默认关闭**：默认仍是系统 TTS，断网/失败自动回退系统 TTS。
