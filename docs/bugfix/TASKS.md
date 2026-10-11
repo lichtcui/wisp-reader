@@ -1,3 +1,11 @@
+> **2026-10-11 第十七次同步**：⑯ **T-TTS-5 客户端收尾四项已落地** —— ② `RemoteTtsClient.ets` `readTimeout` 60000→**120000**；
+> ③ `Const.ets` 的音色选项换成 5 个新名（默认 **钟离**，旧值 `流萤/花火/卡芙卡` 由 `normalizeRemoteVoice()` 读取时归一，用户无需重选）；
+> 语速由「服务端空转」改为**客户端真下发**（有效 = `clamp(client,0.5,2.0) × SPEED_SCALE`），④起点值取 **0.75**（≈5.2 字/秒，与客户端 `CHARS_PER_SECOND=5` 巧合对齐）。
+> ① 真机端到端**已跑通**（远端引擎连播 5 段、无回退；服务端日志 `speed=0.750/1.500` 与 UI 档位逐条对得上；旧 pref `流萤` 在界面显示为「远端音色 · 甘雨」），
+> **但 5 音色的真机切换与 ④ 终值仍待用户听感结论** —— 本轮验收中途设备掉线（`hdc list targets` 为空），5 音色真机切换未走完（服务端 5 音色已逐个 200 验证，样本在 `~/Desktop/tts-abtest-tts5/`）。
+> 顺带修掉一个**真机才暴露的服务端 500**：纯标点分段（`：“”` / `——`）sherpa 返回 `sample_rate=0` 的空音频 → `_resample_fft` 除零 → **每个对白段都 500** → App 中途回退系统 TTS。
+> 证据见条目内「验证」段与 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §16。
+>
 > **2026-10-11 第十六次同步**：⑮ **T-READ-3 真机复验通过（`[~]` → `[x]`）** —— 设备 `33Z0224424136564` 上以「`uitest uiInput doubleClick` 连点『下一章』」复现同一 `bookId#index` 的并发索要：
 > 修复后 key `5b4fad87#11` = **2 次 miss + 1 次 join + 仅 1 次 engine**；**修复前对照**（临时旁路 `inflight.set`）同手势下 key `#39` / `#45` = **2 次 miss + 2 次 engine**、`join` 0 次。
 > 插桩与对照改动已还原（`git checkout`，工作区干净、`rg TEMP` 无残留），还原后重装复跑：清空全部缓存 → 打开《剑来》第五十章正文由引擎重新拉取并渲染、点「上一章」→ 第四十九章正常，0 JS 错误 / 0 崩溃。
@@ -230,6 +238,26 @@
     试听包 `~/Desktop/tts-abtest7-换引擎/`（线上成品，5 音色 × 3 用例）。
   - **待办（设备上线后）**：① 真机端到端听感验收；② `RemoteTtsClient.ets` 的 `readTimeout: 60000 → ≥120000`；
     ③ `Const.ets` 的 `TTS_REMOTE_VOICE_OPTIONS` 由 `[流萤,花火,卡芙卡]` 换成 5 个新音色名；④ 用户确认后定 `SPEED_SCALE` 终值（当前 0.85 ≈ 325–368 字/分）。
+  - **进度（2026-10-11）**：
+    - ② **已改**：`RemoteTtsClient.ets` `readTimeout=120000`（`connectTimeout` 仍 5000）；实测最坏单请求 wall ≈46s，余量充足。
+    - ③ **已改**：`TTS_REMOTE_VOICE_OPTIONS=['刻晴','甘雨','胡桃','钟离','雷电将军']`、`TTS_REMOTE_VOICE_DEFAULT='钟离'`（用户选定）；
+      新增 `REMOTE_VOICE_RENAMES` + `normalizeRemoteVoice()`：老设备上的 `流萤/花火/卡芙卡` 在 `loadPrefs` / 设置页读取时归一（**不写回 pref**，避免多余写盘）。
+      ⚠️ 音色名只是**标签**（见上文 sid 空洞号更正），用户是按 F0 选默认值的，不是按角色名。
+    - 语速（④的前提）**改为客户端下发**：`remoteSynthesize(..., speed)` → 服务端 `speed = clamp(client,0.5,2.0) × SPEED_SCALE`。
+      客户端 `setSpeed()` 新增远端分支：起播中改档 → `clearInflight()` + `ensureSynthesized()` 让新档位立刻生效（远端没有 `engine`，旧分支原本空转）。
+    - ④ **起点值 0.75**（已部署到 VPS 并写入 `server/tts.service` 默认值）：实测有效语速下 **5.2 字/秒**，与客户端 `CHARS_PER_SECOND=5` 的时长估算碰巧吻合。
+      **终值待用户听感**（试听包 `~/Desktop/tts-abtest-tts5/`：同一段文字在 App 1.0x 档位下分别对应 SPEED_SCALE 0.75 / 0.85 / 1.00 三个 wav）。
+    - ⚠️ **新发现（未处理，需决策）**：本机（4C）每字合成成本 ≈0.13–0.16s，而有效语速 1.5 时播放仅需 0.136 s/字 → **RTF≈1.2**，
+      即 **App 1.5x / 2.0x 档会断续**（1.0x / 1.2x 稳）。已写入 [`../remote-tts-deploy.md`](../remote-tts-deploy.md) §0，是否给远端单独限制档位由用户决定。
+    - ⚠️ **新发现（未处理，需决策）**：`fallbackToSystem()` 会把 `tts_engine=系统` **写进 preferences** ⇒ 一次瞬时失败（超时/500）就把用户选的「远端」永久改回系统 TTS。
+      当前保留旧行为；改法很小（只翻内存态、不落盘，下次听书自动重试远端），但属产品行为，等用户拍。
+  - **验证（2026-10-11 真机 `33Z0224424136564` · debug HAP · `make run`）**：
+    - 修复前复现：App 2.0x 播《剑来》第四章时服务端 `ZeroDivisionError`（curl 直连复现：`：`/`“`/`”`/`——` 全部 500、`…` 正常）→ App 日志 `remote synth failed para=3` → `falling back to system TTS` → 重建 16k 系统引擎 → 之后一直 `remoteVoice` 失效。
+    - 修复后：`_synth_vits` 跳过 `sample_rate<=0` 的分段（日志 `drop unspeakable segment`），整段无字时回 320ms 静音（HTTP 200）；`_resample_fft` 对 `sr_in<=0` 加硬护栏。
+    - 修复后端到端复跑（同一章）：`start para=7` → `play 8/9/10/11` 连续推进 67s，**0 次回退**、0 error；服务端 `speed=1.500`（App 2.0x）与 `speed=0.750`（App 1.0x 改档后立刻生效）都对得上 ⇒ **语速下发 + 改档即时生效 + 标点修复**三项同时成立。
+    - 音色改名与归一：设备 pref 里残留 `tts_remote_voice=流萤` → 界面显示「远端音色 · 甘雨」，播放请求 `voice=甘雨`（服务端日志确认）。
+    - 服务端 5 音色逐个 `POST /tts` 均 200 / 24kHz mono 16bit（样本 378–449 KB）；`/health` 返回 `speed_scale=0.75` + 5 个新名。
+    - **未覆盖**：真机上 5 音色的**逐个切换**（走到一半设备掉线，`uitest` 命令只回 `need connect-key`）；听感结论本身需要用户耳朵。
 
 - [~] **T-TTS-6（P1）远端 TTS 音色：中文原神角色音色到底拿不拿得到** —— **路线 A 已跑完并证伪；路线 B 已实测可行，卡在听感决策**。
   - **答「有没有」：有，而且很多** —— ModelScope `aihobbyist/GPT-SoVITS_Model_Collection`：

@@ -48,7 +48,7 @@ Env knobs:
   VITS_DIR            model dir (default /root/tts/genshin-vits)
   VITS_DICT_DIR       jieba dict dir for word segmentation
   RULE_FST_DIR        dir holding date.fst / number.fst / phone.fst
-  SPEED_SCALE         server-side multiplier on the client's speed (default 0.85)
+  SPEED_SCALE         base rate: the client's speed is multiplied by this (default 0.75)
   SENTENCE_PAUSE_MS   silence inserted between sentences (default 320; 0 = off)
   EQ_BANDS            "fc:gain_db:q,..."; empty disables EQ
   TARGET_RMS_DBFS     loudness target (default -18 dBFS RMS)
@@ -97,11 +97,11 @@ VITS_VOICES = {
     "雷电将军": 125,  # 208 Hz
     "钟离": 104,      # 122 Hz
 }
-# The app still ships TTS_REMOTE_VOICE_OPTIONS=[流萤, 花火, 卡芙卡]; accepting them here
-# keeps the client working until that list is updated.
+# Kept for rollout skew: pre-2026-10-11 builds ship TTS_REMOTE_VOICE_OPTIONS=[流萤, 花火,
+# 卡芙卡] and devices keep the old value in preferences until the user re-picks a voice.
 VITS_VOICE_ALIASES = {"流萤": "甘雨", "花火": "胡桃", "卡芙卡": "雷电将军"}
 
-SPEED_SCALE = float(os.environ.get("SPEED_SCALE", "0.85"))
+SPEED_SCALE = float(os.environ.get("SPEED_SCALE", "0.75"))
 SENTENCE_PAUSE_MS = float(os.environ.get("SENTENCE_PAUSE_MS", "320"))
 
 # --- ZipVoice engine (rollback path) ---------------------------------------------
@@ -138,6 +138,10 @@ _lock = threading.Lock()  # OfflineTts.generate() is not thread-safe; serialize
 def _resample_fft(x, sr_in, sr_out):
     """Band-limited (FFT) resampler. Verified tone-transparent: 1000 Hz in -> 1000 Hz
     out. Done once per response (22050 -> 24000), never per reference clip."""
+    if sr_in <= 0 or len(x) == 0:
+        # sherpa returns sample_rate=0 for a segment it could not speak at all (see
+        # _synth_vits); resampling that divides by zero.
+        return np.zeros(0, dtype=np.float32), sr_out
     if sr_in == sr_out:
         return x, sr_out
     n_out = int(round(len(x) * sr_out / sr_in))
@@ -425,16 +429,32 @@ def _synth_vits(text, voice, speed):
     parts = _split_sentences(text)
     pause = np.zeros(max(0, int(OUT_SR * SENTENCE_PAUSE_MS / 1000.0)), dtype=np.float32)
     chunks = []
-    for i, seg in enumerate(parts):
+    spoken = 0
+    for seg in parts:
         audio = _tts.generate(seg, sid=sid, speed=speed)
         seg_x = np.asarray(audio.samples, dtype=np.float32)
         src_sr = audio.sample_rate
+        if src_sr <= 0 or seg_x.size == 0:
+            # A segment can be pure punctuation the model cannot speak (measured:
+            # `：“”` and `——` all come back empty with sample_rate=0; sherpa only warns
+            # "Ignore OOV" per character and reports nothing else). Drop it instead of
+            # dividing by zero -- which returned HTTP 500 and made the app fall back to
+            # the system engine mid-playback. Logged per drop on purpose: it lands in
+            # journalctl right next to the OOV lines that explain it.
+            log.info("drop unspeakable segment len=%d %r", len(seg), seg[:12])
+            continue
         seg_x = seg_x - seg_x.mean()
         seg_x, src_sr = _resample_fft(seg_x, src_sr, OUT_SR)
-        if i:
+        if spoken:
             chunks.append(pause)
         chunks.append(seg_x)
-    return np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32), OUT_SR, len(parts)
+        spoken += 1
+    if not chunks:
+        # Whole paragraph un-speakable: answer with the pause so the client still gets a
+        # valid WAV and just moves on to the next paragraph.
+        filler = pause.copy() if pause.size else np.zeros(240, dtype=np.float32)
+        return filler, OUT_SR, 0
+    return np.concatenate(chunks), OUT_SR, spoken
 
 
 def _synth_zipvoice(text, voice, speed):
@@ -461,8 +481,8 @@ def synthesize(req: TtsRequest, request: Request):
     if not text:
         raise HTTPException(status_code=400, detail="empty text")
 
-    # The client hardcodes speed=1.0 for the remote engine; SPEED_SCALE is the server-side
-    # default rate, and a future client-side speed setting multiplies on top of it.
+    # The client sends its own speed setting (0.5-2.0); SPEED_SCALE is the base rate for the
+    # "1.0" slot, so the effective rate stays tunable server-side without an app release.
     speed = min(2.0, max(0.5, req.speed)) * SPEED_SCALE
 
     t0 = time.time()

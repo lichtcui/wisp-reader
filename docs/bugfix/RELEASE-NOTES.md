@@ -568,3 +568,52 @@ T-READ-2 的内存 LRU 只压低「撞车概率」，**挡不住并发**：`warm
 **未覆盖**：release 包（改动纯 ArkTS 内存层，不触 JSON 契约与混淆面；真机 debug 已于 2026-10-11 跑过）。
 TTS 侧 `model/BookContent.ets::loadChapterParagraphs` 有同型「未命中即打引擎」写法，但它与阅读页是两条独立调用链、
 没有共享单飞表 ⇒ **本次不合并**（合并需引入共享模块，另立任务）。
+
+---
+
+## 16. 增量（2026-10-11）：T-TTS-5 客户端收尾 + 服务端「纯标点分段」500 修复
+
+范围：`RemoteTtsClient.ets`（超时/语速）、`common/Const.ets`（音色列表 + 归一）、`model/TtsController.ets`（语速下发 + 远端改档）、
+`pages/ListeningSettings.ets`（读 pref 归一）、`server/app.py` + `server/tts.service`（`SPEED_SCALE` / 除零护栏）。
+真机：设备 `33Z0224424136564`，debug HAP，`make run`；服务端：`systemctl restart tts` 后 `/health` 复核。
+
+### 16.1 服务端 500：纯标点分段除零（真机才暴露）
+
+真机把 App 语速拉到 2.0x 后，播《剑来》第四章出现 `remote synth failed para=3` → App 弹「远端合成失败，已切换回系统 TTS」→
+重建 16 kHz 系统引擎并从头播。直连复现（`POST /tts` 固定文本）：
+
+| 文本 | 修复前 | 修复后 |
+|---|---|---|
+| `：` / `“` / `”` / `——“` | **500**（`ZeroDivisionError` in `_resample_fft`） | 200（320 ms 静音） |
+| `…` | 200 | 200 |
+| `他说：“你来了。”` | **500**（分出的 `”` 段为空） | 200，日志 `drop unspeakable segment len=1 '”'` |
+
+根因：sherpa 对「一个可发音字都没有」的段返回 `sample_rate=0` 的空音频（只打 `Ignore OOV` 警告），
+旧代码直接 `_resample_fft` → `x * sr_in / sr_out` 除零。**影响面比看到的大**：`他说：“你来了。”` 会多切出一个 `”` 段，
+即**每个对白段落都会 500** ⇒ 这是「远端听书一播到对话就变系统音色」的直接原因。
+修法：`_synth_vits` 跳过 `sr_in<=0 / 空样本` 分段（句间停顿跟着已发音段走），整段无字时回 320 ms 静音（不中断播放）；
+`_resample_fft` 加 `sr_in<=0` 硬护栏。
+
+### 16.2 客户端四项
+
+| 项 | 改动 | 证据 |
+|---|---|---|
+| ② 超时 | `readTimeout` 60000 → **120000** | 实测最坏单请求 wall ≈46 s（279 字 / 5 句 / effective 1.5） |
+| ③ 音色 | 选项 = `[刻晴,甘雨,胡桃,钟离,雷电将军]`，默认 **钟离**；新增 `normalizeRemoteVoice()` 归一 `流萤→甘雨 / 花火→胡桃 / 卡芙卡→雷电将军` | 设备 pref 残留 `流萤` → 界面显示「远端音色 · 甘雨」，服务端请求 `voice=甘雨` |
+| 语速 | 客户端**真下发**（原先硬编码 1.0）；服务端有效 = `clamp(client,0.5,2.0) × SPEED_SCALE`；`setSpeed()` 新增远端分支（远端无 `engine`，旧分支原本空转）→ 改档即时生效 | App 2.0x → `speed=1.500`；改回 1.0x → 下一条即 `speed=0.750` |
+| ④ 语速基准 | `SPEED_SCALE` 0.85 → **0.75**（起点值，待用户听感定稿） | `/health` `speed_scale=0.75`；实测 5.2 字/秒，与客户端 `CHARS_PER_SECOND=5` 吻合 |
+
+### 16.3 端到端复跑（修服务端之后）
+
+同一章、同一本书：`start book=剑来 chapter=3 para=7` → `play para=8/9/10/11`，67 s 内连续推进，
+**回退次数 0**、应用级 error 0；服务端同期 11 条 `synth engine=vits`，`voice=甘雨`，`speed` 与 UI 档位逐条一致。
+
+### 16.4 未覆盖 / 待决策
+
+- **5 音色的真机逐个切换**未走完：验收中途设备掉线（`hdc list targets` 为空、`uitest` 只回 `need connect-key`）。
+  服务端侧已逐个 200 验证，试听包 `~/Desktop/tts-abtest-tts5/`（5 音色 + 3 档 `SPEED_SCALE`）。
+- **听感结论**（T-TTS-5 ① 与 ④ 终值）需要用户耳朵，Agent 侧无法判定。
+- ⚠️ **语速上限**：有效语速 ≈1.0 是这台 4C 机器的可持续上限（每字合成 0.13–0.16 s），
+  App 的 **1.5x/2.0x 档会断续**（1.0x/1.2x 稳）。是否给远端单独限制档位待定。
+- ⚠️ **回退会写 pref**：`fallbackToSystem()` 把 `tts_engine=系统` 落盘 ⇒ 一次瞬时失败永久改掉用户选择。
+  改成「只翻内存、不落盘」很小，但属产品行为，等用户拍。

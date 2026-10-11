@@ -44,6 +44,7 @@ import {
   TTS_SERVER_DEFAULT,
   TTS_API_KEY_DEFAULT,
   TTS_REMOTE_VOICE_DEFAULT,
+  normalizeRemoteVoice,
   AHEAD_REMOTE
 } from '../common/Const';
 import { remoteSynthesize } from './RemoteTtsClient';
@@ -197,7 +198,7 @@ export class TtsController {
     this.engineKind = getNumber(ctx, KEY_TTS_ENGINE, TTS_ENGINE_SYSTEM);
     this.serverUrl = getString(ctx, KEY_TTS_SERVER, TTS_SERVER_DEFAULT);
     this.apiKey = getString(ctx, KEY_TTS_API_KEY, TTS_API_KEY_DEFAULT);
-    this.remoteVoice = getString(ctx, KEY_TTS_REMOTE_VOICE, TTS_REMOTE_VOICE_DEFAULT);
+    this.remoteVoice = normalizeRemoteVoice(getString(ctx, KEY_TTS_REMOTE_VOICE, TTS_REMOTE_VOICE_DEFAULT));
   }
 
   /** PCM frame rate of the active engine's renderer (system 16 kHz / remote 24 kHz). */
@@ -714,7 +715,7 @@ export class TtsController {
   private async remoteSynth(idx: number, text: string): Promise<void> {
     let pcm: ArrayBuffer;
     try {
-      pcm = await remoteSynthesize(this.serverUrl, this.apiKey, text, this.remoteVoice);
+      pcm = await remoteSynthesize(this.serverUrl, this.apiKey, text, this.remoteVoice, this.speed);
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'remote synth failed para=%{public}d', idx);
       this.fallbackToSystem();
@@ -1147,7 +1148,13 @@ export class TtsController {
     if (ctx !== undefined) {
       putNumber(ctx, KEY_TTS_SPEED, this.speed);
     }
-    if (this.active && this.playing && this.engine !== undefined) {
+    if (this.active && this.playing && this.engineKind === TTS_ENGINE_REMOTE) {
+      // Remote PCM arrives already spoken at the new rate, so there is nothing to
+      // re-pitch locally: drop the not-yet-enqueued buffers and re-request them.
+      // Audio already handed to the renderer keeps playing, so no gap.
+      this.clearInflight();
+      this.ensureSynthesized();
+    } else if (this.active && this.playing && this.engine !== undefined) {
       // `speed` is a per-`speak()` parameter, so no re-synthesis of the whole
       // paragraph is needed: drop only the not-yet-flushed requests and re-issue
       // them at the new speed while the buffered audio keeps playing.

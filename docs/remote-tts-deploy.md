@@ -21,10 +21,16 @@ VPS：`ssh -p 40860 root@103.236.96.53`（Ubuntu 22.04 / 4C Xeon 8173M / 3925 MB
 - 预取：远端 `AHEAD_REMOTE = 3` 段（系统 TTS 为 2），整段 HTTP、无 SSE/WS、无本地缓存。
   服务端 `app.py` 用一把 `_lock` **把推理串行化**，所以预取深度买到的是「CPU 不空转」而不是并行度；
   `num_threads=4` 只影响单次推理的核数，**请求之间不会互相抢核**。
-- ⚠️ **单请求超时会中断播放并换音色**：`RemoteTtsClient.ets` 的 `readTimeout=60000`，
-  3 段预取 + 服务端串行，最坏排队 ≈60s（换 VITS 前是 87s）。建议提到 **≥120000**（设备离线，尚未改）。
-- **客户端 `speed` 对远端是空转的**：`RemoteTtsClient.ets:41` 硬编码 `speed: 1.0`，
-  默认语速由服务端 `SPEED_SCALE` 决定（见 §3）。
+- 超时：`RemoteTtsClient.ets` `connectTimeout=5000` / `readTimeout=120000`（2026-10-11 由 60000 提到 120000）。
+  3 段预取 + 服务端串行，实测最坏单请求 wall ≈ 46 s（279 字 / 5 句 / effective 1.5），120 s 有余量。
+  仍然失败时会走 `fallbackToSystem` **并把 `tts_engine` 写成系统 TTS**（见 §5 的注意项）。
+- **客户端 `speed` 已真的下发**（2026-10-11）：`remoteSynthesize(..., speed)` 带 `this.speed`，
+  服务端有效语速 = `min(2.0, max(0.5, client_speed)) * SPEED_SCALE`。
+  例：App 1.0x → 0.75（默认），App 2.0x → clamp 后的 1.5。实测日志 `speed=0.750/1.500` 对得上。
+- ⚠️ **语速越高越可能断续**：本机（4C）实测每字合成成本 ≈ 0.13–0.16 s，而播放速度 = 有效语速下
+  的 ~0.19 s/字（0.75）/ 0.136 s/字（1.5）⇒ **有效语速 ≈ 1.0 是可持续上限**。
+  即 App 的 1.0x/1.2x 稳，**1.5x/2.0x 有概率出现段间空档**（预取 3 段缓冲会被吃光）。
+  想再快只能换更快的机器（或改服务端批合成），暂无计划；调 `AHEAD_REMOTE` 不解决问题。
 - ⚠️ 状态：这条远端链路**已知会整体重做**，本文件只按现状记录，不代表最终方案。
 
 ## 1. 现场（勿动）
@@ -57,9 +63,14 @@ VITS 用 **speaker id**，不再需要参考音频：
 | 雷电将军 | 125 | 208 Hz |
 | 钟离 | 104 | 122 Hz |
 
-**旧名别名**（App 端 `TTS_REMOTE_VOICE_OPTIONS` 尚未更新，服务端兜底）：
-`流萤 → 甘雨`、`花火 → 胡桃`、`卡芙卡 → 雷电将军`。改这张表只需改 `app.py` 的
-`VITS_VOICES` / `VITS_VOICE_ALIASES`，**不用动客户端**。
+**旧名别名**（App 端已同步，服务端仍兜底）：
+`流萤 → 甘雨`、`花火 → 胡桃`、`卡芙卡 → 雷电将军`。
+2026-10-11 起 App 的 `TTS_REMOTE_VOICE_OPTIONS` 就是上表这 5 个名字，默认 **钟离**；
+设备上残留的旧值（如 `流萤`）由 `common/Const.ets::normalizeRemoteVoice()` 在读取时归一，
+**用户不需要手动重选**（已真机确认 `tts_remote_voice=流萤` → 界面显示「远端音色 · 甘雨」）。
+改名只需动 `Const.ets` 与 `app.py` 的 `VITS_VOICES` / `VITS_VOICE_ALIASES`，两边别只改一边。
+注意：**这 5 个 sid 在公开的 804 说话人表里是空位**，所以「名字 ↔ 角色音色」的对应关系
+只能靠听感判断（F0 表是实测的，可信）。
 
 ## 3. 安装 / 启动 / 重启
 
@@ -80,7 +91,7 @@ ssh -p 40860 root@103.236.96.53 'systemctl daemon-reload && systemctl restart tt
 
 ```
 vits ready (warmed) in 2.9s sr=22050 speakers=804 model=vits-hf-zh-jp-zomehwh.onnx lexicon=lexicon_final.txt rule_fsts=date.fst,number.fst,phone.fst
-voices=['刻晴','甘雨','胡桃','钟离','雷电将军'] aliases={...} speed_scale=0.85 sentence_pause=320ms
+voices=['刻晴','甘雨','胡桃','钟离','雷电将军'] aliases={...} speed_scale=0.75 sentence_pause=320ms
 engine=vits post: enabled=True eq=(off) target=-18.0dBFS ceiling=-1.0dBFS
 ```
 
@@ -92,7 +103,7 @@ engine=vits post: enabled=True eq=(off) target=-18.0dBFS ceiling=-1.0dBFS
 | `VITS_DIR` | `/root/tts/genshin-vits` | 模型目录 |
 | `VITS_DICT_DIR` | `/root/tts/vits-zh-ll/sherpa-onnx-vits-zh-ll/dict` | jieba 分词词典（**必须传字符串**，传 `None` 会 `TypeError`） |
 | `RULE_FST_DIR` / `RULE_FSTS` | 见 service | `date.fst,number.fst,phone.fst`。**不加载数字会被静默丢弃**；`new_heteronym.fst` 无效果，别加 |
-| `SPEED_SCALE` | `0.85` | 乘在客户端 `speed`（硬编码 1.0）上的服务端默认语速；映射到 sherpa 的 `length_scale = 1/speed` |
+| `SPEED_SCALE` | `0.75` | 乘在**客户端 `speed`**（现由 App 下发）上的基准语速；映射到 sherpa 的 `length_scale = 1/speed`。0.75 是 2026-10-11 的听感起点值，按 §0 的可持续上限，**不建议再往上调**（>1.0 会断续），要调小（更慢）随时可以 |
 | `SENTENCE_PAUSE_MS` | `320` | 句间自插静音（sherpa 自带只有 ~80ms）；`0` 关闭 = 恢复模型原生停顿 |
 | `POST_ENABLE` | `1` | `0` = 输出裸模型音频（A/B 用） |
 | `EQ_BANDS` | **VITS 下为空** | 去浑浊 EQ 是 ZipVoice 专用补丁；填 `280:-3.5:0.9,2800:+3.5:0.7` 可手动开 |
@@ -126,6 +137,11 @@ engine=vits post: enabled=True eq=(off) target=-18.0dBFS ceiling=-1.0dBFS
 | **男声变女声 / 音高全错** | 模型被换成了 `theresa.onnx`（**坏文件**）。用 `f0.py` 量钟离，应为 ~122 Hz |
 | RTF 变慢 / 内存爆 | `journalctl -u tts` 看 `ENGINE` / `NUM_STEPS` 是否被改（ZipVoice 每加一步约 ×1.2–1.8）；VITS 稳态 RSS ≈ **441 MB**，`MemoryHigh=1200M`/`MemoryMax=1600M` 会在回归时主动重启服务 |
 | 输出无声/杂音 | 确认模型在 `VITS_DIR`；`POST_ENABLE=0` 时输出是裸模型音频（正常但更浑浊） |
+| **播到带引号/破折号的段落就中断，App 弹「远端合成失败，已切换回系统 TTS」** | 2026-10-11 已修：纯标点分段（`：“”`、`——`）sherpa 返回 `sample_rate=0` 的空音频，旧代码在 `_resample_fft` **除零 → HTTP 500**。现在跳过该分段（日志 `drop unspeakable segment`），整段无字时返回 320ms 静音。**这条极常见**：`他说：“你来了。”` 会分出一个独立的 `”` 段，即每个对白段都曾 500。查 `journalctl -u tts \| grep "drop unspeakable"` |
+
+> ⚠️ **注意（App 侧未改）**：`fallbackToSystem()` 会把 `tts_engine` **写入 preferences**，
+> 一次瞬时失败 = 用户选的「远端」被永久改回系统 TTS（需手动再切）。当前保留该行为（属产品决策，
+> 见 `docs/bugfix/TASKS.md` §T-TTS-5 的待定项）。
 
 ## 6. 网络（已落定：公网映射 39680）
 

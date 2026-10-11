@@ -16,7 +16,8 @@ import {
   TTS_SERVER_DEFAULT,
   TTS_API_KEY_DEFAULT,
   TTS_REMOTE_VOICE_DEFAULT,
-  TTS_REMOTE_VOICE_OPTIONS
+  TTS_REMOTE_VOICE_OPTIONS,
+  normalizeRemoteVoice
 } from '../common/Const';
 import { getNumber, putNumber, getString, putString } from '../common/Prefs';
 
@@ -41,7 +42,7 @@ export struct ListeningSettingsPage {
       this.engine = getNumber(ctx, KEY_TTS_ENGINE, TTS_ENGINE_SYSTEM);
       this.serverUrl = getString(ctx, KEY_TTS_SERVER, TTS_SERVER_DEFAULT);
       this.apiKey = getString(ctx, KEY_TTS_API_KEY, TTS_API_KEY_DEFAULT);
-      this.remoteVoice = getString(ctx, KEY_TTS_REMOTE_VOICE, TTS_REMOTE_VOICE_DEFAULT);
+      this.remoteVoice = normalizeRemoteVoice(getString(ctx, KEY_TTS_REMOTE_VOICE, TTS_REMOTE_VOICE_DEFAULT));
     }
   }
 
@@ -248,7 +249,7 @@ export struct ListeningSettingsPage {
           }
 
           Text(this.engine === TTS_ENGINE_REMOTE
-            ? '远端为 VPS 上的流萤/花火/卡芙卡克隆音色，需可访问填入的服务器；失败自动回退系统 TTS。'
+            ? '远端为 VPS 上的钟离/甘雨/胡桃/刻晴/雷电将军 5 个声线（音色名只是标签），需可访问填入的服务器；失败自动回退系统 TTS。'
             : '音色与语速为下次开始听书的默认值；男声需系统已下载该音色。后台播放与锁屏控制在开始听书后自动生效。')
             .fontSize(12)
             .fontColor($r('app.color.text_4'))

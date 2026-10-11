@@ -34,11 +34,14 @@ export async function remoteSynthesize(
   serverUrl: string,
   apiKey: string,
   text: string,
-  voice: string
+  voice: string,
+  speed: number
 ): Promise<ArrayBuffer> {
   const request: http.HttpRequest = http.createHttp();
   try {
-    const body: string = JSON.stringify({ text: text, voice: voice, speed: 1.0 });
+    // The server multiplies this by its own `SPEED_SCALE` and clamps to [0.5, 2.0],
+    // so the app's speed setting (0.5-2.0) is what the user actually hears.
+    const body: string = JSON.stringify({ text: text, voice: voice, speed: speed });
     const header: Record<string, string> = { 'Content-Type': 'application/json' };
     if (apiKey.length > 0) {
       header['X-API-Key'] = apiKey;
@@ -49,7 +52,10 @@ export async function remoteSynthesize(
       extraData: body,
       expectDataType: http.HttpDataType.ARRAY_BUFFER,
       connectTimeout: 5000,
-      readTimeout: 60000
+      // AHEAD_REMOTE=3 paragraphs of prefetch on a serialized server means the last
+      // request can queue for tens of seconds; a short timeout aborts mid-playback
+      // and silently switches voices (fallbackToSystem). 120s keeps ~2x margin.
+      readTimeout: 120000
     });
     if (response.responseCode !== 200) {
       throw new Error('http ' + response.responseCode.toString());

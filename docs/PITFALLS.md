@@ -10,7 +10,7 @@
 | 锁屏无媒体卡 / 媒体键无反应 / AVSession 不是 top session | **系统 TTS「直连播报」路线不可行**（系统 TTS 自持音频焦点）。必须让 App 自己播 PCM（`STREAM_USAGE_AUDIOBOOK`）才能成为 top session | `docs/progress.md` §M5 |
 | 抽屉错乱：tab 栏被盖住 / 面板从中间冒出 / 关不干净 | tab 页（`TabContent`）用 `mode: 'cover'`，`NavDestination` 用 `overlay`；唯一实现 `ui/common/BottomDrawer.ets`，**禁止**裸 `bindSheet` 与条件挂载 | `docs/specs/UI-SPEC.md` |
 | 改了 ArkTS，设备上行为没变 | ① 只编译没安装 ② 没 `aa force-stop`（`aboutToAppear` 不重跑）→ 统一用 `make run` | `docs/development.md` |
-| `make devices` / `hdc list targets` 返回 `[Empty]` | 未连上（插线、开 USB 调试、信任本机）；**跑测试中突然变空**则是掉线/U 口抖动 → `hdc kill -r` 后自动重连（重连前所有 `uitest` 命令只会报 `need connect-key`）。无设备时改完 ArkTS 至少跑 `make hap` 确认能编译 | skill `harmony-device-run` |
+| `make devices` / `hdc list targets` 返回 `[Empty]` | 未连上（插线、开 USB 调试、信任本机）；**跑测试中突然变空**则是掉线/U 口抖动 → `hdc kill -r` 后自动重连（重连前所有 `uitest` 命令只会报 `need connect-key`）。无设备时改完 ArkTS 至少跑 `make hap` 确认能编译。⚠️ **写脚本时不要让 hdc 失败静默**：失败的 `dumpLayout` 会把上一份 `layout.json` 留着，看起来像「点了没反应 / 菜单没弹出」——每次 dump 后必须确认命令成功（或比对 mtime） | skill `harmony-device-run` |
 | Makefile 里拿到的 hdc/NDK 路径不对 | **变量不要用 `?=`**：本机环境已有 `NDK_HOME`/`SDK` 等同名变量，`?=` 会当成“已定义”而不赋值；用 `:=` | 根目录 `Makefile` 顶部注释 |
 | `index.d.ts` 的接口说明/参数与引擎实际行为不一致 | 那份是**产物**：真源是 `rust/legado-core/src/lib.rs` 的 `///` doc comment，改完 `make rust` 会拷过来；**勿手改** `entry/.../index.d.ts` | `docs/engine.md` |
 | 大文档顶部目录的行号指到了错地方 | 目录由 `make docs-toc` 生成，**勿手改行号**（只改 `<!-- TOC:BEGIN/END -->` 之间的东西会丢） | `AGENTS.md` §硬性约定 |
@@ -36,3 +36,5 @@
 | 封面区刷 `ImageSource: failed to create decoder object` / `62980118` / `Create PixelMap error`，且该封面**永远占位** | 引擎曾把**非图片正文**（详情页 / 防盗链 HTML）写进 `cover_*.img`，且 `if path.exists()` 命中即早退 → 中毒 slot 永不复检。`62980118` = SDK 里的 **Failed to create the image plugin**（数据不是可识别图片格式）。现：写盘前嗅探图片签名 + 缓存命中先看头 64 B + ArkTS 解不开就删文件 | `docs/bugfix/TASKS.md` §T-SHELF-5 |
 | 缓存文件能不能另起命名（如 `cover_*.miss` 负缓存 / `cover_*.tmp` 临时写） | **不能**：`CacheTrim` 按 `cover_` 前缀 + `.img` 后缀扫描并驱逐，其他命名等于**永不被清理的泄漏**；封面缓存只能有 `cover_<hash>.img` 一种名字 | `entry/src/main/ets/model/CacheTrim.ets`、`docs/research/CACHE-LIMIT-PLAN.md` |
 | `aa start` 报 **10106102 The device screen is locked**（之前明明能跑） | 设备息屏锁了（开发者模式下无法自动解锁）→ 先唤醒再上滑解锁：`hdc shell "power-shell wakeup"` → `hdc shell "uitest uiInput swipe 630 2200 630 600 400"`，然后再 `make run` | skill `harmony-device-run` |
+| 远端听书**播到对白段就中断**，App 弹「远端合成失败，已切换回系统 TTS」，服务端 `ZeroDivisionError: division by zero` | 纯标点分段（`：“”` / `——`）sherpa 返回 `sample_rate=0` 的空音频 → `_resample_fft` 除零 → **HTTP 500**。范围比看上去大：`他说：“你来了。”` 会多切出一个 `”` 段 ⇒ 每个对白段都命中。2026-10-11 已修（跳过空分段 + `sr_in<=0` 护栏，整段无字回 320ms 静音）；查 `journalctl -u tts \| grep "drop unspeakable"` | `docs/bugfix/RELEASE-NOTES.md` §16、`docs/remote-tts-deploy.md` §5 |
+| 远端 TTS 音色列表改了，设备上仍显示/请求旧名字 | 老设备 pref 里存的是旧值（`流萤` 等）→ 读取时过 `common/Const.ets::normalizeRemoteVoice()` 归一（别名表也在那里），**不要**靠改 `app.py` 的 `VITS_VOICE_ALIASES` 了事：界面文案会继续显示旧名 | `docs/remote-tts-deploy.md` §2 |

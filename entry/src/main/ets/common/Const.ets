@@ -52,8 +52,34 @@ export const TTS_SERVER_DEFAULT: string = '';
 export const KEY_TTS_API_KEY: string = 'tts_api_key';
 export const TTS_API_KEY_DEFAULT: string = '';
 export const KEY_TTS_REMOTE_VOICE: string = 'tts_remote_voice';
-export const TTS_REMOTE_VOICE_DEFAULT: string = '流萤';
-export const TTS_REMOTE_VOICE_OPTIONS: string[] = ['流萤', '花火', '卡芙卡'];
+export const TTS_REMOTE_VOICE_DEFAULT: string = '钟离';
+/** 服务端 `voices`（`GET /health`）的同一张表；改这里要同步 VPS 的 `VITS_VOICES`。 */
+export const TTS_REMOTE_VOICE_OPTIONS: string[] = ['刻晴', '甘雨', '胡桃', '钟离', '雷电将军'];
+/**
+ * 旧远端音色名（VITS 之前的 ZipVoice 参考音频）→ 现用名。
+ * 服务端有同一张别名表兜底（`server/app.py` 的 `VITS_VOICE_ALIASES`，只保证能出声）；
+ * 这份是为了让 preferences 里存过的旧名在 UI 上仍能高亮，用户不必重选。
+ */
+const REMOTE_VOICE_RENAMES: string[][] = [
+  ['流萤', '甘雨'],
+  ['花火', '胡桃'],
+  ['卡芙卡', '雷电将军']
+];
+
+/** 把偏好里的远端音色名收敛到 `TTS_REMOTE_VOICE_OPTIONS` 之一（旧名迁移 / 未知名回默认）。 */
+export function normalizeRemoteVoice(voice: string): string {
+  for (const pair of REMOTE_VOICE_RENAMES) {
+    if (pair[0] === voice) {
+      return pair[1];
+    }
+  }
+  for (const name of TTS_REMOTE_VOICE_OPTIONS) {
+    if (name === voice) {
+      return voice;
+    }
+  }
+  return TTS_REMOTE_VOICE_DEFAULT;
+}
 /** 远端每段合成的预取深度（比系统 TTS 的 AHEAD=2 略深，抵消网络往返）。 */
 export const AHEAD_REMOTE: number = 3;
 

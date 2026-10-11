@@ -18,8 +18,9 @@ Environment=X_API_KEY=
 # docs/research/TTS-ENGINE-COMPARISON.md for the measurements and the lexicon bug.
 Environment=ENGINE=vits
 Environment=VITS_DIR=/root/tts/genshin-vits
-# The client hardcodes speed=1.0 for the remote engine; this is the server-side rate.
-Environment=SPEED_SCALE=0.85
+# The client sends the app's speed setting (0.5-2.0, default 1.0); this is the base rate
+# it is multiplied by, i.e. the effective speed at the "1.0" slot. 0.75 ~= 290-325 chars/min.
+Environment=SPEED_SCALE=0.75
 # sherpa emits only ~80ms between sentences (measured). Split server-side and insert real
 # silence; commas keep the model's own short pause.
 Environment=SENTENCE_PAUSE_MS=320
