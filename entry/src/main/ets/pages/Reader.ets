@@ -12,6 +12,7 @@
 //   主题：systemDark / resolveColorHex / applyFullScreen / toggleNight / bgColor / textColor / dimColor
 //         changeFont / changeLineHeight
 //   跳转：onContentTap / onTopBack / openPanel / openDetail / openListening / moreMenuItems / isSpeaking
+//   换源：openSourceSwitch / confirmSwitch / applySwitch / resetContentState / switchMessage（逻辑在 model/SourceSwitch.ets）
 //   @Builder 子视图：topBar / bottomBar / contentPager（Swiper 分页）/ tocDrawerContent / settingsDrawerContent /
 //                    iconButton / funcButton / moreButton / buildTocItems / readableCount / toggleTocOrder
 // ──────────────────────────────────────────────────────────────────────
@@ -20,7 +21,7 @@ import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { bookEngine } from '../engine/BookEngineNapi';
-import { Book, BookSource, Chapter, ReadProgress } from '../engine/types';
+import { Book, BookSearchItem, BookSource, Chapter, ReadProgress } from '../engine/types';
 import { ChapterDataSource } from '../common/ChapterDataSource';
 import { BookCover } from '../components/BookCover';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
@@ -53,6 +54,8 @@ import { TtsController } from '../model/TtsController';
 import { FloatingListenButton } from '../ui/common/FloatingListenButton';
 import { AppBackButton } from '../ui/common/AppBackButton';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
+import { SourceSwitchPanel } from '../components/SourceSwitchPanel';
+import { SwitchOutcome, switchSource } from '../model/SourceSwitch';
 import { MeasureOptions } from '@ohos.measure';
 
 const PANEL_NONE: string = '';
@@ -60,6 +63,7 @@ const PANEL_TOC: string = 'toc';
 const DOMAIN: number = 0x0000;
 const TAG: string = 'SourceReaderReader';
 const PANEL_SETTINGS: string = 'settings';
+const PANEL_SOURCE: string = 'source';
 
 /** 一页中的一个段落片段：指向某章某段落的一段字符区间（段落可跨页拆分）。 */
 class PageSeg {
@@ -81,13 +85,22 @@ class PageSeg {
 
 @ComponentV2
 export struct ReaderPage {
-  @Param source: BookSource | undefined = undefined;
-  @Param book: Book | undefined = undefined;
+  /** 路由传入的初始来源/书籍；换源后本页改用下面的 `source` / `book`（@Local 副本）。 */
+  @Param initialSource: BookSource | undefined = undefined;
+  @Param initialBook: Book | undefined = undefined;
   @Event onBack: () => void = () => {};
-  @Event onMore: () => void = () => {};
+  /** 打开详情页；参数是本页**当前**的来源/书籍（换源后是新的那本）。 */
+  @Event onMore: (source: BookSource, book: Book) => void = () => {};
   @Event onListen: (param: ListenParam) => void = () => {};
   @Event onOpenListening: () => void = () => {};
 
+  /** 当前来源/书籍：初始来自 `initialSource` / `initialBook`，换源后被替换（见 `applySwitch`）。 */
+  @Local source: BookSource | undefined = undefined;
+  @Local book: Book | undefined = undefined;
+  /** 换源抽屉的开启令牌（自增 → 面板重新读源并重新检索）。 */
+  @Local sourcePanelToken: number = 0;
+  /** 换源执行中：抽屉列表整体禁用，避免连点两次。 */
+  @Local switching: boolean = false;
   @Local chapters: Chapter[] = [];
   @Local chapterIndex: number = 0;
   @Local paragraphs: string[] = [];
@@ -164,6 +177,8 @@ export struct ReaderPage {
       this.nightMode = getBoolean(ctx, KEY_READER_NIGHT, READER_NIGHT_DEFAULT);
       this.oneHandMode = getBoolean(ctx, KEY_READER_ONE_HAND_PAGE, READER_ONE_HAND_PAGE_DEFAULT);
     }
+    this.source = this.initialSource;
+    this.book = this.initialBook;
     this.applyFullScreen();
     this.load();
   }
@@ -887,14 +902,122 @@ export struct ReaderPage {
       this.panel = PANEL_NONE;
       return;
     }
+    if (mode === PANEL_SOURCE) {
+      // 自增令牌而不是 `visible`：面板常驻挂载，只有令牌变化才会触发它重读书源 + 重新检索。
+      this.sourcePanelToken = this.sourcePanelToken + 1;
+    }
     this.panel = mode;
     this.menuVisible = true;
   }
 
   private openDetail(): void {
+    const src: BookSource | undefined = this.source;
+    const book: Book | undefined = this.book;
     this.panel = PANEL_NONE;
     this.menuVisible = false;
-    this.onMore();
+    if (src !== undefined && book !== undefined) {
+      this.onMore(src, book);
+    }
+  }
+
+  private toast(message: string): void {
+    this.getUIContext().getPromptAction().showToast({ message: message });
+  }
+
+  // ── 换源（v1.1）───────────────────────────────────────────────
+
+  private openSourceSwitch(): void {
+    const book: Book | undefined = this.book;
+    if (book !== undefined && isLocalBook(book)) {
+      this.toast('本地书籍不支持换源');
+      return;
+    }
+    this.openPanel(PANEL_SOURCE);
+  }
+
+  /**
+   * 换源会删掉当前源的书架行与全部缓存，所以先要一次显式确认；
+   * 真正的执行在 `applySwitch`（`model/SourceSwitch.switchSource`）。
+   */
+  private confirmSwitch(target: BookSource, item: BookSearchItem): void {
+    if (this.switching || this.book === undefined) {
+      return;
+    }
+    const name: string = target.bookSourceName.length > 0 ? target.bookSourceName : target.bookSourceUrl;
+    this.getUIContext().showAlertDialog({
+      title: '切换到「' + name + '」',
+      message: '当前源的书架记录与缓存会被清除，阅读进度将按章节对齐迁移到新源，此操作不可撤销。',
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        fontColor: $r('app.color.text_2'),
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '切换',
+        fontColor: $r('app.color.brand'),
+        action: () => {
+          this.applySwitch(target, item);
+        }
+      }
+    });
+  }
+
+  private async applySwitch(target: BookSource, item: BookSearchItem): Promise<void> {
+    const old: Book | undefined = this.book;
+    const oldSrc: BookSource | undefined = this.source;
+    if (old === undefined || oldSrc === undefined || this.switching) {
+      return;
+    }
+    this.switching = true;
+    try {
+      const progress: ReadProgress | undefined = await getProgress(old.bookId);
+      const out: SwitchOutcome = await switchSource(this.ctx(), old, oldSrc, progress, target, item);
+      // 先丢弃旧书的正文状态，再切换身份并整体重载：`load()` 会用新 bookId 重新读目录与进度
+      //（进度已由 `switchSource` 写好），因此落点就是迁移后的那一章。
+      this.resetContentState();
+      this.source = target;
+      this.book = out.book;
+      this.panel = PANEL_NONE;
+      this.menuVisible = false;
+      this.loading = true;
+      await this.load();
+      this.toast(this.switchMessage(target, out));
+    } catch (err) {
+      this.toast('换源失败：' + (err as Error).message);
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  private switchMessage(target: BookSource, out: SwitchOutcome): string {
+    const name: string = target.bookSourceName.length > 0 ? target.bookSourceName : target.bookSourceUrl;
+    const how: string = out.matchedBy === 'title'
+      ? '按章节对齐'
+      : (out.matchedBy === 'percent' ? '按进度对齐' : '从第一章开始');
+    return '已切换到「' + name + '」，' + how + '到第 ' + (out.chapterIndex + 1).toString() + ' 章';
+  }
+
+  /**
+   * 换源后必须整块丢弃的正文状态：`paraCache` / `pages` 都以**章节下标**为键，而新源的
+   * 同一下标是完全不同的正文，留着会渲染出上一个源的文本；`inflight` 的 key 里含旧 bookId，
+   * 不清的话新书的首次抓取可能命中旧书的在飞请求。
+   */
+  private resetContentState(): void {
+    this.loadGen = this.loadGen + 1;
+    this.tocSession = this.tocSession + 1;
+    this.paraCache.clear();
+    this.inflight.clear();
+    this.currentPageId = '';
+    this.pages = [];
+    this.pageIndex = 0;
+    this.paragraphs = [];
+    this.paragraphIndex = 0;
+    this.chapterIndex = 0;
+    this.chapters = [];
+    this.sliderValue = 1;
+    this.buildTocItems();
   }
 
   private openListening(): void {
@@ -1089,6 +1212,8 @@ export struct ReaderPage {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .padding({ left: 4 })
+      this.iconButton($r('sys.symbol.arrow_2_circlepath'), '换源',
+        () => this.openSourceSwitch())
       MoreMenuButton({
         items: this.moreMenuItems(),
         color: this.dimColor(),
@@ -1514,6 +1639,28 @@ export struct ReaderPage {
         }
       }) {
         this.settingsDrawerContent()
+      }
+
+      BottomDrawer({
+        visible: this.panel === PANEL_SOURCE,
+        sheetSize: 'large',
+        mode: 'overlay',
+        showHeader: false,
+        panelBackground: this.bgColor(),
+        onClose: () => {
+          this.panel = PANEL_NONE;
+        }
+      }) {
+        SourceSwitchPanel({
+          runToken: this.sourcePanelToken,
+          book: this.book,
+          currentSourceUrl: this.source !== undefined ? this.source.bookSourceUrl : '',
+          currentSourceName: this.source !== undefined ? this.source.bookSourceName : '',
+          textColor: this.textColor(),
+          dimColor: this.dimColor(),
+          busy: this.switching,
+          onPick: (source: BookSource, item: BookSearchItem) => this.confirmSwitch(source, item)
+        })
       }
     }
     .width('100%')

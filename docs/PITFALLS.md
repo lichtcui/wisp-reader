@@ -23,6 +23,7 @@
 | `ohrs build` 找不到 NDK / 报路径错 | `OHOS_NDK_HOME` **不要**指到 `.../openharmony/native`（`ohrs` 会自己再拼 `native/`） | `docs/development.md` |
 | `cargo` 拉不到 crates.io | 项目根 `.cargo/config.toml` 指向 `rsproxy.cn`，**勿删** | `docs/development.md` |
 | Rust 侧规则改动后不确定有没有回归 | 先在主机跑 `make test`（`cargo test`，54 项含 mock 端到端），再上真机 | `docs/engine.md` |
+| 想用一个 `sys.symbol.*` 图标，不确定名字写对没写对 | **名字错了编译期就报** `Unknown resource name 'xxx'`（不用上设备猜）——先 `make hap` 试；想先查有哪些名字：`strings -a /Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/previewer/common/resources/resources.index \| grep -E '^arrow' \| sort -u` | 本条（v1.1 换源入口：`arrow_triangle_2_circlepath` ❌ → `arrow_2_circlepath` ✅） |
 | `hilog -x` 刷屏找不到自己的日志 | 用 `hdc shell hilog -x -T <tag>` + 行数上限；tag 约定 `SourceReaderPoC`（先 `hilog -r` 清） | `docs/development.md` |
 | **release 包里死活看不到应用自己的 hilog**（`hilog -T SourceReaderTts` 恒为空） | 第三方应用在 release 包下日志被系统过滤（domain `0x0000` 不落 buffer）——**不是没跑/没生效**。看日志用 `make run`（debug）；release 冒烟改用系统侧证据：`hidumper -s AVSessionService -a '-show_session_info'`、`AudioLogUtils` 音频帧日志、`uitest dumpLayout` | `docs/bugfix/RELEASE-NOTES.md` §9 |
 | 导入备份后书架/进度计数**只增不减**，与「全量覆盖」文案不符 | 导入必须**整体替换**：`books` / `progress` 先清表再写（`replaceShelf`），且必须 `lastWriteAt.clear()`——那个单调守卫是**会话级**的，不清会静默丢弃备份里 `updatedAt` 更旧的进度（表现为「导入了但进度没变」） | `docs/bugfix/TASKS.md` §T-DATA-7 |

@@ -12,10 +12,10 @@
 
 <!-- TOC:BEGIN -->
 - 里程碑状态 — L23
-- M5 结果（2026-09-25，真机验证） — L37
-- 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L77
-- 未决 / 风险 — L111
-- 交接备忘 — L182
+- M5 结果（2026-09-25，真机验证） — L38
+- 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L78
+- 未决 / 风险 — L112
+- 交接备忘 — L199
 <!-- TOC:END -->
 
 ---
@@ -31,7 +31,8 @@
 | M4 | 阅读页（横向分页翻页）+ 目录（含分页）+ 进度 + 阅读设置 | ✅ 已完成（真机验证：目录/跳转/字号/进度重启恢复；修 bindSheet + 正文清洗；**收尾项已补**）|
 | M5 | 听书 + 系统 TTS + 后台播放 + AVSession | ✅ 已完成（真机验证：PCM→AudioRenderer→AVSession 成为 top session，锁屏控件/媒体键可控，切后台不断，定时关闭，段落高亮/进度同步）|
 | M6 | 规则调试器 + 缓存清理 + 备份恢复 | ✅ 功能全部落地：规则调试器 UI（`pages/RuleDebugger.ets`，真机验收未做）、备份/恢复（`pages/BackupManage.ets`，含 2026-10-07 修的真「全量覆盖」）、目录缓存统计/清理、**缓存上限策略（`model/CacheTrim.ets`，2026-10-07 实现并真机六项压测通过）**。仅余规则调试器页真机验收 → [`research/CACHE-LIMIT-PLAN.md`](./research/CACHE-LIMIT-PLAN.md) |
-| v2 | QuickJS/Boa JS 引擎、换源、在线 TTS、真分页 | ⏳ |
+| v1.1 | **换源**（阅读页顶栏入口 / 书名 + 作者严格匹配 / 进度按章节序号迁移） | ✅ 已完成（真机验证往返切换 + 缓存清理，见上文同名节）|
+| v2 | QuickJS/Boa JS 引擎、在线 TTS、真分页 | ⏳ |
 
 
 ## M5 结果（2026-09-25，真机验证）
@@ -140,14 +141,27 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   **B** ZipVoice + 官方中配参考音频（音色 7/7 命中、RTF<1，但 `num_steps=3` 的 few-step 毛刺不接受）、**C/D** 需租 GPU（换机器）。
   任务条目已从 [`bugfix/TASKS.md`](./bugfix/TASKS.md) 移除，决定固化在 [`decisions.md`](./decisions.md) D14；调研全文留在 [`research/TTS-VOICE-SOURCES.md`](./research/TTS-VOICE-SOURCES.md)（纯参考、不再跟进）。
   **→ 2026-10-11 晚更新：D14 已部分重开**（离线批量预生成这个新前提下，ZipVoice `steps=12` 过了用户听感）→ [`research/TTS-PREGEN-PLAN.md`](./research/TTS-PREGEN-PLAN.md)、[`decisions.md`](./decisions.md) **D15**。
-- **T-READ-4 引擎不支持 Legado `text.` 前缀 → 目录/正文只取第一页（2026-10-11 已修，纯主机侧验证）**：DSL 只认 `class.` / `id.` / `tag.`，`text.下一页@href` 被当 CSS 选择器 →
+- **T-READ-4 引擎不支持 Legado `text.` 前缀 → 目录/正文只取第一页（2026-10-11 已修；2026-10-12 设备侧复验）**：DSL 只认 `class.` / `id.` / `tag.`，`text.下一页@href` 被当 CSS 选择器 →
   **0 结果且无诊断** → 翻页循环第一页后 break；内置源 **9 条规则 / 8 个源**命中（《剑来》目录 **50 条 vs 实际 1308 章**，真机书架的 `3章/50章` 即此）。
   修法：新增 `RuleToken::TextContains` + `html_extractor::apply_text_filter`（自身文本包含关键字、大小写不敏感）；`make test` **56 → 58 项全过**、`probe search 剑来` 零回归、`make rust` 成功。
-  **设备侧复跑待设备上线**；同批定性的「《大唐》目录加载失败」在主机侧无法复现（`probe toc` 正常 1449 条）⇒ 非引擎缺陷。
+  **设备侧已于 2026-10-12 复验**（换源时旧缓存被清、重爬得 1308 章，见上文「换源」条）；同批定性的「《大唐》目录加载失败」在主机侧无法复现（`probe toc` 正常 1449 条）⇒ 非引擎缺陷。
   证据 → [`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §17、[`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-READ-4、[`PITFALLS.md`](./PITFALLS.md)。
 - **书架编辑模式（多选删除）**：已实施并真机验证（2026-10-07，D1–D21）—— 见上文同名节；
   计划 / 逐步代码 / DoD 逐条证据见 [`archive/SHELF-EDIT-PLAN.md`](./archive/SHELF-EDIT-PLAN.md)（§7 / §8 / §10 / §12.3），
   五轮审计轨迹原文见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §附。
+- **换源（v1.1）实现 + 真机验证（2026-10-12）**：阅读页顶栏 `...` **左侧**新增「换源」入口 → 抽屉内**渐进**检索候选（一源一次 `search`，6 并发）→ 确认框 → 切换。
+  候选判定 = 书名 + 作者严格匹配（`model/SourceSwitch.ets::isSameBook`）；切换 = **换 `bookId`**（删旧 `books`/`progress` 行 + 清旧源章节/目录缓存 + 插新行，保留 `addedAt`），
+  进度按章节序号迁移（先按章节名对齐，落空按 `percent` 折算，`locateChapter`）；听书进行中先停播（`TtsController.stop`，否则新行的进度写会被 `ProgressOwner` 丢弃）。
+  **零 Rust 改动**（不依赖 `bookUrlPattern`）→ 决策 [`decisions.md`](./decisions.md) **D16**（D11 据此修订）。
+  **真机证据**（`33Z0224424136564`，《剑来》 bbiquge8 ⇄ 🎉云中书库 **往返**切换，`uitest dumpLayout` + 沙箱 `ls`）：
+  ① 抽屉头部 `· 当前 <源名>` 随切换更新，进度文案 `已检索 5/6 个书源` → `共 2 个候选`（渐进上屏可见）；
+  ② 严格匹配只出 1 个其它源、无同名异书；《天堂向左 深圳往右》无候选 → 空态文案正常；
+  ③ 确认框可取消；落点为迁移章且正文来自新源（`第四卷/第四章 黄鸟` → `第一百零四章 坐地分赃`，即 `percent` 对齐 4/50 → 104/1308）；
+  ④ 书架仍 3 本、无旧行残留，`aa force-stop` 重启后不变；**换回原源**同样成功（双向可逆）；
+  ⑤ **旧源缓存真被删**：换回后沙箱 `files/tocs/` + `files/chapters/` 里云中书库的 `ee8114a5*`（3 章 + 188 KB 目录）消失，只剩 `5b4fad87*`；
+  ⑥ 顺带复验 **T-READ-4 设备侧**（见 [`bugfix/TASKS.md`](./bugfix/TASKS.md)）：旧目录缓存（修复前 50 条）被换源清掉后重爬得 bbiquge8 **1308 章**。
+  **未验**：本地 TXT 书点「换源」→ toast（设备书架无本地书，只做了代码审查）、听书**播放中**换源（未起播）。
+  另记一条观察：旧目录残缺时（50 条 vs 实际 1308）`percent` 对齐会大幅漂移（4 章 → 104 章）—— 属 T-READ-4 的历史数据后果，不是换源缺陷。
 
 **未决**
 
@@ -155,6 +169,9 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   评估结论：**约束搬家** —— `RTF<1` 只属于实时流式，批量改用 `RTF ≤ 24 ÷ 每日收听小时数`（听 2 h/天 → ≤12）；因此
   **ZipVoice `num_steps=12` 可用且已过用户听感**（实测 RTF **3.07–4.11**、100 章 55 h ≈ 2.3 天预热、峰值 RSS **1.0 GB**，与常驻 VITS 441 M 共存无压力），
   即「批量让我们用得起更慢的好引擎」（GPT-SoVITS 由「唯一可行」降级为「保真更好但贵一个数量级」，**不再是必选项**）。
+  **2026-10-12 追加：GPT-SoVITS 已实测（用户要求直接看效果）** —— v2ProPlus（流萤微调）RTF **5.42**、v4（钟离微调）RTF **115.3**、
+  零样本底座 5.86–7.17，常驻 RSS **3.3–3.4 GB**（v4 无 swap 直接被 OOM 杀）⇒ **CPU 上比 `steps=12` 慢 1.7× 且吃满内存，不作批量引擎**；
+  顺带证实「逐句调用比引擎原生切句慢 2×」与「`cut5` 按逗号切 → 15% 段间静音」→ 同上文档 §2.2/§5；试听包 `~/Desktop/tts-gpt-sovits/`。
   方案草图（内容寻址缓存 + job worker + 章级原子切换 + 让出 CPU + 批量 QC）与坑（ZipVoice 词典缺 `“ ” …`、流萤参考音频仅 3.38 s）→
   [`research/TTS-PREGEN-PLAN.md`](./research/TTS-PREGEN-PLAN.md)、决策 [`decisions.md`](./decisions.md) **D15**（**D14 部分重开**，实时链路不变）；试听包 `~/Desktop/tts-zipvoice-batch/`。
 

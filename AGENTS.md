@@ -49,7 +49,7 @@
 | `@State` / `@Prop`（新代码一律 `@ComponentV2` + `@Local` / `@Param`） | D7 |
 | 阅读排版改回纵向滚动 | D5 |
 | 换配色（白 + 红 `#DA3838`，走 color.json 令牌） | D8 |
-| v1 范围外（JS 运行时 / 登录源 / 换源 / explore / 真分页 / 在线 TTS；`@js:` 的 L1 字符串模式除外） | D10 / D11 |
+| v1 范围外（JS 运行时 / 登录源 / explore / 真分页 / 在线 TTS；`@js:` 的 L1 字符串模式除外。**换源自 v1.1 起已支持**，见 D16） | D10 / D11 / D16 |
 
 ## 硬性约定（其余约定与坑见 [`docs/PITFALLS.md`](./docs/PITFALLS.md)、[`docs/development.md`](./docs/development.md)）
 

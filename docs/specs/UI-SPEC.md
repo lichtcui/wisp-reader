@@ -119,7 +119,9 @@
      `Divider().color($r('app.color.divider')).strokeWidth(1).margin({ left: -16, right: -16 })`：
      负外边距抵消内容区左右 padding 后与标题栏分割线同宽。
 
-`showHeader` 约定：阅读页目录/阅读设置为 `false`（内容自带书籍头部）；**其余一律 `true`**。
+`showHeader` 约定：阅读页目录 / 阅读设置 / **换源**为 `false`（内容自带头部，且标题栏用固定 `text_1` 色，在夜间模式的深色面板上不可读）；**其余一律 `true`**。
+
+> 新增抽屉（第 9 处起）必须同时登记到本表。
 
 ### 1.6 尺寸语义
 
@@ -147,7 +149,7 @@
 
 ---
 
-## 2. 调用点清单（**共 7 处，样式改动必须全部同步**）
+## 2. 调用点清单（**共 8 处，样式改动必须全部同步**）
 
 | # | 位置（快照 `6054929`） | 场景 | `sheetSize` | `showHeader` | 背景 |
 |---|---|---|---|---|---|
@@ -158,6 +160,7 @@
 | 5 | `pages/SearchResult.ets:645` | 搜索结果 · 选择来源 | `large` | 默认 `true` | 默认 |
 | 6 | `pages/BookSourceManage.ets:706` | 书源管理 · 书源状态 | `large` | 默认 `true` | 默认 |
 | 7 | `pages/Listening.ets:382` | 听书页 · 目录 | `large` | 默认 `true` | 默认 |
+| 8 | `pages/Reader.ets`（`grep -n "PANEL_SOURCE"`） | 阅读页 · 换源（v1.1） | `large` | `false` | `this.bgColor()` |
 
 > 行号会漂移；**以命令为准**：`grep -rn "BottomDrawer({" entry/src/main/ets/pages/`
 > 新增抽屉（第 8 处）必须同时登记到本表。
@@ -175,7 +178,7 @@
 - [ ] §1.2.2 关闭后抽屉**不参与绘制**（`overlay`：`panelShown = false` / `visibility(Hidden)`；`cover`：整个模态层卸载），屏幕底部**无阴影残影**
 - [ ] 阴影在 `clip(true)` 之前；圆角 20 可见
 - [ ] 打开/关闭时长未被单独覆盖
-- [ ] §2 的 7 处调用点**全部同步**（样式改动不分页面，一处改即全改）
+- [ ] §2 的 8 处调用点**全部同步**（样式改动不分页面，一处改即全改）
 - [ ] `showHeader` 约定未被破坏
 - [ ] 新增/改名的 JSON 字段（若有）已加进 `entry/obfuscation-rules.txt`
 - [ ] 真机闭环：编译 → 安装 → `aa force-stop` → `aa start` → 观察（见 `docs/development.md`）
@@ -210,6 +213,7 @@ sips -s format bmp /tmp/u1.jpeg --out /tmp/u1.bmp       # 纯 Python 解析 BMP�
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-12 | 新增第 8 处调用点：**阅读页 · 换源**（v1.1）。`mode: 'overlay'` + `sheetSize: 'large'` + `showHeader: false`（阅读页必须自绘头部：面板跟随日夜模式，标题栏的固定 `text_1` 在夜间不可读），内容组件 `components/SourceSwitchPanel.ets`，宿主 `pages/Reader.ets`。§2 表与 §1.5 `showHeader` 约定同步；**样式与动效未动**（§1.1–§1.4 检查项均未受影响） |
 | 2026-10-06 | 「源状态」抽屉内容整改（真机验证）：去「搜索源名」输入框；关闭抽屉即复位为全部收起；分组按**置信度影响**排序（成功置顶，`penaltyFor` 与扣分同表）；展开后的书源行去色点（组头保留）；修「组头 3 源只展开 2 行」（ForEach key 用 URL 撞上同 URL 重复书源 → 改组内序号 key）。另：统计区改 `padding { top:16, bottom:24 }` 并在与列表之间加通栏分割线。**同步本文件**：`sheetSize` 实际使用为 6×`large` + 1×`fit`（阅读页设置）——「源状态」「选择来源」均改为 `large`（§1.6 / §2 原记 `fit` / `medium` 系陈旧），`medium` 暂无调用点 |
 | 2026-10-06 | 全部抽屉统一 overlay：`BookSourceManage` / `SearchResult` / `Listening` 去 `system` 改常驻挂载；面板改**常驻测量**（消除首开"弹出"）；补 §1.4 命中测试（修复页面不可滚动）；保留圆角阴影。基线 `6054929`，改动未提交 |
 | 2026-10-06 | 真机反馈修复：① §1.2.1 面板必须锚定**屏幕物理底边**（宿主 `expandSafeArea` + `Index` 打开期间隐藏底部 tab 栏，新增 `model/DrawerOverlay.ets` 计数单例）——修复「书源状态/书源选择从底部 menu 上方弹出」「书源校验从安全区上方弹出」；② §1.2.2 关闭后 `visibility(Hidden)` ——修复「未打开时底部残留阴影带（两端缺角）」 |

@@ -137,10 +137,6 @@ export struct BookDetailPage {
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .layoutWeight(1)
-            Text('（只读）')
-              .fontSize(12)
-              .fontColor($r('app.color.on_brand'))
-              .opacity(0.6)
           }
           .width('100%')
         }

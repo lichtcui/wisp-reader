@@ -112,11 +112,12 @@ rust/legado-core/    薄 NAPI 层（cdylib），依赖 legado-engine
 
 | 你要改什么 | 动哪些文件（先读） |
 |---|---|
-| 底部抽屉（样式/高度/打开方式） | **先读 [`specs/UI-SPEC.md`](./specs/UI-SPEC.md)**；`ui/common/BottomDrawer.ets`（唯一实现）+ 7 处调用点 |
+| 底部抽屉（样式/高度/打开方式） | **先读 [`specs/UI-SPEC.md`](./specs/UI-SPEC.md)**；`ui/common/BottomDrawer.ets`（唯一实现）+ 8 处调用点 |
 | 阅读页翻页 / 分页测算 / 排版 / 字号行距 | `pages/Reader.ets`（顶部有文件索引）、`common/ReaderTheme.ets`、`common/ChapterDataSource.ets` |
 | 听书 / 播放 / 锁屏卡片 / 后台 / 音色 | `model/TtsController.ets`（顶部有文件索引）、`pages/Listening.ets`、`pages/ListeningSettings.ets`、`model/RemoteTtsClient.ets`、`model/BookContent.ets`、`entryability/EntryAbility.ets`（退出释放）、`src/main/module.json5`（`backgroundModes`） |
 | 搜索结果页 / 来源抽屉 / 书源置信度 | `pages/SearchResult.ets`（顶部有文件索引）、`model/SourceConfidence.ets`、`common/SourceListDataSource.ets` |
 | 书架 / 编辑模式（多选删除）/ 进度 | `pages/Shelf.ets`、`model/ShelfRepository.ets`、`model/ShelfEditState.ets`、`model/BookRemoval.ets`、`components/BookCover.ets` |
+| 换源（候选检索 / 进度迁移 / `bookId` 替换） | `model/SourceSwitch.ets`（匹配 + 迁移 + 写库）、`components/SourceSwitchPanel.ets`（候选抽屉）、`pages/Reader.ets`（入口 + `applySwitch` / `resetContentState`）；决策 [`decisions.md`](./decisions.md) D16 |
 | 进度写归属（阅读 ↔ 听书互不覆盖） | `model/ProgressOwner.ets`（纯状态仲裁：`claim/release/canWrite/forget`）、`model/ShelfRepository.ets`（`saveProgress(p, writer)` 唯一写口）、`model/TtsController.ets`（`setPlaying` 起播 claim / 停播 release） |
 | 路由 / 页面注册 / 顶栏底栏 | `pages/Index.ets`、`common/Const.ets`（`ROUTE_*`） |
 | 书源导入 / 能力门禁（非文字/禁用/登录/JS） | `rust/legado-engine/src/gate.rs`、`pages/BookSourceManage.ets`、`model/SourceRepository.ets`、`src/main/resources/rawfile/bundled-sources.json` |

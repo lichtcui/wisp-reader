@@ -398,13 +398,14 @@ struct Index {
     } else if (name === ROUTE_READER) {
       NavDestination() {
         ReaderPage({
-          source: (param as DetailParam).source,
-          book: (param as DetailParam).book,
+          initialSource: (param as DetailParam).source,
+          initialBook: (param as DetailParam).book,
           onBack: () => {
             this.pathStack.pop();
             this.shelfRefresh = this.shelfRefresh + 1;
           },
-          onMore: () => this.openDetail((param as DetailParam).source, undefined, (param as DetailParam).book),
+          // 阅读页可能已经换过源，所以详情页用**它传回的**来源/书籍，而不是路由参数。
+          onMore: (source: BookSource, book: Book) => this.openDetail(source, undefined, book),
           onListen: (listen: ListenParam) => this.openListening(listen),
           onOpenListening: () => this.openListening()
         })
