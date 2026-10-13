@@ -34,7 +34,8 @@
   - 4.1.1 实测结果（2026-10-13，VPS `103.236.96.53`，worker `tts-job`） — L338
   - 4.2 阶段二（真机） — L363
 - 5. 风险 / 未决 — L368
-- 6. 附录：下一个 session 的启动 prompt — L379
+- 6. 附录：阶段一（服务端）的启动 prompt（**已完成，留作历史**） — L379
+- 7. 附录：阶段二（客户端接入）的启动 prompt — L421
 <!-- TOC:END -->
 
 ## 0. 一页速览
@@ -376,9 +377,10 @@ RestartSec=30
 6. v2ProPlus 的参考音频（微调包自带 3.38 s）**很短**，长文批量时若出现不稳定/漂移，备选 = 用 `refs/流萤/ref00.wav` 零样本。
 7. **法律/礼貌性**：阶段一是用户手动喂已抓取的正文，不新增爬取；选项 B（服务端自爬）仍需单独评估。
 
-## 6. 附录：下一个 session 的启动 prompt
+## 6. 附录：阶段一（服务端）的启动 prompt（**已完成，留作历史**）
 
 > 复制下面整段作为新 session 的第一条消息（**新 session 请用 `/new`**，别续旧会话）。
+> 阶段二（客户端接入）的 prompt 见 **§7**。
 
 ```
 【任务】实现 TTS 预生成阶段一（服务端缓存 + job worker），客户端一行不改。
@@ -415,4 +417,66 @@ VPS 只装了 grep（无 rg）；日志用 grep -a 过滤，别 tail（有上万
 收尾：文档同步（TTS-PREGEN-IMPL 状态、remote-tts-deploy 增节点、TASKS T-TTS-7 进度、progress.md）→
 make docs-toc && make check → 提交（docs/代码分开两个 commit，风格照 git log）。
 遇到与 IMPL 冲突的现实（比如某个 API 名字/字段不同），改 IMPL 并说明，别默默偏离。
+```
+
+## 7. 附录：阶段二（客户端接入）的启动 prompt
+
+> 复制下面整段作为新 session 的第一条消息（**新 session 请用 `/new`**）。
+
+```
+【任务】实现 TTS 预生成「阶段二」：App 侧接入章级缓存播放（**阶段一服务端已上线并 7/7 验收，别重复做**）。
+
+先读（按顺序，别通读全仓）：
+1. AGENTS.md（文档落位 / make 入口 / 一轮多工具 / 上下文卫生）
+2. docs/research/TTS-PREGEN-IMPL.md —— **§3 客户端设计（★ 本次施工图）**、§1 数据契约、§4.2 阶段二验收、§5 风险
+3. docs/remote-tts-deploy.md §9（服务端现状与运维命令：起 worker、看 stats、验收客户端）
+4. docs/bugfix/TASKS.md 的 T-TTS-7 条目（阶段一证据 + 阶段二待办）
+5. 代码（大文件先看顶部成员索引再 grep 取段）：model/TtsController.ets、model/RemoteTtsClient.ets、
+   model/ChapterCache.ets、model/BookContent.ets（段落数组的唯一来源）、pages/ListeningSettings.ets、
+   common/Const.ets、common/Prefs.ets
+
+已定决策（**不要重新论证**）：
+- 章级原子切换：缓存命中 → 整章只走缓存（不再发 /tts）；未命中 → 走现状实时 VITS；失败 → 系统 TTS。**同一章内绝不换声线。**
+- 预生成音色固定 '流萤'；POST /job 的 voice/engine 必须与 worker 配置一致（worker 只加载这一个，不匹配会被判失败）。
+  **key 用服务端返回的，不要自己拼**（拼错就是另一种缓存键 = 重新合成）。
+- 变速：缓存路径用新增常量 TTS_PREGEN_SPEED_SCALE = 1.0（GPT-SoVITS speed=1.0 实测 4.9 字/秒 ≈ 现在 0.75 档听感）；
+  **不要把 SPEED_SCALE=0.75 套到缓存路径**（那是给 VITS 0.85 语速标定的）。
+- 进度锚点：用 meta.chunks[].t0Ms/t1Ms 定位当前块，再按 chars 在块内按字数插值成段落号（块内 ±20% 可接受，不要为此改逐段合成）。
+- 听完一章 → DELETE /cache/<key>（服务端把 GET /audio 记为「已播放」，只有已播放项才会被淘汰；未播放项受保护）。
+- 服务端是**单 worker 单音色**、常驻 3.3 GB / 3.9 GB 机器：提交要克制（一次几章到几十章），不要并发轰炸。
+- 服务端 409 {"reason":"cache_full_wait_playback"} = 缓存满且剩余项都没播放 → UI 要给出「听完已缓存章节再继续」而不是报错失败。
+
+第 0 步（**先定这个，别直接写播放代码**）：整章音频怎么喂给 AudioRenderer。
+一章 WAV 是 25–90 MB，**不能整块读进 ArkTS 堆**（也不要用整块 ArrayBuffer）。
+建议：先 GET /audio/<key> 流式落到应用 cacheDir 临时文件，播放时按 ~几秒的 PCM 滑窗读盘喂渲染器，
+用完（换章/停止/听完）删临时文件；写完把选定方案与「为什么不用 AVPlayer 或整块内存」补进 IMPL §3.4。
+
+第一步：
+a) ChapterCache 增加 pregKey（**落盘字段 → 必须进 obfuscation keep 列表**，§3.5 三处同步，make check 会核对）
+b) ListeningSettings 加「预生成」分组 4 项（§3.2 的表：音色 / 提前章数 / 仅 Wi-Fi / 缓存优先；说明文案写实数
+   「每章约 1 小时算力、约 31 MB」+「未就绪章仍用实时音色，同章内不换声线」；只读令牌，别引入新配色）
+c) 书级入口「预生成后续 N 章」：逐章取**已有内容缓存里的段落数组**（不要重新切分，否则和 meta 的 p0/p1 对不上）
+   → 一次 POST /job 多章 → 5 s 轮询 GET /job/status?jobId= 的只读进度条 + 失败可见（title + err + 重试）
+d) TtsController 在 ensureRemoteSynthesized() 之前插缓存层（§3.4 四条分支）+ 变速 + 进度锚点 + 听完 DELETE
+e) **主机侧先跑仿真**（照 scripts/shelf-updater-sim.py 的路子：tsc + node + 打桩远端音频，
+   断言四条分支、章节锚点插值、404/409/失败兜底），再上真机
+
+真机验收（§4.2，走 skill harmony-device-run；设备当前未连接 → 先 hdc list targets -v，USB Offline 时 hdc kill -r）：
+make run → uitest dumpLayout 确认设置项渲染 → 点「预生成 N 章」看 job/status 轮询 →
+未就绪章走实时 VITS、就绪章整章缓存播放（抓 hilog 的 TtsController 分支日志，确认**同章内不换声线**）→
+拖动进度（Range）→ 段落高亮与音频位置对得上（±1 段内）→ 变速 → 听完一章后 VPS 上 cache/audio/<key> 消失。
+
+服务端：systemctl start tts-job（**默认 disabled**，跑完 systemctl stop；重启用前先 systemctl reset-failed）。
+验收客户端：python3 /root/tts/server/pregen_test.py stats|item|verify|delete（stdout 是给人看的，别改契约字段）。
+
+VPS：ssh -n -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -p 40860 -o BatchMode=yes root@103.236.96.53
+（4C / 3.9 G RAM + 6 G swap；线上 tts.service 端口 9880 / 对外 39680，缓存 /root/tts/cache/）
+注意：ssh 易挂 —— 后台任务要 setsid nohup 且完整重定向，轮询用短命令；VPS 只装了 grep（无 rg），日志用 grep -a（有上万字符的单行）。
+
+实测参考（**不要重新测基线**）：3000 字 ≈ 57 min 算力 / 9.8 min 音频 / 31 MB；8709 字 = 7 块 / 音频 1777.5 s / 合成 3.34 h / RTF 6.76；
+**块数由段边界决定、不是契约**（同章切 6 块或 7 块都正常，只保证 ≤1500 字/块）；并发听书时 worker 的块会被拖慢（线上优先，这是设计取舍）。
+
+收尾：文档同步（IMPL §3.4 定案 + 状态、TASKS T-TTS-7 阶段二进度、progress.md、PITFALLS 新坑）→
+make docs-toc && make check → 提交（代码/文档分开两个 commit，风格照 git log）。
+遇到与 IMPL 冲突的现实（API 字段 / AudioRenderer 能力），改 IMPL 并说明，别默默偏离。
 ```
