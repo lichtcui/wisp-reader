@@ -24,6 +24,9 @@ import { ReaderTheme } from '../common/ReaderTheme';
 import { importLocalTxt } from '../model/LocalBook';
 import { deleteBooks } from '../model/BookRemoval';
 import { ShelfEditState } from '../model/ShelfEditState';
+import { getBooks, initShelf } from '../model/ShelfRepository';
+import { loadSources } from '../model/SourceRepository';
+import { checkShelfUpdates, shelfProgressText, ShelfUpdateOutcome } from '../model/ShelfUpdater';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 import { BookDetailPage } from './BookDetail';
 import { BookSourceManagePage } from './BookSourceManage';
@@ -49,6 +52,9 @@ struct Index {
   @Local edit: ShelfEditState = new ShelfEditState();
   /** Guards the delete flow against a double tap on the dialog button. */
   @Local deleting: boolean = false;
+  /** 书架「更新」进行中（防重入 + 顶栏进度，T-SHELF-7）。 */
+  @Local shelfUpdating: boolean = false;
+  @Local shelfUpdateProgress: string = '';
   @Local pathStack: NavPathStack = new NavPathStack();
   private tabsController: TabsController = new TabsController();
 
@@ -104,6 +110,63 @@ struct Index {
       }
     } catch (err) {
       this.getUIContext().getPromptAction().showToast({ message: '导入失败，请选择 TXT 文本文件' });
+    }
+  }
+
+  /**
+   * 书架「更新」：批量查新章（T-SHELF-7）。
+   *
+   * 「检查中」由 `shelfUpdating` 驱动顶栏进度文案，文案由 `shelfProgressText()` 生成
+   * （无失败 `检查中 1/2`，有失败追 ` · 1 本未检查` —— 失败数不必等结束 toast 才知道）；
+   * 结束一次 toast（不逐本书弹）。
+   * 回写基线后刷新书架：`books.last_chapter_title` 目前没有 UI 读（书架标签走
+   * `progress.percent`），刷新只为让可能的行内角标/文案后续改动自然生效。
+   */
+  private async doShelfUpdate(): Promise<void> {
+    if (this.shelfUpdating) {
+      return;
+    }
+    const ctx: common.UIAbilityContext | undefined =
+      this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
+    if (ctx === undefined) {
+      return;
+    }
+    this.shelfUpdating = true;
+    this.shelfUpdateProgress = '检查中…';
+    let outcome: ShelfUpdateOutcome | undefined = undefined;
+    try {
+      await initShelf(ctx);
+      const books: Book[] = await getBooks();
+      const sources: BookSource[] = loadSources(ctx);
+      outcome = await checkShelfUpdates(books, sources, (done: number, total: number, failed: number): void => {
+        this.shelfUpdateProgress = shelfProgressText(done, total, failed);
+      });
+    } catch (err) {
+      outcome = undefined;
+    }
+    this.shelfUpdating = false;
+    this.shelfUpdateProgress = '';
+    if (outcome === undefined) {
+      this.getUIContext().getPromptAction().showToast({ message: '更新失败，请稍后重试' });
+      return;
+    }
+    if (outcome.total === 0) {
+      this.getUIContext().getPromptAction().showToast({ message: '书架里没有可检查的网络书籍' });
+      return;
+    }
+    this.shelfRefresh = this.shelfRefresh + 1;
+    const updated: number = outcome.updated.length;
+    const missed: number = outcome.failed + outcome.skipped;
+    if (updated > 0) {
+      this.getUIContext().getPromptAction().showToast({ message: updated.toString() + ' 本有新章节' });
+    } else if (outcome.checked === 0) {
+      this.getUIContext().getPromptAction().showToast({ message: '检查失败，请检查网络或书源' });
+    } else if (missed > 0) {
+      this.getUIContext().getPromptAction().showToast({
+        message: '没有发现新章节，' + missed.toString() + ' 本未检查'
+      });
+    } else {
+      this.getUIContext().getPromptAction().showToast({ message: '没有发现新章节' });
     }
   }
 
@@ -193,12 +256,47 @@ struct Index {
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.text_1'))
       Blank()
+      if (this.shelfUpdating) {
+        Text(this.shelfUpdateProgress)
+          .fontSize(13)
+          .fontColor($r('app.color.text_3'))
+          .maxLines(1)
+          .margin({ right: 8 })
+      }
+      this.shelfUpdateAction()
       MoreMenuButton({ items: this.shelfMenuItems() })
     }
     .width('100%')
     .height(52)
     .padding({ left: 16, right: 16 })
     .alignItems(VerticalAlign.Center)
+  }
+
+  /**
+   * 书架「更新」按钮（T-SHELF-7）。
+   *
+   * 0 参数 + 直读 `@Local`：与 `deleteAction()` 同形 —— `@Builder` 传 2 个及以上参数
+   * 就不会动态刷新（见本文件 §5.3）。热区 44 高、`brand` 令牌、`accessibilityText` 走
+   * [`specs/UI-SPEC.md`](../../../../../docs/specs/UI-SPEC.md) §1.7 的既有令牌，未新造样式。
+   */
+  @Builder
+  shelfUpdateAction() {
+    Row() {
+      Text('更新')
+        .fontSize(16)
+        .fontColor(this.shelfUpdating ? $r('app.color.text_3') : $r('app.color.brand'))
+        .maxLines(1)
+    }
+    .height(44)
+    .padding({ left: 8, right: 8 })
+    .justifyContent(FlexAlign.Center)
+    .accessibilityText(this.shelfUpdating ? '正在检查更新' : '更新全部书籍')
+    .accessibilityLevel('yes')
+    .onClick(() => {
+      if (!this.shelfUpdating) {
+        this.doShelfUpdate();
+      }
+    })
   }
 
   /** 编辑态顶栏：全选 / 已选择 X 本书 / 完成（左右等宽 76，保证中间真居中）。 */

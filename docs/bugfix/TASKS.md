@@ -1,3 +1,30 @@
+> **2026-10-13 第二十四次同步**：㉔ **T-SHELF-7 收尾小迭代（进行中进度行显示未检查数）**：进度回调由 `(done,total)` 扩为 `(done,total,failed)`（`failed` 是累计值），新导出纯函数 `shelfProgressText(done,total,failed)` —— 无失败 `检查中 1/2`、有失败 `检查中 1/2 · 1 本未检查`、无网络书 `检查中…`；`pages/Index.ets` 只把拼串改成调该函数（令牌/字号/热区/`accessibilityText` 未动）。
+> 主机仿真 `scripts/shelf-updater-sim.py` **25 → 30 断言 `ALL PASS`**（新增 4 条文案形态 + 1 条「失败数必须在**进行中**就上报」的确定性序列；顺带订正旧文档写的「27 断言」笔误）；`make hap` 通过。
+> **真机本轮未重跑（用户明确暂停设备工作）** ⇒ 新文案的真机截图证据待补；「有新章」分支真机不可造的结论不变（见下）。
+>
+> **2026-10-13 第二十三次同步**：㉓ **T-SHELF-7 真机验收完成（设备 `33Z0224424136564` · debug · `make run` 闭环）⇒ 置 `[x]`**。
+> 真机实证 12 项：进度文案 `检查中 0/2` → `1/2`；**`total = 2`（本地书《大唐：李世民求我造反》被正确排除）**；结束 toast `没有发现新章节，1 本未检查`；失败静默（《天堂向左 深圳往右》源站点已失效 ⇒ 计 `failed`、**基线保持空值不被建立、其余书不受影响**）；
+> **全程 DB 逐列零写入**（反复点击 / 注入 / 复跑后 `shelf.db` 与开始时 `diff` 无输出）；连点两次只跑一轮（`shelfUpdating` 守卫）；幂等（再点 → 同文案 + DB 不变）；编辑态顶栏 `"text":"更新"` 计数 0；**全失败分支 toast `检查失败，请检查网络或书源`**（停用 `bbiquge8` 及其同 URL 孪生 `笔趣阁8` ⇒ `checked = 0`）；随后把两个开关恢复启用并复跑，行为与注入前一致。
+> **「有新章」分支真机不可造（已证伪两条注入路径，勿再试）**：① 沙箱 DB 对 shell 只读（`touch` / `hdc file send` 均 `Permission denied`）⇒ 无法手工改基线；② App 内唯一写基线的路径（换源 `SourceSwitch.ets:206` / 加入书架 `BookDetail.ets:71`）写的是**同一个源的详情页值**，而「更新」比对的就是这个值 ⇒ 除非站点自然更章，否则必然相等。
+> 该分支当前只由主机仿真覆盖（`scripts/shelf-updater-sim.py` 的「基线前移 / 等价对齐不误报 / 幂等」三组）；**残留未验 = 真机上一次真实的 `upsertBook` 写库**（同一函数已被加入书架 / 换源 / 本地导入 4 处调用；且它抛错会被计 `failed`、出现在 toast 的「N 本未检查」里，不会静默）。
+> 顺带产出两条可复用技法（已进 [`PITFALLS.md`](../PITFALLS.md) 与 skill `harmony-device-run` §4）：**`uitest dumpLayout` 不导出系统 toast 窗口** ⇒ 读 toast 用 `uitest screenCap` 连拍 + 主机 `tesseract -l chi_sim`；**「停用某本书的源」不是可靠的失败注入**（内置集 `bbiquge8` / `笔趣阁8` 同指 `m.bbiquge8.net`）。
+> 设备侧另记：`hdc list targets -v` 显示 `USB Offline` 时 **`hdc kill -r` 能当场恢复**，裸 `hdc kill` 会把设备从列表里抹掉；本机 USB 链路自身会隔几分钟掉一次（表现：`file recv` 报 `need connect-key`）。
+>
+> **2026-10-13 第二十二次同步**：㉒ **T-SHELF-7（P2）书架「更新」代码已落地**（新 `model/ShelfUpdater.ets` + 书架顶栏入口，按方案 ① 零 schema 改动）。
+> 与立项方案不同的三个设计点（均为复核/实测后改，理由写在条目里）：**基线比较走 `cleanChapter` 归一化**（同一章在详情页 `第83章 今日无事`、搜索结果里 `最新：第83章 今日无事` ⇒ 直接比字符串会把没更新的书报成有新章）、
+> **无基线时静默建基线**（没有可比对的信息时报「有新章」是纯误报）、**单本超时 6s → 15s**（`bookInfo` 在 NAPI 上**没有 timeout 参数**，只有 reqwest 客户端 15s 硬上限 ⇒ 这条 ArkTS 侧竞速是它唯一护栏，必须容得下 search + bookInfo 两次请求）。
+> 主机侧新增 `scripts/shelf-updater-sim.py`：从**真源码机械切片** + 只打桩 3 个外部依赖（引擎/DB/本地书判定）→ `tsc` + `node`，**27 条断言全通过**（含并发上限 3 / 预算耗尽 / 单本 15s 超时护栏 15002ms）。
+> ⚠️ 本节当时的「真机验收未做」**已由同日 ㉓ 关闭**（条目已置 `[x]`，证据见该条目「验证」③④）；本节其余结论（三个设计点 + 主机仿真）仍然有效。
+>
+> **2026-10-13 第二十一次同步**：㉑ 登记并修复 **T-SWITCH-1（P1）换源：候选被静默丢掉 + 每轮白等 13 源**（主机侧 + **真机均已完成**）；同日按用户需求立项 **T-SHELF-7（P2）书架「更新」：批量检查在架书籍是否有新章节**（代码未开工，方案与已知坑已写进条目）；
+> 同日按用户提问**复核 5 层缓存**（抽屉 30min 候选 / 预热 10min / TOC 6h / 正文 URL 键 / 书架标签）→ 结论 **A/C/D 与「读到末尾自动重爬」全部决定不改**，两条已知残留（末章「下一章」静默、< 6h 看不到刚更的章）写入 **T-SHELF-6 后续评估**。
+> 真机「《剑来》换源只有 1 个候选」的根因**不是书源太少**，而是 `isSameBook` 比作者时没削页面标签（`normalizeKey` 只删空白）：
+> `probe search 剑来 --json`（13 源 / 560 条）同名 8 条里 `小说` / `黑炎小说` 的 author 是 `作者：烽火戏诸侯` → 被当「另一本书」静默丢掉（命中 **6/8 → 8/8**）。
+> 同批四个改动：**同域去重**（`m.bbiquge8.net` 两条书源 + 行级按域名，5 行 → 7 行）、**检索预算**（单源超时 10s→6s / 全局派发 10s / 候选够 3 条收尾 + 「继续检索」）、
+> **30 分钟会话缓存**（重开抽屉直接上屏 + 「重新检索」）、**换源预热**（新 `model/SourcePrefetch.ets`：行上屏即爬最靠前 2 个候选的详情 + 目录，切换 7s → 命中即省；只放内存）。
+> 主机侧验证：`probe search 剑来 --json` 逐条对帐 + `make hap` 通过。**真机复验（2026-10-13）通过**：候选 **2 → 7 行**、3s 上屏、`已检索 12/12`、预热命中切换 **≤1s**、重开抽屉秒上屏并正确标记当前源；
+> 真机另逼出两个主机侧看不到的问题并一并修掉：① 候选行 `ForEach` 的 key 不含 `chapter` → 预热回填的「最新：xxx」**不上屏**；② 「重新检索」被自己的会话缓存原样命中 → **点了没反应**。
+>
 > **2026-10-12 第二十次同步**：⑳ 登记 **T-TTS-7（P1）TTS 预生成**（服务端内容寻址缓存 + job worker）—— 用户已拍板**立项**：
 > 默认引擎 **GPT-SoVITS v2ProPlus（流萤微调）**、缓存 **WAV 直出 + 严格淘汰**、素材**先手动喂**（客户端入口后置）。
 > 当日实测（同机同文本）：整章 8741 字 = 6 块 / 音频 1802.5 s / 合成 9992.4 s / **RTF 5.57** / 常驻 **3.29 GB** ⇒ 一章 3000 字 ≈ **57 min 算力 / 31 MB**，
@@ -159,6 +186,16 @@
   - 验证（2026-10-07 真机 `33Z0224424136564`，debug 包 + `uitest dumpLayout`）：基线（28 章 / 书架「已读到最新章」）→ ① TTL=0 → 日志 `toc refreshed 28 → 29 chapters` → ② 插桩伪造新章：目录「· 29 章」+ 末行 `【临时插桩】新章`，阅读位置不动 → ③ 返回书架 `28章/29章`（**自愈**）→ ④ TTL=2000ms（正值 + 时间流逝）→ 日志 `toc refresh: 28 chapters (cached 28)` → ⑤ 还原 6h：无任何 toc 日志（新鲜期不重爬）、目录回 28 章 → ⑥ 正序/倒序仍生效 → ⑦ 应用侧 0 条 error → ⑧ `rg TEMP` 无残留、沙箱 toc 缓存未插桩污染（伪造章在 `putCachedToc` 之后只进内存）。
   - 证据：`common/Const.ets`、`model/TocCache.ets`、`pages/Reader.ets`（`loadToc`/`refreshToc`/`tocSession`/`buildTocItems`）；完整表见 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §13；`make check` / `make doctor` 均 ✓。
   - 未覆盖：release 包；「源返回不完整目录」未构造真实场景（仅代码守卫）；6h 未长跑（只验 TTL = 0 / 2s / 6h 三档）。
+  - **后续评估（2026-10-13，按用户提问「缓存还需要改吗」复核全部 5 层缓存 → 结论：都不改）**：
+    ① 换源写盘刷新新鲜期（原选项 A）**不改** —— `switchSource` 写进去的目录就是 ≤10 min 的预热结果（超 TTL 即走网络新爬），「刚查过 → 6h 不查」与正常打开书**语义一致**，残余风险只有那 10 分钟窗口；
+    ② 抽屉 30 min 候选缓存（原选项 C）**不改** —— 只影响「最新：xxx」这个**选源参考**信息，命中时静默改写会让行文案跳变 + 请求翻倍，要准确时有「重新检索」；
+    ③ 启动后排查书架（原选项 D）**不改** —— 已由 T-SHELF-7（手动「更新」，用户选定）取代；
+    ④ 「打开书就重爬」（原选项 B 原样）**不改**（每次打开都爬目录的请求量不划算，且 `Const.ets:126-129` 已记录 6h 是刻意折中）；其精确版「**读到末尾才重爬**」经用户 2026-10-13 明确决定**也不改**（同时选定：若将来修，**只提示不跳转**）。
+  - **已知残留（2026-10-13 用户确认接受，暂不修）**：
+    ① **读到缓存目录最后一章后再点「下一章」/ 翻过最后一页是彻底静默的** —— `Reader.nextChapter` → `nextReadable()` 返回 `-1` → `loadChapter(-1)` → `isReadable` 为假**直接 return**（无 toast、无刷新、无任何反馈），证据 `pages/Reader.ets:368-375` / `471-474`；
+    ② 同一天内第二次打开且间隔 < 6h 时，看不到这期间刚更新的章（要等到下一次超过 6h 的打开）。
+    将来若要修，落点即上述 ① 处：`nextReadable() === -1` 时按限流窗口（建议 10–30 min）复用 `Reader.refreshToc` 重爬，有新章**只 toast「已更新 N 章」、不自动跳转**；无新章 toast「已是最新章」。
+    两个同源限制：`refreshToc` **只在章数变化时**采纳目录；听书期间 `TtsController` 持有开启听书那刻的 `chapters` 引用（注释已写明），刷新对 TTS 不生效。
 - [x] **T-SHELF-4（真机）长按手势被静默丢弃**：`Shelf.ets` 按计划 §8 S1-3e 写成 helper 返回 gesture（`longPressToEdit(entry): GestureType`）+ `.gesture(this.longPressToEdit(entry))` → **真机长按从不触发**（编译无错、无告警）。
   - 证据（转译产物）：`entry/build/.../esmodule/debug/entry/src/main/ets/pages/Shelf.ts` 里该参数位退化为 `globalThis.Gesture.create(GesturePriority.Parallel); globalThis.Gesture.pop();`（**空手势**）；真机 `uinput -T -d x y -i 900 -u x y` 实测 Down/Up 间隔 935ms 但无任何 gesture 回调。
   - **处置（2026-10-07）**：改为内联手势字面量 `.parallelGesture(LongPressGesture({ repeat: false, duration: 500 }).onAction(() => this.onLongPress(entry)))`（grid/list 两分支同形），helper 改名 `onLongPress(entry): void`（只留 `longPressFired=true` + `edit.enter`）。理由：`.gesture()/.parallelGesture()` **只接受内联手势字面量**；且 `.gesture()` = `GesturePriority.Low` 会输给祖先识别器。
@@ -182,6 +219,62 @@
     ⑦ 搜索「剑来」107 条结果 + 5 个新下载封面全部解码成功（新下载路径未被守卫误杀）。
   - 未覆盖：release 包未复跑；跨启动不重下需要持久负标记 `cover_*.miss`，**故意不做**（会破坏 `CacheTrim` 的 `cover_` 前缀 + `.img` 后缀扫描 → 变成永不被清理的泄漏），接受「每次启动对该 URL 一次无效请求」；`ImageSource.release()` 未加（无法无截图验证渲染，风险大于收益）。
   - 证据：`rust/legado-engine/src/runtime.rs`（`cover_cache_path` / `looks_like_image` / `download_cover` / tests）、`rust/legado-engine/src/status.rs`、`entry/src/main/ets/components/BookCover.ets`；完整修复说明见 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §14。
+- [x] **T-SHELF-7（P2）书架「更新」：批量检查所有书籍是否有新章节 —— 2026-10-13 落地并真机验收**（进度 / 两个 toast 分支 / `total` 排除本地书 / 零误写 / 防重入 / 幂等 / 编辑态隐藏，共 12 项；**「有新章」分支真机不可造**，原因与证据见「验证」④；同日**收尾小迭代**：进行中进度行显示未检查数，见「验证」⑤）。
+  需求（用户 2026-10-13 原话：「书架中也需要一个更新的功能（更新所有书籍，查看是否有新章节）」）。
+  - **现状（为什么现在看不到）**：书架 `reload()` 只读 DB + 进度、**零网络 I/O**（`pages/Shelf.ets:44-79`，`@Monitor('refreshToken')` 也只是重读 DB）；
+    「最新：xxx」/「N章/M章」全靠 Reader 打开书时写入（`refreshToc` 重写 `progress.percent` 分母，见 T-SHELF-6）⇒ **不打开书就永远不动**。
+  - **已拍板（2026-10-13，用户选定）**：① 入口 = 书架顶栏标题右侧**独立「更新」按钮**（与 `MoreMenuButton` 并排，`pages/Index.ets:188 shelfNormalHeader`）——
+    顶栏改动要过 [`specs/UI-SPEC.md`](../specs/UI-SPEC.md)（间距 / 字号 / 颜色令牌 / 无障碍 `accessibilityText`）；
+    ② 探测深度 = **只查详情 `bookInfo`**（立项时以为 1 请求/书，实际因书架行缺 `bookUrl` 变成 **2 请求/书**，见「实现」），**不爬目录**；③ 触发 = **仅手动**，不做启动自动检查 / 定时任务。
+  - **实现（2026-10-13）**：新 `model/ShelfUpdater.ets`（编排 + 两个导出的纯函数 `chapterKey(title)` / `hasNewChapter(baseline, latest)`）+ `pages/Index.ets` 顶栏入口。
+    每本书 = **2 请求**（`books` 表没有 `bookUrl`，`bookId` 是 `computeBookId` 哈希不可逆，`tocUrl` 在 7/13 个内置源里指的是目录页 ≠ 详情页）：
+    `bookEngine.search([source], book.name, {timeoutMs: 6000, concurrency: 1})` → 复用换源的 `isSameBook` 命中拿 `item.bookUrl` → `bookInfo(source, bookUrl)`；
+    章节名取详情页优先、回落搜索结果 `item.lastChapter`（与换源同口径）；与基线不同 ⇒ 记「有新章」+ `upsertBook` **前移基线**，相同 ⇒ 只计数。
+    常量：`SEARCH_TIMEOUT_MS = 6000`（与 T-SWITCH-1 单源超时对齐）、`BOOK_TIMEOUT_MS = 15000`、`CHECK_CONCURRENCY = 3`、`CHECK_BUDGET_MS = 90000`；
+    返回 `ShelfUpdateOutcome { total, checked, failed, skipped, updated: Book[] }`，进度回调 = 起始 `(0,N,0)` + 每本结束一次 `(done,N,failed)`（第三个参数是**累计**失败数，2026-10-13 收尾小迭代加的，供进行中文案）。
+    UI：入口 `shelfUpdateAction()`（`@Builder` **0 参数直读 `@Local`**，与 `deleteAction()` 同形——本文件 §5.3：`@Builder` 传 2+ 参数不动态刷新）插在 `shelfNormalHeader()` 的 `Blank()` 与 `MoreMenuButton` 之间（编辑态不显示）；
+    「更新」用 `brand` 令牌 + 44 热区 + `accessibilityText`，进行中显示 `shelfProgressText(done,total,failed)`（无失败 `检查中 1/2`，有失败 `检查中 1/2 · 1 本未检查`，无网络书 `检查中…`；实现放在 `ShelfUpdater.ets` 的**导出纯函数**里，好让主机仿真能断言字符串）并防重入；结束 toast：`N 本有新章节` / `没有发现新章节` / `没有发现新章节，N 本未检查` / `检查失败，请检查网络或书源` / `书架里没有可检查的网络书籍` / `更新失败，请稍后重试`。
+  - **与立项方案不同的三个设计点（复核/实测后改，勿改回去）**：
+    ① **基线比较必须走 `cleanChapter` 归一化**，不能直接比字符串：同一本书的同一章在不同位置写法不同——详情页 `第83章 今日无事`、搜索结果/换源 `最新：第83章 今日无事`。
+       直接比会把**没更新**的书报成有新章；归一化后**相等但原串不同**时**静默对齐**基线（不回显「有新章」），让下次比较退化成纯字符串相等 ⇒ 幂等。
+    ② **无基线（`last_chapter_title` 为空）时不当「有新章」**，而是静默写入当前值**建基线**：否则加书后第一次更新会把**整架书**报成有新章（立项时想的「首轮只提示不落标」同样不落标，但没有基线 ⇒ 每次点击都重复误报，更糟）。
+       **保留的已知代价**：加入书架后到第一次更新之间章节变过的书，基线还停在加入那天 ⇒ 会被报成有新章，写一次后即准。
+    ③ **单本超时 6s → 15s**：`bookInfo` 在 NAPI 上**没有 timeout 参数**（只有 reqwest 客户端的 15s 硬上限），故障源可能一直挂着 ⇒ 这条 ArkTS 侧 `Promise` 竞速是它**唯一**的护栏；
+       而一次 6s 的整链上限会让「搜索正好用满 6s」的书连 `bookInfo` 都发不出去。搜索那一步另有 6s 超时参数（Rust 侧 clamp 到 [3s, 20s]）。
+    **未动的**：不加 `book_url` 列（方案 ②：幂等 ALTER + 3 个写入点 + 存量回填，且 `initShelf` 没有 migration 机制），继续复用 `books.last_chapter_title` 当基线（它只在「加入书架」与「换源」时写入、Reader 的后台重爬不写、全仓无 UI 读它）。
+  - **失败语义**：搜索失败 / 没匹配到同一本书 / `bookInfo` 失败 / 单本超时 / 结果无章节名 / 书源缺失或停用 ⇒ 一律计 `failed`，**不写库、不动基线、不影响其余书**；本地书直接排除（不计入 `total`）；
+    整体预算耗尽而未开始的书计 `skipped`（不改基线，下次点击继续）。`updated === 0 && checked === 0`（且 `total > 0`）才提示「检查失败」。
+  - **刻意不做**：连目录一起刷（长书每本 10+ 请求，《剑来》13 页 ⇒ 20 本可能上百请求）；每次更新顺带修正「N章/M章」的分母（交给打开书时的 6h 新鲜期逻辑自愈，T-SHELF-6）；后台/定时自动检查。
+  - **验证（2026-10-13）**：
+    ① **主机侧仿真（已做，可复跑）**：新增 `scripts/shelf-updater-sim.py` —— 从真源码**机械切片**（`common/Format.ets` 的 `AUTHOR_LABELS`/`CHAPTER_LABELS`/`stripLabel`/`cleanAuthor`/`cleanChapter`
+       + `model/ShelfUpdater.ets` 去掉 `import` 行的**全文**）+ 只打桩 3 个外部依赖（`bookEngine` / `upsertBook` / `isLocalBook`）→ DevEco 自带 `tsc` 编 JS → `node` 跑断言。
+       **被测的是真编排 + 真 `chapterKey`**，没有重写被验逻辑。**断言全通过**（`ALL PASS` / exit 0）：计数（`total`/`checked`/`failed`/`skipped`/`updated`）、本地书排除、基线前移、
+       **等价对齐不误报**、**幂等**（连点第二次 0 新章 + 0 写库）、并发上限 ≤ 3（打桩计数 `maxInFlight`）、进度序列（首尾 `0/N`→`N/N`、条数 = N+1）、预算耗尽（deadline 在过去 ⇒ 全部 `skipped`、0 请求 0 写库）、
+       书源缺失/停用（`failed`、0 写库）、**单本 15s 超时护栏**（一本打桩 16s 不返回 ⇒ 该本 `failed`、其余书 `checked`、整体 **15002ms** 返回）。样本字符串取自 `make probe` 真实输出（`第83章 今日无事` vs `最新：第83章 今日无事`）。
+       **计数（2026-10-13 收尾小迭代后）**：**30 条**（旧的「27 条」是文档笔误，改前实测 25 条）—— 新增 4 条 `shelfProgressText` 文案形态 + 1 条「失败数必须在**进行中**就上报」的确定性序列（一本搜索 0ms 即败、一本 150ms 才回 ⇒ 期望序列 `检查中 0/2` → `检查中 1/2 · 1 本未检查` → `检查中 2/2 · 1 本未检查`）。
+       复跑：`python3 scripts/shelf-updater-sim.py`。
+    ② **构建/门禁（已做）**：`make hap` 通过（`make doctor` 显示 signed HAP 10-13 09:25 晚于全部 ets 源）+ `make check` 全绿（TOC / 相对链接 / 混淆 keep：145 名字覆盖全部 JSON 字段，无遗漏；本轮未新增跨 NAPI 或落盘 JSON 字段）。
+    ③ **真机验收（2026-10-13 · 设备 `33Z0224424136564` · debug · `make run` 闭环，12 项全部符合预期）**：
+       a) **进度 + 本地书排除**：点顶栏「更新」后截图 OCR 得 `检查中 0/2` → `检查中 1/2`；**`total = 2` 而架上有 3 本** ⇒ 本地书《大唐：李世民求我造反》（`source_url = local://`）按设计不计入；
+       b) **无新章 + 失败静默**：结束 toast OCR = `没有发现新章节，1 本未检查`；《天堂向左 深圳往右》的源站点已失效 ⇒ 计 `failed`，其 `books.last_chapter_title` **保持空**（不误建基线），《剑来》行不受影响；
+       c) **零误写**：整轮反复点击（含失败注入、连点、复跑 6 次以上）后 `hdc file recv` 的 `shelf.db` 与会话开始时**逐列一致**（`select * from books` diff 无输出）；
+       d) **防重入**：`uitest uiInput click` 连点两次只出现**一轮**进度 + 一个 toast；
+       e) **幂等**：再次点击 ⇒ 同一文案、DB 不变；
+       f) **编辑态**：长按书架行进入多选后顶栏为 `全选 / 已选择 1 本书 / 完成`，`dumpLayout` 里 `"text":"更新"` **计数 0**；
+       g) **全失败分支**：停用 `bbiquge8` **及其同 URL 孪生** `笔趣阁8`（两者都指 `m.bbiquge8.net`）后点击 ⇒ 截图 OCR 得 `检查失败，请检查网络或书源`（`checked === 0` 分支）；停用源即时计失败（不崩、不写库）；随后把两个开关**恢复为启用**并复跑，行为与注入前一致。
+       **读 toast 的手段**：`uitest dumpLayout` **不导出系统 toast 窗口**（逐帧 dump 抓不到），改用 `hdc shell "uitest screenCap -p ..."` 连拍 + 主机 `tesseract -l chi_sim --psm 6` OCR 才拿到文案（`hilog` 里 `uitest/UiTestKit_Server: Capture event: toastShow` 可用于对时）。
+    ④ **「有新章」分支真机不可造（已证伪，勿再试）**：它需要「基线落后于源最新章」的初始状态，而两条注入路径都封死 ——
+       ① **沙箱 DB 只读**：`hdc shell "touch .../rdb/x"` 与 `hdc file send` 均 `Permission denied`（读得到、写不了）；
+       ② **App 内没有能造出旧基线的路径**：唯一写基线的两处是换源（`SourceSwitch.ets:206`，优先 `info.lastChapterTitle`）与加入书架（`BookDetail.ets:71`，写 `d.lastChapterTitle`）——写的都是**同一个源详情页的值**，而「更新」比对的就是这个值（`BookDetail.ets:297-298` 的「最新：」只是显示层前缀）⇒ 除非站点自己更章，否则必然相等。
+       该分支当前只有主机仿真覆盖（`shelf-updater-sim.py`：基线前移 / 等价对齐不误报 / 幂等 三组断言）；**残留未验 = 真机上一次真实的 `upsertBook` 写库**（同一个函数已被「加入书架 / 换源 / 本地导入」4 处调用，本身不是新代码；且它抛错会被计入 `failed` 并出现在 toast 的「N 本未检查」里，不会静默）。
+       若发布前必须真机见一次：**只能等站点自然更章**（把书留在架上，过一段时间点「更新」）；或做一次性调试版（临时让 `ShelfUpdater` 把基线写成带标记的值再点「更新」⇒ 可同时验到写库与归一化对齐，代价是污染该书基线一次，需自行权衡）。
+    ⑤ **收尾小迭代：进行中进度行显示未检查数（2026-10-13，主机侧已验证 / 真机未重跑）** —— 动机：检查中只显示 `检查中 done/total`，失败数要等结束 toast 才知道，而失败的书正是用户最想中途知道的（源失效）。
+       改法：进度回调加第三个参数（累计 `failed`）+ 新导出纯函数 `shelfProgressText(done,total,failed)`（`检查中 done/total`，`failed > 0` 时追 ` · N 本未检查`；`total = 0` 时 `检查中…`），`pages/Index.ets` 只把拼串换成调用它（13fp `text_3` / 无新令牌 / 热区与 `accessibilityText` 未动，见 [`specs/UI-SPEC.md`](../specs/UI-SPEC.md) §1.7）。
+       口径说明：进行中的 `N 本未检查` **只算已结束的失败书**（`failed`），不含 `skipped`（整体预算耗尽后没开始的书要等所有 lane 收尾才知道）；结束 toast 的 `N 本未检查` 仍是 `failed + skipped`，两者不冲突。
+       验证：`python3 scripts/shelf-updater-sim.py` **30 断言 `ALL PASS`** + `make hap` 通过；**真机未跑**（用户本轮暂停设备工作）⇒ 该文案的真机截图（`uitest screenCap` + `tesseract`）与宽度表现待补。
+  - 涉及文件：新 `model/ShelfUpdater.ets`、`pages/Index.ets`（顶栏入口 + 进度/结果反馈）、新 `scripts/shelf-updater-sim.py`（主机侧仿真）；`bookEngine.search` / `bookInfo`、`isSameBook`、`upsertBook`、`isLocalBook` 均复用既有实现。
+  - 未覆盖：「有新章」分支的真机写库（④，**结构性不可造**，仅主机仿真）；release 包未复跑（本轮无新增 JSON 契约 ⇒ 混淆面未变）；探测深度只到详情页（不爬目录，按决策不做）；书架行内角标（留待下一轮）；**收尾小迭代的进度文案真机未重跑**（⑤，2026-10-13 主机侧 30 断言覆盖字符串本身，设备侧只剩宽度/截断这一项）。
+  - 关联：换源会重置该书基线（`SourceSwitch` 写 `lastChapterTitle`）⇒ 换源后的书不会被误报，见 T-SWITCH-1。
 
 ## 搜索（Search）
 
@@ -247,6 +340,42 @@
   - 未覆盖：**设备侧复跑**（`make run` 后打开《剑来》：目录应 >1000 章、正文应一次拉全 3 页）——本轮设备离线（`hdc list targets` = `[Empty]`）；release 包未复跑（纯 Rust 改动，不涉混淆面）。
   - 未修（另一件事，已定性）：💯 连尚读书 `ruleBookInfo.tocUrl = text.目录@href` 在**现行站点**上本就无命中（目录页 HTML 里「目录」二字出现 **0 次**）⇒ 属源规则过期，与本次前缀修复无关（该源目录仍回退 `bookUrl`，可另立源规则更新任务）。
   - 证据：`rust/legado-engine/src/rule_dsl/parser.rs`、`rust/legado-engine/src/rule_dsl/html_extractor.rs`、[`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §17
+- [x] **T-SWITCH-1（P1）换源：候选被静默丢掉 + 每轮白等 13 源（2026-10-13，真机已验证）**：真机《剑来》换源只有 1 个候选，且每次打开都要等 13 源全跑完（进度行停在 `已检索 N/13`）。
+  主机侧 `probe search 剑来 --json`（13 个内置源 / 560 条）把症状拆成三个独立原因：
+  - **① 候选漏判（根因）**：`isSameBook` 用 `normalizeKey` 比作者，而 `normalizeKey` 只删空白、**不认页面标签** ——
+    同名 8 条里 `小说` / `黑炎小说` 的 `author` 是 `作者：烽火戏诸侯`，与书架的 `烽火戏诸侯` 不相等 → 被当「另一本书」**静默丢掉**。
+    修法：`作者：` / `作家：` / `最新章节：` 前缀清洗收敛到 `common/Format.ets` 的 `stripLabel` / `cleanAuthor` / `cleanChapter` **单点**
+    （`SearchResult` 里那份私有副本删除、改 import，避免两处分头漂移），`SourceSwitch.isSameBook` 比作者前先削。
+  - **② 同域重复**：`m.bbiquge8.net` 有两条书源（`bbiquge8` / `笔趣阁8`，`bookSourceUrl` 一字不差）——
+    `SourceRepository.dedupeByUrl` 只能吃完全同 URL 的；本轮补 `dedupeBySite`（域名 + 搜索模板）兜「同站两个入口」
+    （http/https、镜像首页等），候选项也按域名去重（同名 8 条 → 7 行）。
+  - **③ 等待时长**：单源超时 **10s → 6s**（13 源实测最慢 2.0s）；新增**全局派发预算 10s** 与**候选够 3 条即收尾**
+    （进度行写明原因，并给「继续检索」回头路 —— 提前收尾只是「不再等」，不是「不再要」）；候选结果**会话缓存 30 分钟**
+    （同一批书源 + 同一本书重开抽屉直接上屏，右侧给「重新检索」）。
+  - **④ 预热（新文件 `model/SourcePrefetch.ets`）**：行一上屏就预热最靠前 2 个候选的 `bookInfo` + `toc`，点「切换」时宿主直接命中
+    （原换源链路：`bookInfo` 1.1s + 目录爬取 5.9s = 7s）；其余候选只串行补一次 `bookInfo`，用来把行内文案从
+    「该源未提供最新章节」换成「最新：xxx」（原实现恒显占位，因为换源面板不像搜索结果页有详情缓存可回退）。
+    只放内存（**不写 `TocCache`**：没被选中的候选不留垃圾），`busy` 变 true（用户点了切换）即停派发 + 清预热队列。
+  - **⑤ 设备侧又逮到两个（主机侧静态看代码看不出来的）**：
+    - **异步回填的文案不刷新**：`ForEach` 按 key 复用子树，而候选行的 key 只含 `bookSourceUrl + 序号`；`fetchInfo` 回填时只换行内文案 → key 不变 →
+      **子树不重建**，行内恒显占位（黑炎小说 / 悠久小说 明明已拿到 `最新：第83章` 却不上屏）。修法：列表 `ForEach` 的 key 追加 chapter
+      （`row.key + '|' + row.chapter`），而 `SwitchRow.key` 字段本身保持稳定（预热回填要按它认行）——两者分工写进了 `SourceSwitchPanel` 的注释。
+    - **「重新检索」点了没反应**：`startSearch()` 无条件先试 `restoreCache()`，而用户刚打开面板时那份缓存还新鲜 → 重搜被缓存原样命中，
+      看起来像按钮失灵（行数 / 文案 / 「重新检索」全都没变）。修法：`startSearch(forceFresh = false)`，按钮走 `startSearch(true)` 绕过缓存。
+    - 顺手收口：「继续检索」在 `nextIndex >= sources.length`（12/12 已全部派发）时不再显示 —— 此时无可续，避免死按钮。
+  - 文件：`common/Format.ets`、`model/SourcePrefetch.ets`（新）、`model/SourceSwitch.ets`、`components/SourceSwitchPanel.ets`、`pages/SearchResult.ets`。
+  - 验证（2026-10-13 · 主机侧，已完成）：`probe search 剑来 --json` 同名 8 条 → 削前缀后**命中 8/8**（修复前 6/8，其中
+    `m.bbiquge8.net` 两条源被 `dedupeByUrl` 合成 1 ⇒ **修复前 5 行 / 修复后 7 行**）；`make hap` 通过。
+  - **验证（2026-10-13 · 真机，已完成）**：
+    - 候选从 **2 行 → 7 行**（13 个内置源 − 同域 1 = 12 源参与检索）；开抽屉 3s 时已上屏 6 行，进度行 `已检索 11-12/12 个书源 · 候选已够用`。
+    - 行内回填真的上屏了：`黑炎小说` / `悠久小说` / `玄幻阁` 从「该源未提供最新章节」→「最新：第83章 今日无事」；
+      `溜达小说` / `云中书库` 留占位**是对的**（`probe info` 复核：该源详情页本就没有最新章节节点）。
+    - 缓存：关抽屉再开 =「上次检索到的 7 个候选」秒上屏（含回填文案），当前源行仍正确标记；点「重新检索」确实重跑（行清空 → 重新累积）。
+    - 切换耗时：预热命中 **≤1s**（原链路 `bookInfo` 1.1s + 目录 5.9s = 7s）；`bbiquge8 ↔ 小说` 往返切换后书架进度 `104章/1308章` 未丢。
+    - 留一条未解释的观测（不阻塞收尾）：曾有一次从 `bbiquge8` 切到 `小说` 后重开抽屉，7 行**全无「当前」标记**（`currentSourceUrl` 不匹配任何行 URL）；
+      随后三次复现（含再切 `悠久小说` / 切回 `bbiquge8`）都正常、日志逐行 `eq=Y`，故本轮按一次性现象记录，复现时再看 `SourceSwitchPanel` 的 `@Monitor('runToken')` 与 `@Param currentSourceUrl` 的时序。
+  - **后续可选（未开工）**：当前源若本轮检索未命中（例：一次真机运行里 `bbiquge8` 单源瞬时超时，而主机 `probe` 同刻正常），抽屉里就不显示「我现在在哪」——
+    可考虑给当前源固定补一行占位（不可点，只标当前）。
 
 ## 听书（Listening / TTS）
 

@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""书架「更新」（T-SHELF-7）主机侧仿真：不上设备就跑通 `model/ShelfUpdater.ets` 的编排。
+
+为什么需要：这条路径的**真实依赖只有 3 个**（引擎 `bookEngine` / DB `upsertBook` / `isLocalBook`），
+其余全是纯逻辑。因为两个网络请求的形态（`search` → `isSameBook` 取 `bookUrl` → `bookInfo`）在
+设备上要 20+ 秒一轮、还要真书，主机侧用**打桩引擎**能把并发上限 / 整体预算 / 单本超时 /
+失败静默 / 基线前移 / 幂等这些分支一次跑完，秒级反馈。
+
+做法（**不重写被测逻辑**）：从真源码机械切片 ——
+  * `common/Format.ets` 的 `AUTHOR_LABELS`/`CHAPTER_LABELS`/`stripLabel`/`cleanAuthor`/`cleanChapter`
+  * `model/ShelfUpdater.ets` 去掉 `import` 行的**全文**
+前者保证 `chapterKey` 用的是真实现，后者保证被测的是真编排。再用 DevEco 自带的 `tsc`
+编到 JS、`node` 跑断言。改动 `ShelfUpdater.ets` 后直接重跑本脚本即可。
+
+用法：python3 scripts/shelf-updater-sim.py      （退出码 0 = 全部断言通过）
+覆盖：计数（checked/failed/skipped/updated）、本地书排除、基线前移与「等价对齐」不误报、
+      幂等（第二次点击 0 新章 + 0 写库）、并发上限 3、进度回调序列（含进行中失败数
+      `failed` 累计值与 `shelfProgressText()` 三种文案形态）、预算耗尽、书源缺失、
+      单本 15s 超时护栏（16s 卡死的书不影响其余书）。**未覆盖**：真机网络/真书/UI。
+"""
+import os, re, shutil, subprocess, sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WORK = '/tmp/shelf-updater-sim'
+TSC_CANDIDATES = [
+    '/Applications/DevEco-Studio.app/Contents/tools/hvigor/hvigor-ohos-plugin/node_modules/typescript/bin/tsc',
+    '/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript/bin/tsc',
+]
+
+STUBS = r"""// ── host stubs（只替换 3 个外部依赖：引擎 / DB / 本地书判定 + 2 个纯函数）──
+interface BookSource { bookSourceUrl: string; bookSourceName: string; enabled?: boolean; }
+interface Book { bookId: string; sourceUrl: string; name: string; author: string; lastChapterTitle: string; }
+interface BookSearchItem { name: string; author: string; bookUrl: string; lastChapter: string; }
+interface SearchResult { items: BookSearchItem[]; }
+
+interface Scenario { lastChapterTitle?: string; failSearch?: boolean; failInfo?: boolean; delayMs?: number; }
+let scenario: Record<string, Scenario> = {};
+let inFlight: number = 0;
+let maxInFlight: number = 0;
+let writes: string[] = [];
+let progress: string[] = [];
+const sleep = (ms: number): Promise<void> => new Promise<void>((r) => setTimeout(r, ms));
+
+const bookEngine = {
+  async search(_s: BookSource[], keyword: string, _o: { timeoutMs: number; concurrency: number }): Promise<SearchResult> {
+    const sc = scenario[keyword];
+    inFlight = inFlight + 1;
+    if (inFlight > maxInFlight) { maxInFlight = inFlight; }
+    await sleep(sc === undefined || sc.delayMs === undefined ? 0 : sc.delayMs);
+    inFlight = inFlight - 1;
+    if (sc !== undefined && sc.failSearch === true) { throw new Error('search failed'); }
+    return { items: [{ name: keyword, author: '作者：烽火戏诸侯', bookUrl: 'u:' + keyword,
+      lastChapter: sc === undefined || sc.lastChapterTitle === undefined ? '' : sc.lastChapterTitle }] };
+  },
+  async bookInfo(_s: BookSource, bookUrl: string): Promise<Book> {
+    const name = bookUrl.substring(2);
+    const sc = scenario[name];
+    await sleep(sc === undefined || sc.delayMs === undefined ? 0 : sc.delayMs);
+    if (sc !== undefined && sc.failInfo === true) { throw new Error('info failed'); }
+    return { bookId: name, sourceUrl: 'http://s', name: name, author: '烽火戏诸侯',
+      lastChapterTitle: sc === undefined || sc.lastChapterTitle === undefined ? '' : sc.lastChapterTitle };
+  }
+};
+const upsertBook = async (book: Book): Promise<void> => { writes.push(book.name + '=' + book.lastChapterTitle); };
+const isLocalBook = (book: Book): boolean => book.sourceUrl === 'local://';
+function isSameBook(book: Book, item: BookSearchItem): boolean {
+  if (book.name.trim() !== item.name.trim()) { return false; }
+  const a = cleanAuthor(book.author);
+  const b = cleanAuthor(item.author);
+  if (a.length === 0 || b.length === 0) { return true; }
+  return a === b;
+}
+
+
+"""
+
+TEST = r"""// ── 场景：4 本网络书 + 1 本本地书（并发 3）──
+function mk(id: string, name: string, last: string): Book {
+  return { bookId: id, sourceUrl: 'http://s', name: name, author: '烽火戏诸侯', lastChapterTitle: last };
+}
+let failures: number = 0;
+function check(label: string, got: unknown, want: unknown): void {
+  const ok = JSON.stringify(got) === JSON.stringify(want);
+  if (!ok) { failures = failures + 1; }
+  console.log((ok ? 'PASS ' : 'FAIL ') + label + ' -> ' + JSON.stringify(got) + (ok ? '' : ' (want ' + JSON.stringify(want) + ')'));
+}
+
+async function main(): Promise<void> {
+  scenario = {
+    '剑来': { lastChapterTitle: '第84章 明日无风', delayMs: 40 },     // 基线 第83章 → 有新章
+    '雪中': { lastChapterTitle: '第83章 今日无事', delayMs: 40 },     // 基线带「最新：」标签 → 等价，不算新章
+    '斗破': { failSearch: true, delayMs: 40 },                        // 搜索失败 → 静默
+    '凡人': { lastChapterTitle: '第83章 今日无事', delayMs: 40 }      // 无基线 → 静默建基线
+  };
+  const books: Book[] = [
+    mk('1', '剑来', '第83章 今日无事'),
+    mk('2', '雪中', '最新：第83章 今日无事'),
+    mk('3', '斗破', '第83章 今日无事'),
+    mk('4', '凡人', '')
+  ];
+  const local: Book = { bookId: '5', sourceUrl: 'local://', name: '本地书', author: 'x', lastChapterTitle: '第一章' };
+  books.push(local);
+
+  const out = await checkShelfUpdates(books, [{ bookSourceUrl: 'http://s', bookSourceName: 's' }],
+    (done: number, total: number, failed: number): void => { progress.push(done + '/' + total + ':' + failed); });
+  check('total（本地书已排除）', out.total, 4);
+  check('checked', out.checked, 3);
+  check('failed（搜索失败静默）', out.failed, 1);
+  check('skipped', out.skipped, 0);
+  check('updated 书名', out.updated.map((b: Book): string => b.name), ['剑来']);
+  // 雪中 那次是**设计行为**：原始串带「最新：」标签、归一化等价 ⇒ 静默对齐基线（不报新章）
+  check('回写基线（新章 + 无基线 + 等价对齐）', writes.sort(), ['凡人=第83章 今日无事', '剑来=第84章 明日无风', '雪中=第83章 今日无事']);
+  check('等价对齐不算新章', out.updated.map((b: Book): string => b.name).indexOf('雪中'), -1);
+  check('进度首尾（done 从 0 走到 total）', [progress[0], progress[progress.length - 1].split(':')[0]], ['0/4:0', '4/4']);
+  check('进度条数（1 次起始 + 每本 1 次）', progress.length, 5);
+  check('并发上限 ≤ 3', maxInFlight <= 3, true);
+  check('基线未被失败书改写（斗破）', books[2].lastChapterTitle, '第83章 今日无事');
+
+  // 进行中进度文案（UI 直接渲染的字符串）：三种形态
+  check('进度文案 无失败', shelfProgressText(1, 2, 0), '检查中 1/2');
+  check('进度文案 有失败', shelfProgressText(2, 3, 1), '检查中 2/3 · 1 本未检查');
+  check('进度文案 起始（0 本结束时不写 0 本未检查）', shelfProgressText(0, 2, 0), '检查中 0/2');
+  check('进度文案 无网络书', shelfProgressText(0, 0, 0), '检查中…');
+
+  // 幂等：把回写后的基线再查一次，必须 0 本有新章、0 次写库
+  writes = [];
+  const again = await checkShelfUpdates(books, [{ bookSourceUrl: 'http://s', bookSourceName: 's' }],
+    (): void => {});
+  check('第二次点击 updated', again.updated.length, 0);
+  check('第二次点击写库次数', writes.length, 0);
+
+  // 预算耗尽：deadline 已在过去 → 一条 lane 都不开始新书
+  const skippedOut = await checkShelfUpdates(books, [{ bookSourceUrl: 'http://s', bookSourceName: 's' }],
+    (): void => {}, -1);
+  check('预算耗尽 skipped', skippedOut.skipped, 4);
+  check('预算耗尽 checked', skippedOut.checked, 0);
+  check('预算耗尽 updated', skippedOut.updated.length, 0);
+
+  // 书源缺失/停用：记为失败，不发请求
+  writes = [];
+  const noSource = await checkShelfUpdates(books, [], (): void => {});
+  check('无书源 failed', noSource.failed, 4);
+  check('无书源 checked', noSource.checked, 0);
+  check('无书源写库次数', writes.length, 0);
+
+  // 本地书单：total=0，不报错
+  const onlyLocal = await checkShelfUpdates([local], [], (): void => {});
+  check('只有本地书 total', onlyLocal.total, 0);
+
+  // 失败数必须**进行中**就能上报（不必等结束 toast）：2 本，一本搜索 0ms 即败、
+  // 一本 150ms 才回 ⇒ 序列确定，且失败那本之后每一条都带着 failed=1。
+  // （放在这里是因为它要重写 `scenario`，而随后的超时护栏块本就会自己重设。）
+  scenario = {
+    '剑来': { lastChapterTitle: '第84章 明日无风', delayMs: 150 },
+    '斗破': { failSearch: true, delayMs: 0 }
+  };
+  const midProgress: string[] = [];
+  await checkShelfUpdates([mk('1', '剑来', '第83章 今日无事'), mk('3', '斗破', '第83章 今日无事')],
+    [{ bookSourceUrl: 'http://s', bookSourceName: 's' }],
+    (done: number, total: number, failed: number): void => {
+      midProgress.push(shelfProgressText(done, total, failed));
+    });
+  check('失败书之后每条进度都带未检查数', midProgress,
+    ['检查中 0/2', '检查中 1/2 · 1 本未检查', '检查中 2/2 · 1 本未检查']);
+
+  // 单本超时护栏：一本 16s 不返回（> BOOK_TIMEOUT_MS = 15s），其余照常
+  scenario = {
+    '剑来': { lastChapterTitle: '第84章 明日无风', delayMs: 16000 },
+    '雪中': { lastChapterTitle: '第83章 今日无事', delayMs: 10 }
+  };
+  writes = [];
+  const t0: number = Date.now();
+  const slow = await checkShelfUpdates([mk('1', '剑来', '第83章 今日无事'), mk('2', '雪中', '第83章 今日无事')],
+    [{ bookSourceUrl: 'http://s', bookSourceName: 's' }], (): void => {});
+  const elapsed: number = Date.now() - t0;
+  check('超时书 failed', slow.failed, 1);
+  check('超时书不影响其余书', slow.checked, 1);
+  check('超时书不报新章', slow.updated.length, 0);
+  check('超时书不写库、原文相同的书也不写库', writes.length, 0);
+  check('15s 护栏触发（14s < elapsed < 15.9s）', elapsed > 14000 && elapsed < 15900, true);
+  console.log('   elapsed=' + elapsed + 'ms');
+
+  console.log(failures === 0 ? 'ALL PASS' : 'FAILURES: ' + failures);
+  process.exit(failures === 0 ? 0 : 1);
+}
+main();
+"""
+
+
+def read(rel):
+    with open(os.path.join(ROOT, rel), encoding='utf-8') as f:
+        return f.read()
+
+
+def slice_between(text, a, b, label):
+    if a not in text or b not in text:
+        sys.exit('切片失败（%s）：%r / %r 找不到了，源码结构可能已改' % (label, a, b))
+    return text[text.index(a):text.index(b)]
+
+
+def main():
+    fmt = slice_between(read('entry/src/main/ets/common/Format.ets'),
+                        'export const AUTHOR_LABELS', 'export function formatBytes', 'Format.ets')
+    updater = read('entry/src/main/ets/model/ShelfUpdater.ets')
+    body = '\n'.join(l for l in updater.splitlines() if not l.startswith('import '))
+    if 'JSON.parse(' in body:
+        print('提示：ShelfUpdater.ets 现在含 JSON 往返，别忘了 entry/obfuscation-rules.txt')
+
+    shutil.rmtree(WORK, ignore_errors=True)
+    os.makedirs(WORK, exist_ok=True)
+    src = os.path.join(WORK, 'shelf.ts')
+    with open(src, 'w', encoding='utf-8') as f:
+        f.write(fmt + '\n' + STUBS + '\n' + body + '\n'
+                + 'declare const process: { exit(code?: number): void };\n' + TEST)
+
+    tsc = next((p for p in TSC_CANDIDATES if os.path.exists(p)), None)
+    if tsc is None:
+        sys.exit('找不到 DevEco 的 tsc，改 TSC_CANDIDATES')
+    out = os.path.join(WORK, 'out')
+    r = subprocess.run([tsc, '--target', 'es2020', '--module', 'commonjs', '--lib', 'es2020,dom',
+                        '--outDir', out, src], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(r.stdout + r.stderr)
+        sys.exit('tsc 失败')
+    print('编译通过 → ' + out, flush=True)
+    return subprocess.call(['node', os.path.join(out, 'shelf.js')])
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -63,6 +63,23 @@ $HDC shell "uitest uiInput click <x> <y>"              # bounds 是物理像素�
 $HDC shell "uitest uiInput inputText <x> <y> <text>"
 ```
 
+**读瞬时 UI（toast 等）**：`dumpLayout` **不导出系统 toast 窗口**，逐帧 dump 抓不到，别据此判定「没弹」。
+用截图 + 主机 OCR（本机已装 `chi_sim`）：
+
+```bash
+$HDC shell "uitest screenCap -p /data/local/tmp/w1.png"        # 连拍 6–10 张，每张 ~0.5s
+$HDC file recv /data/local/tmp/w1.png /tmp/w1.png
+tesseract /tmp/w1.png /tmp/w1 -l chi_sim --psm 6 && rg -N "检查中|新章|未检查" /tmp/w1.txt
+```
+
+**对时**（确认 toast 真的弹过、以及何时弹）：`hdc shell hilog -x | rg "Capture event: toastShow"`。
+
+其他要点：
+- `uitest uiInput` 支持 `click / doubleClick / longClick / swipe / drag / fling / keyEvent(Back|Home|Power) / inputText`；**长按是 `longClick`**（不是 `longPress`），`inputText` 不会触发 `onSubmit`（补 `keyEvent 2054`）。
+- **每次 `dumpLayout` 都要确认命令成功**：失败时 `/data/local/tmp/*.json` 会留着上一次的内容，看起来像「点了没反应 / 菜单没弹出」。
+- 想验「点击机制本身通不通」，先拿一个已知会变的控件（tab / 按钮）点一下做**对照**，再解释 null 结果；别把「太快没抓到」当成「功能没触发」。
+- 失败注入优先用 App 内可控开关（如书源管理里的 Toggle），但注意内置源可能有**同 URL 的孪生条目**（停一个不够，见 `docs/PITFALLS.md`）；本机实测**控制中心点飞行模式不生效**，别指望用它断网。
+
 ## 5. 汇报格式
 
 `改动文件 → 真机现象（截图 / 关键日志 ≤3 行）→ 结论 → 未验证项`。
