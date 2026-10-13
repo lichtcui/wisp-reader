@@ -121,7 +121,7 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   失败书不建基线且不影响其余书、**全程 `shelf.db` 逐列零写入**（反复点击/注入/复跑均如此）、连点两次只跑一轮、幂等、编辑态顶栏无入口 —— 共 12 项。
   **「有新章」分支真机不可造**：沙箱 DB 对 shell 只读（`touch` / `file send` 均 `Permission denied`），且 App 内写基线的两处（换源 / 加入书架）写的正是本功能要比对的**同一个源详情页值** ⇒ 只有主机仿真覆盖，证据与理由见 [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-SHELF-7「验证」③④。
   顺带产出两条可复用技法（**toast 读法 = `uitest screenCap` + 主机 `tesseract -l chi_sim`**，因为 `dumpLayout` 不导出 toast 窗口；**同 URL 孪生源让「停用书源」失效**）→ [`PITFALLS.md`](./PITFALLS.md) 与 skill `harmony-device-run` §4。
-  **同日收尾小迭代（2026-10-13）**：进行中进度行改为 `shelfProgressText(done,total,failed)` —— 无失败 `检查中 1/2`、有失败 `检查中 1/2 · 1 本未检查`（失败数不必等结束 toast）；主机仿真 **25 → 30 断言 `ALL PASS`** + `make hap` 通过；**真机未重跑**（本轮暂停设备工作）⇒ 该文案的真机截图证据待补。
+  **同日收尾小迭代（2026-10-13）**：进行中进度行改为 `shelfProgressText(done,total,failed)` —— 无失败 `检查中 1/2`、有失败 `检查中 1/2 · 1 本未检查`（失败数不必等结束 toast）；主机仿真 **25 → 30 断言 `ALL PASS`** + `make hap` 通过；**真机 2026-10-13 已验证**：两种形态都拍到（无失败 `检查中 1/2` dump 实测 `[658,190][869,241]`；有失败 `检查中 1/2 · 1 本未检查`，靠停用 `bbiquge8` + 孪生 `笔趣阁8` 注入），顶栏不截断（按实测字宽外推最长形态 ≈550px vs 可用 ≈710px，余量 ~80vp；该最长形态本身未真机出现）；同日**「有新章」分支也由一次性调试版真机走通**（`[T-MARK]` → 真写库 → 还原后 toast `1 本有新章节` → 再点幂等），详见 TASKS §T-SHELF-7「验证」④⑤。
 
 - **release 包首次真机冒烟（T-VER-6，2026-10-07）**：搜索 / 详情 / 阅读 / 听书 / 备份导出→清库→导入 / 重启复读 / 书源列表全通过，**0 条 JS 错误 + 0 崩溃，未发现混淆类缺陷**。
   逐项证据 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §「release 冒烟结果（T-VER-6）」、[`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §9；

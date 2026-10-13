@@ -69,7 +69,19 @@ $HDC shell "uitest uiInput inputText <x> <y> <text>"
 ```bash
 $HDC shell "uitest screenCap -p /data/local/tmp/w1.png"        # 连拍 6–10 张，每张 ~0.5s
 $HDC file recv /data/local/tmp/w1.png /tmp/w1.png
-tesseract /tmp/w1.png /tmp/w1 -l chi_sim --psm 6 && rg -N "检查中|新章|未检查" /tmp/w1.txt
+cd /tmp && tesseract w1.png w1 -l chi_sim --psm 6 && rg -N "检查中|新章|未检查" /tmp/w1.txt
+```
+
+- **`tesseract` 必须 `cd` 到图片目录用相对名**：leptonica 按 cwd 找文件，给绝对路径同样报 `fopenReadStream: failed to open locally`（仓库 cwd / `$HOME` cwd 都失败）。`screenCap` 的 RGBA PNG 能直读，不必转灰度。
+- **连拍要在「点击」之前就起**：toast 只活 ~2s，先点后拍常常只能拍到它消失后的画面。稳妥做法是后台起连拍循环（每张 ~0.45s，拍 20+ 张）再发 click，收工后统一 OCR。
+
+**核对 DB 写入（真机）**：RDB 跑 WAL，**只 recv 主库会漏掉未 checkpoint 的写**（本轮命中：主库 24KB 仍是旧值，420KB 的 `-wal` 里才是新值）⇒ 三件套一起拉，再 `sqlite3` 查：
+
+```bash
+DB=/data/app/el2/100/database/com.lichtcui.sourcereader/entry/rdb
+mkdir -p /tmp/db && cd /tmp/db
+for f in shelf.db shelf.db-wal shelf.db-shm; do $HDC file recv $DB/$f /tmp/db/$f; done
+sqlite3 /tmp/db/shelf.db "select name,last_chapter_title from books;"
 ```
 
 **对时**（确认 toast 真的弹过、以及何时弹）：`hdc shell hilog -x | rg "Capture event: toastShow"`。
@@ -77,6 +89,7 @@ tesseract /tmp/w1.png /tmp/w1 -l chi_sim --psm 6 && rg -N "检查中|新章|未�
 其他要点：
 - `uitest uiInput` 支持 `click / doubleClick / longClick / swipe / drag / fling / keyEvent(Back|Home|Power) / inputText`；**长按是 `longClick`**（不是 `longPress`），`inputText` 不会触发 `onSubmit`（补 `keyEvent 2054`）。
 - **每次 `dumpLayout` 都要确认命令成功**：失败时 `/data/local/tmp/*.json` 会留着上一次的内容，看起来像「点了没反应 / 菜单没弹出」。
+- **`dumpLayout` 卡死会连累后面所有 dump**（症状：突然每次都报 `Wait for subscribe uitest.broadcast.command.reply timeout`）——设备侧残留进程占着广播，`hdc shell "ps -ef \| grep 'uitest dumpLayout'"` 取 pid `kill -9` 即恢复。写循环脚本时加看门狗（>8s 未返回就 kill 进程 + 清残留），别让一次卡死污染整轮验证。
 - 想验「点击机制本身通不通」，先拿一个已知会变的控件（tab / 按钮）点一下做**对照**，再解释 null 结果；别把「太快没抓到」当成「功能没触发」。
 - 失败注入优先用 App 内可控开关（如书源管理里的 Toggle），但注意内置源可能有**同 URL 的孪生条目**（停一个不够，见 `docs/PITFALLS.md`）；本机实测**控制中心点飞行模式不生效**，别指望用它断网。
 

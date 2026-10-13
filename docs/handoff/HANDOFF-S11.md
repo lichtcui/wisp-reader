@@ -153,10 +153,10 @@
 - `make hap` 通过（`make doctor`：signed HAP 晚于全部 ets 源）；`make check` 全绿。
 - **真机（2026-10-13 · 设备 `33Z0224424136564` · debug · `make run` 闭环，12 项全过）**：`检查中 0/2` → `1/2`；**`total = 2`**（本地书《大唐》排除）；toast `没有发现新章节，1 本未检查`（《天堂向左》源已失效 ⇒ 计 `failed`、基线保持空、不影响《剑来》）；**全程 `shelf.db` 逐列零写入**；连点两次只跑一轮；再点幂等；编辑态顶栏 `"text":"更新"` 计数 0；
   失败注入（停用 `bbiquge8` **及其同 URL 孪生** `笔趣阁8`）⇒ toast `检查失败，请检查网络或书源`，停用源即时失败、不崩不写库，验完两个开关已恢复启用并复跑一致。
-- **唯一残留：「有新章」分支真机不可造**（不是漏验）——沙箱 DB 对 shell 只读（`touch` / `file send` → `Permission denied`），且 App 内写基线的两处（换源 / 加入书架）写的正是本功能要比对的同一个源详情页值 ⇒ 只有站点自然更章时才能在真机见到；该分支留主机仿真覆盖，详见 [`../bugfix/TASKS.md`](../bugfix/TASKS.md) §T-SHELF-7「验证」④。
-- 顺带产出两条可复用技法（已进 [`../PITFALLS.md`](../PITFALLS.md) 与 skill `harmony-device-run` §4）：**toast 读法 = `uitest screenCap` + 主机 `tesseract -l chi_sim`**（`dumpLayout` 不导出 toast 窗口）；**同 URL 孪生源让「停用书源」失效**。
-- **收尾小迭代（2026-10-13 晚，主机侧已验证 / 真机未重跑）**：进行中进度行改为 `shelfProgressText(done,total,failed)`（无失败 `检查中 1/2`，有失败 `检查中 1/2 · 1 本未检查`；进度回调加第三个参数 = **累计** `failed`，不含 `skipped`）。
-  仿真 **25 → 30 断言 `ALL PASS`** + `make hap` 通过；**真机本轮暂停**（用户明确要求）⇒ 设备侧只剩「新文案截图 + 630vp 顶栏最长形态（`检查中 20/20 · 19 本未检查`）是否截断」这一项待验。
+- **「有新章」分支真机已走通（2026-10-13 晚）**：两条常规注入路径仍不可用（沙箱 DB 对 shell 只读；App 内写基线的两处写的正是要比对的同一个源详情页值）⇒ 改用**一次性调试版**（只在 `ShelfUpdater.probeBook` 临时插 6 行，仅对《剑来》把落库值写成 `latest + ' [T-MARK]'`，比较逻辑不动）：先证真机 `upsertBook` 写库（DB 见 `[T-MARK]`），`git checkout` 还原后复跑得 toast `1 本有新章节` + 基线前移，再点一次幂等（整库逻辑 diff 为空），收尾无残留、书源 13/13。详见 [`../bugfix/TASKS.md`](../bugfix/TASKS.md) §T-SHELF-7「验证」④。
+- 顺带产出五条可复用技法（已进 [`../PITFALLS.md`](../PITFALLS.md) 与 skill `harmony-device-run` §4）：**toast 读法 = `uitest screenCap` 连拍 + 主机 `tesseract -l chi_sim`**（`dumpLayout` 不导出 toast 窗口；且 `tesseract` 必须 `cd` 到图片目录用相对名）、**同 URL 孪生源让「停用书源」失效**、**拉 DB 必须 `shelf.db`+`-wal`+`-shm` 三件套**（只 recv 主库会漏 WAL，差点误判「没写库」）、**`dumpLayout` 卡死会连累其后所有 dump**（设备侧残留进程 `kill -9` 即恢复）。
+- **收尾小迭代（2026-10-13，主机侧 30 断言 + 真机两形态均已验）**：进行中进度行改为 `shelfProgressText(done,total,failed)`（无失败 `检查中 1/2`，有失败 `检查中 1/2 · 1 本未检查`；进度回调加第三个参数 = **累计** `failed`，不含 `skipped`）。
+  仿真 **25 → 30 断言 `ALL PASS`** + `make hap` 通过；**真机已验**：两种形态都拍到（`检查中 1/2` dump 实测 `[658,190][869,241]`），顶栏不截断（外推最长形态余量 ~80vp，但该最长形态未真机出现）；残留只剩最长形态的真实渲染（架上网络书只有 2 本）。
 
 ### 7.4 工作树新增（本轮）
 
@@ -166,6 +166,6 @@
 
 ### 7.5 真机验收（2026-10-13 已完成）
 
-现场执行记录：`make run` EXIT=0 → 点顶栏「更新」→ `uitest screenCap` 连拍 + 主机 `tesseract -l chi_sim` OCR 读 toast、`dumpLayout` 读进度与顶栏 → `hdc file recv` 拉 `shelf.db` 比对
-→ 停用 `bbiquge8` + 其同 URL 孪生 `笔趣阁8` 造全失败分支（`检查失败，请检查网络或书源`）→ 恢复开关复跑一致。**12 项全过**，细节与唯一残留见 §7.3 与 [`../bugfix/TASKS.md`](../bugfix/TASKS.md) §T-SHELF-7「验证」③④。
-原「下一轮可粘贴的验收提示词」**已作废**（该分支在真机上不可造 —— 沙箱 DB 只读 + App 内无造旧基线的路径）。
+现场执行记录：`make run` EXIT=0 → 点顶栏「更新」→ `uitest screenCap` 连拍 + 主机 `tesseract -l chi_sim` OCR 读 toast、`dumpLayout` 读进度与顶栏 → `hdc file recv` 拉 `shelf.db`+`-wal`+`-shm` 三件套比对
+→ 停用 `bbiquge8` + 其同 URL 孪生 `笔趣阁8` 造全失败分支（`检查失败，请检查网络或书源`）→ 恢复开关复跑一致。**12 项全过**，细节与「有新章」分支的调试版走通见 §7.3 与 [`../bugfix/TASKS.md`](../bugfix/TASKS.md) §T-SHELF-7「验证」③④。
+原「下一轮可粘贴的验收提示词」**仍作废**（该分支在真机上不可用常规手段造 —— 沙箱 DB 只读 + App 内无造旧基线的路径）；需要时改用 §7.3 / TASKS ④ 的**一次性调试版配方**（跑完必须 `git checkout` 还原）。
