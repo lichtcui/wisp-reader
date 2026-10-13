@@ -13,6 +13,21 @@ Endpoints:
   GET  /health                   -> {"ok", "engine", "voices", "speed_scale", ...}
   POST /tts {text, voice, speed} -> audio/wav (24 kHz S16LE mono, RIFF header)
 
+Pre-generated chapter cache (T-TTS-7 phase 1, docs/research/TTS-PREGEN-IMPL.md). This
+process never synthesizes for it and never imports torch: it enqueues jobs, answers
+status, serves the cached WAVs and evicts. `job_worker.py` (separate systemd unit,
+GPT-SoVITS) does the synthesis.
+
+  POST   /job {items:[...]}      -> {"jobId", "items":[{"key","state"}]}; idempotent
+  GET    /job/status?jobId=|key= -> {"queued","running","done","failed","expired","items"}
+  GET    /audio/<key>            -> 200/206 WAV (Range), 404; marks the item played
+  DELETE /cache/<key>            -> 204 (client calls this after finishing a chapter)
+  GET    /cache/stats            -> {"files","bytes","maxBytes","freeBytes","protected",...}
+  POST   /cache/probe {paragraphs, voice, engine} -> {"key","state"}
+
+Cached audio is always 24 kHz S16LE mono at speed 1.0 (`/tts` is unchanged, and the
+SPEED_SCALE=0.75 loudness calibration does NOT apply to it -- the client changes rate).
+
 Why the lexicon matters (this was the "some characters sound like a Japanese person"
 bug): the checkpoint's own lexicon ships as two concatenated, codepoint-sorted
 passes -- pass 1 is a Chinese *single-character* table, pass 2 is a Japanese word
@@ -61,6 +76,7 @@ Env knobs:
 import io
 import logging
 import os
+import sys
 import threading
 import time
 import wave
@@ -68,8 +84,14 @@ import wave
 import numpy as np
 import sherpa_onnx as so
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
+from typing import List
+
+# `uvicorn app:app` runs with sys.path[0] == cwd, which is only incidentally the
+# directory holding this file; make the shared cache module importable regardless.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tts_cache as cache  # noqa: E402  (pregen cache layout/key/eviction, shared with job_worker.py)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("remote-tts")
@@ -131,6 +153,11 @@ BAND_EDGES = [(0, 120), (120, 200), (200, 300), (300, 600), (600, 1500), (1500, 
 _tts = None
 _refs = {}  # ZipVoice only: voice -> (samples float32 @ model rate, sr, ref_text)
 _lock = threading.Lock()  # OfflineTts.generate() is not thread-safe; serialize
+
+# Wall clock of the last real-time /tts activity. The pregen worker polls
+# /health.lastTtsAgeMs and yields (sleeps) while this is fresh, so a batch job never
+# steals the cores from someone who is actually listening right now (IMPL §2.4).
+_last_tts_at = 0.0
 
 
 # --- audio helpers (numpy only: the VPS has no scipy/ffmpeg) ----------------------
@@ -412,6 +439,7 @@ class TtsRequest(BaseModel):
 
 @app.get("/health")
 def health():
+    st = cache.stats() if os.path.isdir(cache.CACHE_DIR) else None
     return {
         "ok": True,
         "engine": ENGINE,
@@ -421,6 +449,10 @@ def health():
         "speed_scale": SPEED_SCALE,
         "post": POST_ENABLE,
         "eq": EQ_BANDS_RAW if POST_ENABLE else "",
+        # pregen additions (IMPL §1.4): lastTtsAgeMs is the worker's yield gate.
+        "lastTtsAgeMs": None if not _last_tts_at else int((time.time() - _last_tts_at) * 1000),
+        "cacheBytes": st["bytes"] if st else 0,
+        "queue": st["queue"] if st else {s: 0 for s in cache.QUEUE_STATES},
     }
 
 
@@ -468,6 +500,9 @@ def _synth_zipvoice(text, voice, speed):
 def synthesize(req: TtsRequest, request: Request):
     if API_KEY and request.headers.get("X-API-Key", "") != API_KEY:
         raise HTTPException(status_code=401, detail="unauthorized")
+    # Stamped at entry *and* at exit: a 46 s request must keep the pregen worker away
+    # for the whole time it runs, not just for 60 s counted from its completion.
+    _touch_tts()
 
     voice = req.voice
     if ENGINE == "vits":
@@ -516,4 +551,231 @@ def synthesize(req: TtsRequest, request: Request):
              t_synth - t0, out_sr, gain_db, raw_prof.get("rms", 0.0), out_rms)
     log.info("  before: %s", _fmt_profile(raw_prof))
     log.info("  after : %s", _fmt_profile(_profile(samples, out_sr)))
+    _touch_tts()
     return Response(content=buf.getvalue(), media_type="audio/wav")
+
+
+# --- pre-generated chapter cache (T-TTS-7 phase 1) --------------------------------
+# Contract, layout and eviction policy: docs/research/TTS-PREGEN-IMPL.md §1/§2.5/§2.6.
+# The heavy lifting lives in job_worker.py; everything here is bookkeeping + serving.
+
+
+def _touch_tts():
+    global _last_tts_at
+    _last_tts_at = time.time()
+
+
+class JobItem(BaseModel):
+    bookId: str = ""
+    chapterIndex: int = 0
+    title: str = ""
+    voice: str = "流萤"
+    engine: str = "gsv_v2proplus"
+    paragraphs: List[str] = []
+
+
+class JobRequest(BaseModel):
+    items: List[JobItem]
+
+
+class ProbeRequest(BaseModel):
+    paragraphs: List[str] = []
+    voice: str = "流萤"
+    engine: str = "gsv_v2proplus"
+
+
+def _auth(request):
+    if API_KEY and request.headers.get("X-API-Key", "") != API_KEY:
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+
+def _item_meta(key):
+    """Title/bookId/chapterIndex for status replies, without opening the WAV."""
+    for state in cache.QUEUE_STATES:
+        item = cache.read_json(cache.queue_path(key, state))
+        if item:
+            return item
+    return cache.read_json(cache.meta_path(key)) or {}
+
+
+def _status_entry(key, fallback=None):
+    state = cache.item_state(key)
+    if state == "unknown":
+        # The cache item vanished (evicted / files lost, e.g. a manual cleanup): report a
+        # terminal state, otherwise a polling client would wait forever for it.
+        state = "expired"
+    src = _item_meta(key) or (fallback or {})
+    out = {"key": key, "state": state, "title": src.get("title", ""),
+           "bookId": src.get("bookId", ""), "chapterIndex": src.get("chapterIndex", 0)}
+    if state == "failed":
+        out["err"] = (cache.read_json(cache.queue_path(key, "fail")) or {}).get("err", "")
+    if state == "ready":
+        meta = cache.read_json(cache.meta_path(key)) or {}
+        out["audioMs"] = meta.get("audioMs", 0)
+    return out
+
+
+@app.post("/job")
+def create_job(req: JobRequest, request: Request):
+    """Enqueue chapters. Idempotent: a key that is already ready/queued is not resubmitted."""
+    _auth(request)
+    cache.ensure_dirs()
+    if not req.items:
+        raise HTTPException(status_code=400, detail="no items")
+
+    job_id = cache.new_job_id()
+    items = []
+    todo = []
+    seen = set()
+    for it in req.items:
+        if it.engine not in cache.PREGEN_ENGINES:
+            raise HTTPException(status_code=400, detail="unknown engine %r" % it.engine)
+        if not cache.canonical_text(it.paragraphs):
+            raise HTTPException(status_code=400, detail="item without paragraphs")
+        key = cache.cache_key(it.paragraphs, it.voice, it.engine)
+        if key in seen:  # the same chapter twice in one POST
+            continue
+        seen.add(key)
+        meta = {"bookId": it.bookId, "chapterIndex": it.chapterIndex, "title": it.title}
+        state = cache.item_state(key)
+        if state in ("ready", "queued", "running"):
+            items.append({"key": key, "state": state, "title": it.title})
+            continue
+        todo.append((key, it, meta))
+
+    # Footprint gate (IMPL §2.6): free space by deleting played chapters; if everything
+    # left is protected, refuse instead of evicting the chapter the user is about to hear.
+    need = sum(cache.est_bytes(len(cache.canonical_text(it.paragraphs))) for _, it, _ in todo)
+    ev = cache.evict(need) if need else {"satisfied": True, "protected": 0, "freed": 0, "deleted": []}
+    if not ev["satisfied"]:
+        raise HTTPException(status_code=409, detail={"reason": "cache_full_wait_playback",
+                                                    "neededBytes": need, "protected": ev["protected"],
+                                                    "evicted": ev["deleted"]})
+
+    for key, it, meta in todo:
+        for stale in ("done", "fail"):  # tombstones whose audio was evicted or never written
+            cache.delete_item(key, stale)
+        item = {"key": key, "jobId": job_id, "voice": it.voice, "engine": it.engine,
+                "paragraphs": [p.strip() for p in it.paragraphs if p and p.strip()],
+                "chars": len(cache.canonical_text(it.paragraphs)), "attempts": 0,
+                "createdAt": cache.now_ms(), "lastPlayedAt": 0}
+        item.update(meta)
+        cache.write_json(cache.queue_path(key, "new"), item)
+        items.append({"key": key, "state": "queued", "title": it.title})
+
+    keys = [e["key"] for e in items]
+    cache.write_job(job_id, keys, items)
+    cache.prune_jobs()
+    log.info("job queued jobId=%s items=%d new=%d ready=%d freed=%dMB need=%dMB",
+             job_id, len(items), len(todo), len(items) - len(todo),
+             ev["freed"] // 1048576, need // 1048576)
+    return {"jobId": job_id, "items": items,
+            "evicted": ev["deleted"], "protected": ev["protected"]}
+
+
+@app.get("/job/status")
+def job_status(request: Request, jobId: str = "", key: str = ""):
+    _auth(request)
+    if key:
+        if not cache.valid_key(key):
+            raise HTTPException(status_code=400, detail="bad key")
+        keys, fallback = [key], {}
+    elif jobId:
+        rec = cache.read_job(jobId)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="unknown jobId")
+        keys = rec.get("keys", [])
+        fallback = {e["key"]: e for e in rec.get("items", [])}
+    else:
+        raise HTTPException(status_code=400, detail="need jobId or key")
+
+    entries = [_status_entry(k, fallback.get(k)) for k in keys]
+    counts = {"queued": 0, "running": 0, "done": 0, "failed": 0, "expired": 0}
+    for e in entries:
+        st = e["state"]
+        if st == "ready":
+            counts["done"] += 1
+        elif st in counts:
+            counts[st] += 1
+    return dict(counts, jobId=jobId or None, total=len(entries), items=entries)
+
+
+def _parse_range(header, size):
+    """Single-range `bytes=a-b` / `bytes=a-` / `bytes=-n`; None = unsupported/invalid."""
+    if not header:
+        return None
+    spec = header.strip().lower()
+    if not spec.startswith("bytes="):
+        return None
+    spec = spec[6:].split(",")[0].strip()
+    first, _, last = spec.partition("-")
+    try:
+        if first == "":
+            n = int(last)
+            if n <= 0:
+                return None
+            return max(0, size - n), size - 1
+        start = int(first)
+        end = int(last) if last else size - 1
+    except ValueError:
+        return None
+    end = min(end, size - 1)
+    if start >= size or start > end:
+        return None
+    return start, end
+
+
+@app.get("/audio/{key}")
+def get_audio(key: str, request: Request):
+    """Serve one cached chapter. Range is mandatory in practice: the player streams and
+    seeks, and a 30 min WAV is ~90 MB. A hit marks the item played (eviction priority)."""
+    _auth(request)
+    if not cache.valid_key(key):
+        raise HTTPException(status_code=400, detail="bad key")
+    path = cache.audio_path(key)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="not cached")
+    size = os.path.getsize(path)
+    cache.touch_played(key)
+    rng = _parse_range(request.headers.get("range"), size)
+    headers = {"Accept-Ranges": "bytes"}
+    if request.headers.get("range") and rng is None:
+        raise HTTPException(status_code=416, detail="bad range",
+                            headers={"Content-Range": "bytes */%d" % size, **headers})
+    if rng is None:
+        log.info("audio serve key=%s bytes=%d whole", key, size)
+        return FileResponse(path, media_type="audio/wav", headers=headers)
+    start, end = rng
+    with open(path, "rb") as f:
+        f.seek(start)
+        data = f.read(end - start + 1)
+    log.info("audio serve key=%s range=%d-%d/%d", key, start, end, size)
+    return Response(content=data, status_code=206, media_type="audio/wav",
+                    headers={"Content-Range": "bytes %d-%d/%d" % (start, end, size),
+                             "Content-Length": str(len(data)), **headers})
+
+
+@app.delete("/cache/{key}")
+def delete_cache(key: str, request: Request):
+    _auth(request)
+    if not cache.valid_key(key):
+        raise HTTPException(status_code=400, detail="bad key")
+    removed = cache.delete_cache(key)
+    log.info("cache delete key=%s removed=%s", key, removed)
+    return Response(status_code=204)
+
+
+@app.get("/cache/stats")
+def cache_stats(request: Request):
+    _auth(request)
+    return cache.stats()
+
+
+@app.post("/cache/probe")
+def cache_probe(req: ProbeRequest, request: Request):
+    """Phase 2 helper: a client that lost its stored key can ask what the server has."""
+    _auth(request)
+    if req.engine not in cache.PREGEN_ENGINES:
+        raise HTTPException(status_code=400, detail="unknown engine %r" % req.engine)
+    key = cache.cache_key(req.paragraphs, req.voice, req.engine)
+    return {"key": key, "state": cache.item_state(key)}

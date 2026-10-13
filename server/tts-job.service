@@ -1,0 +1,42 @@
+[Unit]
+Description=Source Reader TTS pre-generation worker (GPT-SoVITS v2ProPlus -> chapter cache)
+# Design + acceptance evidence: docs/research/TTS-PREGEN-IMPL.md
+After=network.target tts.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/tts/gsv
+ExecStart=/root/tts/gsv/venv/bin/python /root/tts/gsv/job_worker.py --engine gsv_v2proplus --voice 流萤 --api-base http://127.0.0.1:9880
+Restart=on-failure
+RestartSec=30
+
+# --- yield to the live VITS service (docs/research/TTS-PREGEN-IMPL.md §2.4) ---------
+# The worker also polls /health.lastTtsAgeMs and sleeps while someone is listening;
+# these knobs only decide who loses a CPU fight in the meantime.
+Nice=19
+CPUWeight=20
+IOSchedulingClass=idle
+
+# --- memory ------------------------------------------------------------------------
+# 3.9 GB box: this process is ~3.3 GB resident (HWM 3.65 GB measured on a real chapter).
+# The ceiling exists so a regression kills the *worker* rather than the live service, so
+# it must stay above the measured HWM (3.65 GB) -- 3800M leaves ~150 MB of headroom.
+MemoryMax=3800M
+Environment=MALLOC_ARENA_MAX=4
+
+# --- engine env (mirrors /root/tts/gsv/gsv_batch.py; see IMPL §2.3) ----------------
+# torch is pinned to 3 threads inside gsv_batch.py; CUDA must be explicitly empty,
+# OPEN_JTALK_DICT_DIR is needed by the v2 text frontend.
+Environment=OMP_NUM_THREADS=3
+Environment=MKL_NUM_THREADS=3
+Environment=CUDA_VISIBLE_DEVICES=
+Environment=OPEN_JTALK_DICT_DIR=/root/tts/gsv/open_jtalk_dic_utf_8-1.11
+
+# --- cache (IMPL §2.5/§2.6) --------------------------------------------------------
+Environment=CACHE_DIR=/root/tts/cache
+Environment=CACHE_MAX_BYTES=2G
+Environment=RESERVE_FREE=1.5G
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
