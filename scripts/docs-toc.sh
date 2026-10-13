@@ -34,6 +34,7 @@ FILES=(
   docs/research/TTS-ENGINE-COMPARISON.md
   docs/research/TTS-VOICE-SOURCES.md
   docs/research/TTS-PREGEN-PLAN.md
+  docs/research/TTS-PREGEN-IMPL.md
 )
 if [ "$#" -gt 0 ]; then
   FILES=("$@")
