@@ -7,32 +7,34 @@
 > ③ 素材来源 = **先手动喂（curl）**，客户端入口后置（阶段二）。本文 §6 是给**下一个 session** 的启动 prompt。
 
 <!-- TOC:BEGIN -->
-- 0. 一页速览 — L19
-- 1. 数据契约（先定这个，阶段一/二都依赖） — L46
-  - 1.1 缓存键（服务端算，客户端只存） — L48
-  - 1.2 `POST /job` 的 item（= 客户端能直接产出的东西） — L60
-  - 1.3 落盘布局 — L72
-  - 1.4 HTTP 接口表（除 `/health` 外都要 `X-API-Key`，与 `POST /tts` 同一把） — L97
-- 2. 服务端实现（阶段一，客户端零改动） — L110
-  - 2.1 进程架构 — L112
-  - 2.2 合成流程（worker） — L124
-  - 2.3 引擎与内存（`gsv_v2proplus`） — L138
-  - 2.4 让出 CPU / 内存（唯一会伤到线上的地方） — L149
-  - 2.5 磁盘预算（**先做这一步**，否则一跑就满） — L157
-  - 2.6 淘汰策略（**别把用户马上要听的那章挤掉**） — L174
-  - 2.7 QC 与失败处理 — L181
-  - 2.8 部署 — L187
-- 3. 客户端设计（阶段二，含「填写方式」） — L207
-  - 3.1 现有设置照旧 + 「两套音色」的取舍 — L209
-  - 3.2 新增设置项表（「填写方式」= 用户在设置页怎么填） — L219
-  - 3.3 入口与交互 — L237
-  - 3.4 播放路径改造（章级原子切换 + 变速 + 进度锚点） — L246
-  - 3.5 字段与 obfuscation 三处同步清单（**漏一个就是 release 读到 undefined**） — L262
-- 4. 验证 — L273
-  - 4.1 阶段一（主机侧 curl + 线上回归，**不上设备**） — L275
-  - 4.2 阶段二（真机） — L289
-- 5. 风险 / 未决 — L294
-- 6. 附录：下一个 session 的启动 prompt — L305
+- 0. 一页速览 — L40
+- 1. 数据契约（先定这个，阶段一/二都依赖） — L67
+  - 1.1 缓存键（服务端算，客户端只存） — L69
+  - 1.2 `POST /job` 的 item（= 客户端能直接产出的东西） — L81
+  - 1.3 落盘布局 — L93
+  - 1.4 HTTP 接口表（除 `/health` 外都要 `X-API-Key`，与 `POST /tts` 同一把） — L118
+- 2. 服务端实现（阶段一，客户端零改动） — L131
+  - 2.1 进程架构 — L133
+  - 2.2 合成流程（worker） — L145
+  - 2.3 引擎与内存（`gsv_v2proplus`） — L159
+  - 2.4 让出 CPU / 内存（唯一会伤到线上的地方） — L170
+  - 2.5 磁盘预算（**先做这一步**，否则一跑就满） — L178
+  - 2.6 淘汰策略（**别把用户马上要听的那章挤掉**） — L195
+  - 2.7 QC 与失败处理 — L202
+  - 2.8 部署（as-built） — L208
+  - 2.9 实现期与本文档的偏差（as-built，实现时改的，均已入库） — L235
+- 3. 客户端设计（阶段二，含「填写方式」） — L256
+  - 3.1 现有设置照旧 + 「两套音色」的取舍 — L258
+  - 3.2 新增设置项表（「填写方式」= 用户在设置页怎么填） — L268
+  - 3.3 入口与交互 — L286
+  - 3.4 播放路径改造（章级原子切换 + 变速 + 进度锚点） — L295
+  - 3.5 字段与 obfuscation 三处同步清单（**漏一个就是 release 读到 undefined**） — L311
+- 4. 验证 — L322
+  - 4.1 阶段一（主机侧 curl + 线上回归，**不上设备**） — L324
+  - 4.1.1 实测结果（2026-10-13，VPS `103.236.96.53`，worker `tts-job`） — L338
+  - 4.2 阶段二（真机） — L363
+- 5. 风险 / 未决 — L368
+- 6. 附录：下一个 session 的启动 prompt — L379
 <!-- TOC:END -->
 
 ## 0. 一页速览
@@ -203,25 +205,53 @@ tts-job.service（新，默认 disabled）   job_worker.py —— 独立进程�
 - 失败 → 该块重试 1 次（重试用同 seed）→ 仍失败 ⇒ 整章进 `queue/fail/`（含 `err`），**不留半章缓存**（章级原子性从生成端就守住）。
 - 阶段一不做 ASR 回比；复读检测可后续复用 `/root/tts/genshin-vits/loopdetect.py`。
 
-### 2.8 部署
+### 2.8 部署（as-built）
+
+仓库里就是最终版：`server/deploy.sh` 会把 `tts_cache.py` / `pregen_test.py` / `job_worker.py` 拷到位并装两个 unit
+（worker 装完会 `disable` 掉）；运维细节见 [`../remote-tts-deploy.md`](../remote-tts-deploy.md) §9。unit 关键项：
 
 ```ini
-# /etc/systemd/system/tts-job.service
+# /etc/systemd/system/tts-job.service（仓库 server/tts-job.service 为唯一实现）
 [Service]
 WorkingDirectory=/root/tts/gsv
 Environment=OMP_NUM_THREADS=3 CUDA_VISIBLE_DEVICES= CACHE_DIR=/root/tts/cache
-ExecStart=/root/tts/gsv/venv/bin/python /root/tts/gsv/job_worker.py --engine gsv_v2proplus --api-base http://127.0.0.1:9880
-Nice=19
+Environment=CACHE_MAX_BYTES=2G RESERVE_FREE=1.5G
+Environment=OPEN_JTALK_DICT_DIR=/root/tts/gsv/GPT_SoVITS/text/G2PWModel
+Environment=MALLOC_ARENA_MAX=4
+ExecStart=…/job_worker.py --engine gsv_v2proplus --voice 流萤 --api-base http://127.0.0.1:9880 --chunk-chars 1500
+Nice=19          # 线上优先
 CPUWeight=20
 IOSchedulingClass=idle
+MemoryMax=3800M  # 故意在实测 HWM 3638 MB 之上：真出事杀 worker 而不是杀线上
 Restart=on-failure
 RestartSec=30
 ```
 
-- 默认 **disabled**：`systemctl start tts-job` 才开跑（避免无人看管时空转/抢内存）；`journalctl -u tts-job -f` 看日志。
+- 默认 **disabled**（`Restart=on-failure` + `systemctl stop` 不会拉回；`kill -9` 会）：`systemctl start tts-job` 才开跑。
+- worker 启动自检 `SwapTotal ≥ 4096 MB`（当前 6.1 GB），否则直接拒绝启动 —— 不让内核去挑受害者。
 - `app.py` 的改动（小）：`/job`、`/job/status`、`/audio/{key}`、`DELETE /cache/{key}`、`/cache/stats`、`/cache/probe`、`/health` 增字段、`_last_tts_at`。
-  这些**不改 `/tts` 行为**，因此不触发「线上回归」——但改完必须真机跑一次听书（§4.1 第 3/7 项）。
-- 部署文档同步：`../remote-tts-deploy.md` 增一节点「预生成 worker」（阶段一实现后写）。
+  这些**不改 `/tts` 行为**（实测见 §4.1.1 #3/#7）：45 次并发探针全成功、`/health` <0.5 s、无 5xx。
+
+### 2.9 实现期与本文档的偏差（as-built，实现时改的，均已入库）
+
+1. **`gsv_batch.py` 加了 `if __name__ == "__main__":`**——它原来导入即跑 `main()`（自己重跑基准），不包住就没法被 worker `import`。
+   `python3 gsv_batch.py` 的手工行为不变。
+2. **seed 用推导而不是解析库 stdout**：`gsv_batch.synth_native()` 写死 `seed=-1`（调用方无参可传），而 GPT-SoVITS 的
+   `TTS.py` 在 `seed==-1` 时用 `random.randint()` 自选种子 ⇒ worker 在每个块前 `random.seed(int(key[:8],16)+i)`，
+   并用 `random.Random(同值).randint(0,2**32-1)` **预测**实际种子写进 meta。实测两次都吻合库自报的 `Set seed to …`。
+3. **引擎/音色不匹配的条目判失败**（而不是按 item 里的引擎/音色合）：worker 只服务一个 `(engine, voice)`（常驻一份 3.3 GB 权重），
+   串音色的错误音频是最坏的失败模式。
+4. **`stats()` 先 `ensure_dirs()`**：没跑过任何 job 时 `/cache/stats` 不能 500。
+5. **`unknown → expired`**：条目在 45 min 内被彻底删除后，轮询的客户端要能拿到终态。
+6. **`run/<key>.json` mtime 心跳**：worker 每块结束 `utime` 一次，所以 stale = **无进展** N 分钟，
+   而不是「开跑 N 分钟」——否则一个 1500 字块（~30 min）会被自己的回收器在跑批中途搬走。
+7. **超长段安全阀**：`chunk_paragraphs` 保持「绝不切断段」，但**单段 > `--chunk-chars`**（例如整章被当成一行发来）时
+   在**句末**切开（拿不到句末标点时才硬切），并在 meta 里标 `chunks[].split` / `splitBlocks` + 打 WARNING。
+   不做这个的话一张单行章节会变成一次 8741 字的 `run()` —— 就是 `cut3` 整章 OOM 的那个形状。
+8. **预告字节小偏差**：`est_bytes()` 按 4.4 字/秒估，实测 4.90 字/秒 ⇒ 8709 字章预告 81.4 MB、实落 85.3 MB（−5%）；
+   只用于容量门闸，不会写进文件。
+9. **块数由段边界决定**：逐段 greedy fill 到 ≤`--chunk-chars` ⇒ 每块丢掉半段填充余量，同一章按真实段数组切是 **7 块**、
+   按原始行切是 **6 块**。**块数不是契约**，只有「每块 ≤ `--chunk-chars`」是。
 
 ## 3. 客户端设计（阶段二，含「填写方式」）
 
@@ -304,6 +334,31 @@ RestartSec=30
 | 7 | 线上回归 | `tts.service` 未重启的前提下，真机听书 1 章（`§harmony-device-run`）+ `GET /health` 仍 0.5 s 内；`journalctl -u tts` 无 5xx |
 
 > 所有生成类验收都写明**墙钟预期**（RTF 5.6 ⇒ 1 h/章），不要用「等它跑完」当验收条件；`#1`/`#5`/`#6` 用 285 字样本即可。
+
+### 4.1.1 实测结果（2026-10-13，VPS `103.236.96.53`，worker `tts-job`）
+
+7 项 **全部执行并留证**（日志：`journalctl -u tts-job`、`/root/tts/r1_s*.log`、`/root/tts/yield_probe*.log`）。
+
+| # | 结论 | 实测证据 |
+|---|---|---|
+| 1 | **PASS** | 285 字（`/tmp/ab_text.txt`）→ `key=cb120d78078d6e34`，1 块，seed `127634260`（与库自报 `Set seed to 127634260` 一致）；`synth=320.7 s`、`RTF=5.03`；WAV `[24000,1,2]`、`sec=63.76`（在 64.8 ±5%）、`peak=-2.0 dBFS`、`rms=-18.0`、`clip=0.0%`、`3060524 B`；`meta.audioMs` 与实测时长差 **0.00%** |
+| 2 | **PASS** | 同一 item 再 `POST /job` → `200 ready`，同 key，`createdAt=1791851306388` 不变，`queue {new:0,run:0}` 不新增 |
+| 3 | **PASS** | worker 生成期间并发 `POST /tts`：共 45 次探针全部成功（1.2–13.8 s，基线 +0，无 5xx）；**门闸共打 25 次让位**，其中连续一段 **09:14:04 → 09:20:05（6 min）不 claim 任何新块**，最后两次 `lastTtsAgeMs=34518ms` / `49531ms` 仍在窗口内继续睡，直到 60 s 窗口过期才在 **09:20:20** 开工（`block 1/1 attempt=1 chars=299`）；反向也正确：探针已停 85 s 时**正常放行**（不打假让位）。让位不会丢任务：被压 6 min 的那项（`1f0f…`）最终 `done` + `VERDICT OK` |
+| 4 | **PASS（块数 7，见偏差 9）** | 8709 字 / 41 段 → **7 块**（1346/1456/1466/1329/1371/1392/343，均 ≤1500）；`audio=1777.5 s`、`synth=12025.4 s（3.34 h）`、`RTF=6.76`；`sum(chunks[].t1Ms)==audioMs`；钉的 `audioMs` 与实测文件差 **0.00%**；`peak=-1.51 dBFS`、`clip=0.0%`、`chars/sec of audio=4.90`；`VmHWM=3638 MB`；**VERDICT OK** |
+| 5 | **PASS** | `CACHE_MAX_BYTES=4M`：第 2 章完成时 `evicted 1 played item(s) freeing 2.9MB: ['cb12…']`（正是已播放的那份），新写的**未播放**项存活；`GET /audio/cb12…` → `404`；`stats files=1 bytes=3170924 protected=1`；新 item 再来 → `409 {"reason":"cache_full_wait_playback","neededBytes":2989800,"protected":1}`；同一请求打到生产 2G 实例 → `200 queued`（无假 409） |
+| 6 | **PASS** | `Range: bytes=0-63` → `206` + `content-range: bytes 0-63/3060524`；`bytes=1000-2000` → `206` len 1001；`kill -9` 中途 → 重启后 `reaped stale key=6941163fb8120842 age=14424s attempts=1 -> new/` → 重跑 `done`；`SIGTERM` → `finishing the current block, then releasing the item` + `interrupted after 1/1 blocks; releasing to new/`（`audio/` 无半成品） |
+| 7 | **PASS（主机侧）** | `tts.service` 未重启（`systemctl restart tts` 只发生过一次，在验收前）；`/health` 全程 <0.5 s；`journalctl -u tts` 无 5xx；验收 #3 的 45 次主机探针（与真机同一条 `POST /tts` 路线）全成功。**真机听书那一半未做**（阶段一是服务端，App 未接入预生成；该回归归入 §4.2 阶段二） |
+
+**与判据的偏差（都要当作「契约不是块数」的证据）**
+
+- #4 期望「6 块」，实测 **7 块**：块数只由 `--chunk-chars` 上限与**段边界**决定（§2.2 绝不切断段），而基准里的 6 块是
+  `gsv_batch._chunk_text` 按**原始行**切的。同一章节的正文按 ~250 字/段（真实客户端的段数组形状）切 → 每块丢掉半段的填充余量 → 7 块。
+  音频总量与基准一致（1777.5 s vs 1802.5 s，−1.4%，差在切缝数/切点）。
+- #3 的真机 `POST /tts` 耗时基线是 3–4 s（命中已加载的 VITS），并发探针**没有变慢**；但 worker 自己的块会被拖慢
+  （302 字块从 ~7 min 拉到 ~10 min，`RTF 5.03 → 10.04`）——这是设计取舍：**线上优先**。
+- #4 的 `RTF` 实测 6.76（判据 5.6）：本章 7 块的 `RTF` 在 6.7–9.5 之间波动（块间差 >40%），与基准
+  5.54 的差主要是机器噪声/swap 压力，不是口径变化——同一 `synth_native()`、同一 seed 推导、同一 `cut5`+`fragment_interval=0.3`。
+  工程结论请用 **3.3 h / 8709 字**，不要用 2.8 h。
 
 ### 4.2 阶段二（真机）
 

@@ -1,14 +1,15 @@
 # 远端 TTS 部署与运维（VPS + sherpa-onnx VITS）
 
 服务端代码：仓库 `server/`（`app.py` / `requirements.txt` / `tts.service` / `deploy.sh`）。
-VPS：`ssh -p 40860 root@103.236.96.53`（Ubuntu 22.04 / 4C Xeon 8173M / 3925 MB + **2 GB swap**）。
+VPS：`ssh -p 40860 root@103.236.96.53`（Ubuntu 22.04 / 4C Xeon 8173M / 3925 MB + **6 GB swap**：`/swapfile` 2G + `/swap2` 4G）。
 
 > **引擎选型、三个已修 bug（词典 / `rule_fsts` / 停顿）与全部实测数据见
 > [`research/TTS-ENGINE-COMPARISON.md`](./research/TTS-ENGINE-COMPARISON.md)。**
 > 本文件只记录**现状部署与运维**。
 
-> **规划中的「离线批量预生成」（VPS 空闲时批量出整章音频 + 章节级缓存）**——判据、实测与方案草图见
-> [`research/TTS-PREGEN-PLAN.md`](./research/TTS-PREGEN-PLAN.md)（**尚未实现，线上行为不变**）。
+> **章级预生成（离线批量合成 + 内容寻址缓存）已于 2026-10-13 上线**，线上 `/tts` 行为未变（阶段一客户端零改动）。
+> 架构/数据契约/验收证据见 [`research/TTS-PREGEN-IMPL.md`](./research/TTS-PREGEN-IMPL.md)，
+> 部署与运维见本文件 **§9**；更早的路线比选与实测明细见 [`research/TTS-PREGEN-PLAN.md`](./research/TTS-PREGEN-PLAN.md)。
 
 ## 0. App 侧接入（`feat/remote-tts` 分支）
 
@@ -181,3 +182,74 @@ VPS 网络受限，实测：**清华 PyPI 可用**（`-i https://pypi.tuna.tsing
 
 > 注意：**Mac 侧的 `hf-mirror.com` 是通的**（`https://hf-mirror.com/<repo>/resolve/main/<file>`），
 > 这就是拿到 804 说话人模型的通道 —— 「VPS 下不了 HF」不再是阻塞项。
+
+## 9. 章级预生成 worker（2026-10-13 上线，**默认不跑**）
+
+线上 `/tts` 逐段实时合成的路径**一行未改**；worker 是**第二个进程**，空闲时把整章音频预先算好落盘，
+客户端（阶段二）用 `/audio/<key>` 直接取整章。设计、数据契约与验收证据：
+[`research/TTS-PREGEN-IMPL.md`](./research/TTS-PREGEN-IMPL.md)。
+
+### 9.1 文件与落位
+
+| 仓库 | VPS | 作用 |
+|---|---|---|
+| `server/app.py` | `/root/tts/server/app.py` | 新增 `/job`、`/job/status`、`/audio/{key}`、`DELETE /cache/{key}`、`/cache/stats`、`/cache/probe`，`/health` 增 `lastTtsAgeMs`/`cacheBytes`/`queue` |
+| `server/tts_cache.py` | 两处（server + gsv） | 键/落盘布局/淘汰/队列状态机；**纯 stdlib**，API 与 worker 共用同一份实现 |
+| `server/job_worker.py` | `/root/tts/gsv/job_worker.py` | 批合成进程；唯一合成口径来自 `gsv_batch.py` 的 `synth_native()` |
+| `server/tts-job.service` | `/etc/systemd/system/tts-job.service` | worker 的 unit，**默认 disabled** |
+| `server/pregen_test.py` | `/root/tts/server/pregen_test.py` | 验收/运维客户端（纯 stdlib，`python3` 直跑，不需要 venv） |
+| `server/deploy.sh` | — | 一键部署上述全部 + 两个 unit（会 `disable` 掉 worker） |
+
+> `gsv_batch.py` 原来**导入即执行 `main()`**（自己跑一遍基准），worker `import` 它就会重跑基准 ⇒ 已给它的
+> `main()` 加 `if __name__ == "__main__":`（脚本行为不变）。这是唯一对引擎目录的改动。
+
+落盘在 `/root/tts/cache/`：`audio/<key>.wav`（24 kHz mono S16LE）、`meta/<key>.json`、
+`queue/{new,run,done,fail}/<key>.json`、`jobs/<jobId>.json`、`work/`（每块临时 wav，读完即删）。
+状态迁移只靠 **`rename(2)` 原子抢占**，一个 worker 串行处理，没有锁也没有数据库。
+
+### 9.2 启动 / 停止 / 状态
+
+```bash
+systemctl start tts-job              # 开跑（默认 disabled：3.3 GB RSS + ~28 min/1500 字）
+journalctl -u tts-job -f             # 每块一行：block i/n chars/seed/audio/synth/rtf/mem
+systemctl stop tts-job               # SIGTERM：收完当前块 → 条目退回 new/ → 退出（不留半章）
+systemctl kill -s SIGKILL tts-job    # 硬杀：条目留在 run/，下次启动按 stale 规则重排（attempts+1，≥3 次判失败）
+systemctl reset-failed tts-job       # 硬杀后 unit 会停在 failed（Result=timeout/status=9），重新启用前先清掉
+```
+
+> 实测：`systemctl stop` 是优雅的（日志 `finishing the current block, then releasing the item` → `interrupted after n/m blocks; releasing to new/`），
+> 空转时秒退（日志 `Stopped … Consumed 7h 40min CPU time`，内存立即从 3.7 GB 回落到 172 MB）。
+
+### 9.3 验收 / 运维命令（都在 VPS 上跑）
+
+```bash
+python3 /root/tts/server/pregen_test.py stats                       # 文件数/字节/上限/保护项/队列
+python3 /root/tts/server/pregen_test.py gen /tmp/chapter.txt --wait  # 提交 1 章 + 轮询 + 校验音频
+python3 /root/tts/server/pregen_test.py verify <key>                 # 24k mono/时长/峰值/削波 判据
+python3 /root/tts/server/pregen_test.py range <key> --range 0-63      # Range（拖动进度必需）
+python3 /root/tts/server/pregen_test.py again /tmp/chapter.txt        # 幂等：同 key、不重排、createdAt 不变
+python3 /root/tts/server/pregen_test.py item <key> | wait <jobId> | probe <file> | delete <key>
+```
+
+### 9.4 与线上共存（为什么不会把 VITS 挤死）
+
+- worker 每块开始前 `GET /health`，`lastTtsAgeMs < 60 s` 就睡 15 s 再查（**让位门闸**），并带
+  `Nice=19` / `CPUWeight=20` / `IOSchedulingClass=idle`。
+- 内存天花板写在 unit 里（`MemoryMax=3800M`）：真出事杀 worker 而不是杀线上；实测峰值 `VmHWM 3638 MB`。
+- 启动自检 `SwapTotal ≥ 4096 MB`（现在 6143 MB）：内存不够就直接拒绝启动，不让内核去挑受害者。
+
+### 9.5 磁盘
+
+- 先回收了 3.6 GB：删掉 GPT-SoVITS 目录里用不到的子模型（`hifigan_do` / `gsv-v2final` / `s1bert25hz`）；
+  删后引擎加载正常（10.5 s / RSS 3271 MB），`/` 从 1.2 GB 余量变成 4.9 GB。
+- 缓存上限 `CACHE_MAX_BYTES=2G` + 保底 `RESERVE_FREE=1.5G`；**未播放的项不参与淘汰**，
+  全是被保护的未播放项时 `/job` 直接回 `409 cache_full_wait_playback`（宁可不做，也不挤掉用户马上要听的那章）。
+- 1 章 ≈ 3000 字 ≈ **31 MB / 57 min 算力**（RTF≈5.5）。听完整章后客户端调 `DELETE /cache/<key>` 清理（阶段二）。
+
+### 9.6 已知边界（阶段一）
+
+- **一个 worker 进程只服务一个音色**（`--voice 流萤`）：音色/引擎不匹配的条目**判失败**，不会串音色；
+  换音色 = 换 `--voice` 重启（3.3 GB 常驻的代价）。
+- 服务端不做「段内切分」决策；只有单段 **> 1500 字**（例如整章被当成一行发来）才在**句末**切断（安全阀，
+  该章的「段↔时间」映射只能近似）。
+- 客户端接入（阶段二：`/audio` 播放 + 进度锚点 + 变速）**尚未做**，所以现在预生成的音频只有手动/验收能听。

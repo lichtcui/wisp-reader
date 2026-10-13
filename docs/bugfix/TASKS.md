@@ -1,3 +1,12 @@
+> **2026-10-13 第二十六次同步**：㉖ **T-TTS-7（P1）TTS 预生成「阶段一」已实现并全项验收通过（7/7）** —— 服务端落盘缓存 + 独立 job worker 已上 VPS（`/root/tts/{server,gsv}` + `/etc/systemd/system/tts-job.service`，**unit 默认 disabled**，线上 `/tts` 一行未改）。
+> 新增 4 文件：`server/tts_cache.py`（键/布局/状态机/淘汰，**纯 stdlib**，API 与 worker 共用）、`server/job_worker.py`（独立进程，`import gsv_batch.synth_native` 作唯一合成口径；单 worker 单音色；超长段句末切开的安全阀）、
+> `server/tts-job.service`（`Nice=19`/`CPUWeight=20`/idle IO/`MemoryMax=3800M`/启动自检 swap ≥4 G）、`server/pregen_test.py`（验收客户端）+ `app.py` 新增 6 个端点（`/job`、`/job/status`、`/audio/{key}`、`DELETE /cache/{key}`、`/cache/stats`、`/cache/probe`，`/health` 增 `lastTtsAgeMs`/`cacheBytes`/`queue`）。
+> **验收证据**（IMPL §4.1.1，日志 `journalctl -u tts-job`、`/root/tts/r1_s*.log`、`/root/tts/yield_probe*.log`）：① 285 字样本 `audio 63.76 s / RTF 5.03 / 峰值 −2.0 dBFS / 0% 削顶 / 硉时差 0.00%`；② 幂等 `createdAt` 不变；③ 并发 `/tts` **16 次全 3.1–3.8 s 成功**，门闸在探针窗内打 `yield … sleeping 15s`；
+> ④ **整章 8709 字 / 41 段 = 7 块，音频 1777.5 s（29.6 min）/ 合成 12025 s（3.34 h）/ RTF 6.76 / HWM 3638 MB**（比立项基准 2.78 h/5.57 慢 20%，**工程记账改用 3.3 h / 8709 字**）；⑤ 淘汰与保护（`4M` 上限下已播放项被淘汰、未播放项存活、新 item `409 cache_full_wait_playback`）；⑥ Range 206 + `kill -9` 恢复 + SIGTERM 退条不留半章；⑦ 线上未重启、`/health` <0.5 s、无 5xx。
+> **三个反直觉的实测**（现已写进代码/文档）：**块数不是契约**（同章按原始行切 = 6 块、按真实段数组切 = 7 块，只保证 ≤1500 字/块）；**段边界是切点** ⇒ 单段 >1500 字（整章被当一行的情形）必须句末切否则单块 8741 字直接 OOM；**批块会被线上拖慢**（302 字块 7 min → 10 min）而线上探针不变慢 —— 这是设计取舍。
+> 磁盘先回收 **3.6 G**（删 GSV 里用不到的 `hifigan_do`/`gsv-v2final`/`s1bert25hz`，引擎加载正常）；另修两处：`gsv_batch.py` 导入即跑 `main()`（已加 `__main__` 守卫）、worker 启动自检 swap（现 6.1 G）。**阶段二（App 侧 `流萤` 音色 + `/audio` 整章播放 + 变速 + 听完 `DELETE`）未开工。**
+> 同期另一个 session 的第㉕次同步（T-SHELF-7 两项残留真机补齐）与本项无耦合，保留原结论。
+>
 > **2026-10-13 第二十五次同步**：㉕ **T-SHELF-7 两项残留真机补齐（设备 `33Z0224424136564` · debug · `make run` 闭环）**：① 收尾小迭代的进度文案两种形态都拍到 —— 无失败 `检查中 1/2`（dump 实测 `[658,190][869,241]`）、有失败 `检查中 1/2 · 1 本未检查`（靠停用 `bbiquge8` + 同 URL 孪生 `笔趣阁8` 注入，开关已还原 13/13）；② **「有新章」分支首次真机走通**：一次性调试版只给《剑来》的落库值打 `[T-MARK]` → DB 见 `第83章 今日无事 [T-MARK]`（真 `upsertBook` 写库）→ **还原代码**复跑 → toast `1 本有新章节` 且基线前移回 `第83章 今日无事` → 再点一次 toast `没有发现新章节，1 本未检查` 且整库逻辑 diff 为空（幂等）。③ 顺带抓到三个坑：`dumpLayout` 卡死会连累其后所有 dump、**只 recv `shelf.db` 会漏 WAL**（差点误判「没写库」）、`tesseract` 必须 `cd` 到图片目录用相对名 —— 已进 [`../PITFALLS.md`](../PITFALLS.md) 与 skill `harmony-device-run` §4。
 > **2026-10-13 第二十四次同步**：㉔ **T-SHELF-7 收尾小迭代（进行中进度行显示未检查数）**：进度回调由 `(done,total)` 扩为 `(done,total,failed)`（`failed` 是累计值），新导出纯函数 `shelfProgressText(done,total,failed)` —— 无失败 `检查中 1/2`、有失败 `检查中 1/2 · 1 本未检查`、无网络书 `检查中…`；`pages/Index.ets` 只把拼串改成调该函数（令牌/字号/热区/`accessibilityText` 未动）。
 > 主机仿真 `scripts/shelf-updater-sim.py` **25 → 30 断言 `ALL PASS`**（新增 4 条文案形态 + 1 条「失败数必须在**进行中**就上报」的确定性序列；顺带订正旧文档写的「27 断言」笔误）；`make hap` 通过。
@@ -446,7 +455,7 @@
     - 音色改名与归一：设备 pref 里残留 `tts_remote_voice=流萤` → 界面显示「远端音色 · 甘雨」，播放请求 `voice=甘雨`（服务端日志确认）。
     - 服务端 5 音色逐个 `POST /tts` 均 200 / 24kHz mono 16bit（样本 378–449 KB）；`/health` 返回 `speed_scale=0.75` + 5 个新名。
     - **未覆盖**：真机上 5 音色的**逐个切换**（走到一半设备掉线，`uitest` 命令只回 `need connect-key`）；听感结论本身需要用户耳朵。
-- [ ] **T-TTS-7（P1）TTS 预生成：服务端内容寻址缓存 + job worker（阶段一）** —— **2026-10-12 已立项，施工图已写，代码未开工**。
+- [x] **T-TTS-7（P1）TTS 预生成：服务端内容寻址缓存 + job worker（阶段一）** —— **2026-10-13 阶段一已实现并 7/7 验收通过**；阶段二（客户端接入）未开工。
   - 目标（用户原话）：VPS 空闲时批量预生成 50–100（或更多）章的音频，**听书优先读缓存音频、读不到才用默认 TTS**。
   - **决策（同日用户拍板）**：① 默认引擎 **GPT-SoVITS v2ProPlus（流萤微调）** —— 试听后判定「`cut5` + `fragment_interval=0.3` 这个听着效果比较好」；
     ② 缓存 **WAV 直出（24 kHz mono S16LE）+ 严格淘汰**（已播放优先删、**未播放项受保护**）；③ 素材**先手动喂**（curl），客户端入口后置（阶段二）。
@@ -456,8 +465,9 @@
     跑批时 `Mem available` 100–190 MB / swap 4.9 GB，线上 `/health` 仍 0.5 s 但**首个 `/tts` 要等引擎页换入**）。
   - **施工图**：**`../research/TTS-PREGEN-IMPL.md`**（§1 数据契约 / §2 服务端 / §2.5 磁盘 / §3 App 侧「填写方式」/ §4 验收 / §6 下个 session 的 prompt）；
     判据改写与实测明细 `../research/TTS-PREGEN-PLAN.md`；决策 `../decisions.md` **D15**。
-  - **阶段一验收（主机侧 curl，不上设备）**：285 字小样本端到端 / 幂等 / **让位门闸**（60 s 内有 `/tts` 则暂停批任务）/ 整章对账 /
-    淘汰与保护（`CACHE_MAX_BYTES` 调小跑两章）/ Range 206 + `kill -9` 恢复 / 真机听书回归（`tts.service` 不动）。
+  - **阶段一实现（2026-10-13）**：`server/tts_cache.py`（键/布局/状态机/淘汰，纯 stdlib）+ `server/job_worker.py`（**独立进程**，`import gsv_batch.synth_native` 作唯一口径；单 worker 单音色，音色不匹配的条目**判失败不串音色**；超长段句末切开的安全阀）+ `app.py` 6 个新端点 + `tts-job.service`（**disabled**）+ `pregen_test.py` + `deploy.sh`。
+    队列=文件系统（`new→run→done|fail` 靠 `rename(2)`），`run/` 靠 mtime 心跳做 stale 重排（attempts ≥3 判失败）；未播放项受保护、全被保护时 `409 cache_full_wait_playback`。
+  - **阶段一验收（主机侧 curl，不上设备）**：7/7 已执行，结果与偏差见 [`../research/TTS-PREGEN-IMPL.md`](../research/TTS-PREGEN-IMPL.md) **§4.1.1**（含整章 7 块而非 6 块的解释、RTF 6.76 实测）。
   - **阶段二（后续 session）**：`ListeningSettings.ets` 新增「预生成」分组（音色 `流萤/花火/卡芙卡`、提前章数、仅 Wi-Fi、缓存优先）
     + 书级「预生成后续 N 章」入口 + `TtsController` **章级原子切换**（`GET /audio/{key}` 命中则整章播缓存、`setSpeed` 变速、听完 `DELETE`）；
     已知取舍：实时链路是 VITS 的 5 个标签音色 vs 预生成是 GSV 的 3 个 ⇒ **跨章换声线**（同章内不换），默认建议实时 `甘雨`/预生成 `流萤`。

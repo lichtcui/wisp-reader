@@ -12,10 +12,10 @@
 
 <!-- TOC:BEGIN -->
 - 里程碑状态 — L23
-- M5 结果（2026-09-25，真机验证） — L39
-- 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L79
-- 未决 / 风险 — L113
-- 交接备忘 — L225
+- M5 结果（2026-09-25，真机验证） — L40
+- 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L80
+- 未决 / 风险 — L114
+- 交接备忘 — L230
 <!-- TOC:END -->
 
 ---
@@ -33,6 +33,7 @@
 | M6 | 规则调试器 + 缓存清理 + 备份恢复 | ✅ 功能全部落地：规则调试器 UI（`pages/RuleDebugger.ets`，真机验收未做）、备份/恢复（`pages/BackupManage.ets`，含 2026-10-07 修的真「全量覆盖」）、目录缓存统计/清理、**缓存上限策略（`model/CacheTrim.ets`，2026-10-07 实现并真机六项压测通过）**。仅余规则调试器页真机验收 → [`research/CACHE-LIMIT-PLAN.md`](./research/CACHE-LIMIT-PLAN.md) |
 | v1.1 | **换源**（阅读页顶栏入口 / 书名 + 作者严格匹配 / 进度按章节序号迁移） | ✅ 已完成（真机验证往返切换 + 缓存清理，见上文同名节）；**2026-10-13 又修「候选被静默丢掉 + 每轮白等 13 源」并加预热，真机复验通过（候选 2→7 行、切换 ≤1s）**|
 | v1.2 | **书架「更新」**（手动批量查新章，只查详情不爬目录） | ✅ 已完成（**2026-10-13 真机验收 12 项**：进度文案 / 两个 toast 分支 / 本地书排除 / 零误写 / 防重入 / 幂等 / 编辑态隐藏；「有新章」分支真机不可造，见指针）→ [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-SHELF-7 |
+| v1.3 | **TTS 预生成（服务端章级缓存 + job worker）** | 🔶 **阶段一（服务端）2026-10-13 完成并 7/7 验收**（VPS，App 零改动）；阶段二（App 侧整章播缓存/变速/听完删）未开工 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-TTS-7、[`research/TTS-PREGEN-IMPL.md`](./research/TTS-PREGEN-IMPL.md) §4.1.1 |
 | v2 | QuickJS/Boa JS 引擎、在线 TTS、真分页 | ⏳ |
 
 
@@ -116,6 +117,10 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 > 本节只记「还没想清楚 / 待复验」的风险，不重复任务项。
 
 **近期已关闭**（详细信息看指针，不在本文件重复）
+
+- **T-TTS-7 TTS 预生成「阶段一」（服务端）2026-10-13 完成并 7/7 验收通过**（**App 侧一行未改**，不在设备上）：VPS 新增 `server/tts_cache.py`（内容寻址键 + 落盘布局 + 淘汰/保护 + 文件系统队列）、`server/job_worker.py`（**独立进程**，`import gsv_batch.synth_native` 作唯一合成口径，单 worker 单音色 `流萤`）、`tts-job.service`（**默认 disabled**，`MemoryMax=3800M`，启动自检 swap ≥4 G）、`server/pregen_test.py`（验收客户端）、`server/deploy.sh`；`app.py` 新增 6 个端点（`/job` `/job/status` `/audio/{key}` `DELETE /cache/{key}` `/cache/stats` `/cache/probe`）。
+  实测：整章 8709 字 / 41 段 = **7 块**（≤1500 字/块）/ 音频 **1777.5 s** / **合成 3.34 h（RTF 6.76；记账请用 3.3 h / 8709 字，立项基准 2.78 h 是主机噪声更好的结果）** / HWM **3638 MB**；并发 `/tts` 45 次全部成功且**门闸连打 16 次让位**（09:14:04→09:17:49）；小样本 285 字（RTF 5.03 / 峰值 −2.0 dBFS / 0% 削顶）、幂等、淘汰与保护（含 `409 cache_full_wait_playback`）、Range 206、`kill -9` 重排恢复、SIGTERM 退条不留半章全通过。磁盘先回收 3.6 G（删 GSV 用不到的三个子模型）。
+  **未做**：阶段二（App 侧 `流萤` 音色 + `/audio` 整章播放/变速/听完 `DELETE`）与「批任务运行期间真机听书」的真机回归（主机侧同源探针已覆盖）；AI 生成音频只有 `curl` 能听。→ [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-TTS-7、[`research/TTS-PREGEN-IMPL.md`](./research/TTS-PREGEN-IMPL.md) §4.1.1、[`remote-tts-deploy.md`](./remote-tts-deploy.md) §9
 
 - **T-SHELF-7 书架「更新」：2026-10-13 真机验收通过（设备 `33Z0224424136564` · debug · `make run`）**：进度 `检查中 0/2` → `1/2`、**`total = 2`（本地书正确排除）**、toast `没有发现新章节，1 本未检查` 与（停用两个同 URL 孪生源后）`检查失败，请检查网络或书源`、
   失败书不建基线且不影响其余书、**全程 `shelf.db` 逐列零写入**（反复点击/注入/复跑均如此）、连点两次只跑一轮、幂等、编辑态顶栏无入口 —— 共 12 项。
