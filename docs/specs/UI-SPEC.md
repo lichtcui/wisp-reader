@@ -111,7 +111,8 @@
 ### 1.5 结构（自上而下）
 
 1. 拖拽指示条（§1.3）
-2. `showHeader === true` 时：标题栏 48vp（标题 17fp Medium `text_1`，左 padding 20；右侧 X `SymbolGlyph(xmark)` 20fp `text_3`，40×40 热区）+ 1px `divider`
+2. `showHeader === true` 时：标题栏 48vp（标题 17fp Medium，左 padding 20；右侧 X `SymbolGlyph(xmark)` 20fp，40×40 热区）+ 1px `divider`
+   - 标题色 / 图标色默认 `text_1` / `text_3`；面板底色**不跟全局主题**的抽屉（阅读页换源：底色为 `reader_bg`，`reader_bg` 在浅色系统下也是深色）必须传 `titleColor` / `iconColor`（传阅读页的 `textColor()` / `dimColor()`）。
 3. 内容区：左右 padding 16、底部 padding 24，`layoutWeight(1)`（`fit` 时为 0）
    - 内容区**没有顶部内边距**：首屏元素自带顶部留白（阅读页目录/设置为卡片自带 12vp；
      「源状态」的统计区为 `padding({ top: 16, bottom: 24 })`）。
@@ -119,7 +120,7 @@
      `Divider().color($r('app.color.divider')).strokeWidth(1).margin({ left: -16, right: -16 })`：
      负外边距抵消内容区左右 padding 后与标题栏分割线同宽。
 
-`showHeader` 约定：阅读页目录 / 阅读设置 / **换源**为 `false`（内容自带头部，且标题栏用固定 `text_1` 色，在夜间模式的深色面板上不可读）；**其余一律 `true`**。
+`showHeader` 约定：阅读页目录 / 阅读设置为 `false`（内容自带头部），**其余一律 `true`**（含阅读页**换源**：面板底色虽跟阅读主题，但用 `titleColor` / `iconColor` 传色即可用标准标题栏）。
 
 > 新增抽屉（第 9 处起）必须同时登记到本表。
 
@@ -147,6 +148,10 @@
 颜色：`mask` L `#52000000` / D `#80000000`；`bg_page` L `#FFFFFF` / D `#121212`；
 `divider` L `#EDEDED` / D `#2A2A2A`；`brand` `#DA3838`；`text_1` `#333333`。
 
+> 底色跟随**阅读日夜主题**（非系统主题）的面板（换源抽屉）慎用带透明度的自定义令牌：
+> 它无法按系统主题在 base/dark 间分值。换源面板的当前源标注**只用行首 3vp 品牌色竖条 +
+> 品牌色源名**，不加行底色（真机试过 12% 品牌底，观感偏脏，已撤）。
+
 ---
 
 ## 2. 调用点清单（**共 8 处，样式改动必须全部同步**）
@@ -160,7 +165,7 @@
 | 5 | `pages/SearchResult.ets:645` | 搜索结果 · 选择来源 | `large` | 默认 `true` | 默认 |
 | 6 | `pages/BookSourceManage.ets:706` | 书源管理 · 书源状态 | `large` | 默认 `true` | 默认 |
 | 7 | `pages/Listening.ets:382` | 听书页 · 目录 | `large` | 默认 `true` | 默认 |
-| 8 | `pages/Reader.ets`（`grep -n "PANEL_SOURCE"`） | 阅读页 · 换源（v1.1） | `large` | `false` | `this.bgColor()` |
+| 8 | `pages/Reader.ets`（`grep -n "PANEL_SOURCE"`） | 阅读页 · 换源（v1.1） | `large` | `true`（传 `titleColor` / `iconColor`） | `this.bgColor()` |
 
 > 行号会漂移；**以命令为准**：`grep -rn "BottomDrawer({" entry/src/main/ets/pages/`
 > 新增抽屉（第 8 处）必须同时登记到本表。
@@ -213,6 +218,8 @@ sips -s format bmp /tmp/u1.jpeg --out /tmp/u1.bmp       # 纯 Python 解析 BMP�
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-12 | **阅读页「换源」文案与当前源标注整改**（真机验证：夜间 `reader_bg` #181820 / 日间 #FFFFFF 两套主题 + 0 源空态）：① 删内容区状态行的「当前 xxx」；② 候选数上移到标题 → `title: '换源 · N 个候选'`（`SourceSwitchPanel` 新增 `@Event onCount` 上报，与「选择来源 · N」同规格；面板删掉 `currentSourceName` 参数）；③ 当前源行去掉「当前源」文字徽标，改为**行首 3vp 品牌色竖条 + 品牌色源名**，其余行留同宽透明占位以保持源名左对齐（曾试过整行 12% 品牌底，观感偏脏 → 已撤，令牌也删了）；④ 进度行（12fp 次要色）**常驻占位、其下不画分割线**：检索中显示 x/y，检索完只剩空文本（防列表在搜索结束时上跳 ~33vp；该行下的通栏分割线试过两个版本都被真机否掉——紧贴标题栏分割线的第二条横线观感多余）；⑤ 书源行之间**取消分割线**（`List.divider` 已删）；⑥ `total === 0` 的空态文案独立成「没有启用的书源」；⑦ 「（该源未返回最新章节）」→「（该源无最新章节规则）」（该文案 = 该源搜索规则无 `lastChapter`，非源故障）。文件：`components/SourceSwitchPanel.ets`、`pages/Reader.ets` |
+| 2026-10-12 | **阅读页「换源」抽屉对齐搜索结果「选择来源」**（真机验证）：① 去自绘头部 → `showHeader: true` + `title: '换源'`；`BottomDrawer` 新增 `@Param titleColor` / `iconColor`（默认 `text_1` / `text_3`，其余 7 处调用点不变），换源传 `textColor()` / `dimColor()` 解决「深色面板 + 浅色系统的固定 `text_1` 不可读」；② 当前源 + 检索进度下沉为内容区顶部状态行（12fp 次要色、上下 padding 8 + 通栏分割线，与「源状态」统计区同规格）；③ 行改为定高 60vp、`Row({ space: 8 })` + `Column({ space: 3 })`，分割线由行内 `Divider` 改为 `List.divider({ startMargin: 16 })`（与「选择来源」逐项一致）。**保留**换源特有元素：「当前源」徽标、「置信 N」、右侧「切换」按钮（未加 `›` 箭头，右侧位被「切换」占用）。文件：`ui/common/BottomDrawer.ets`、`components/SourceSwitchPanel.ets`、`pages/Reader.ets` |
 | 2026-10-12 | 新增第 8 处调用点：**阅读页 · 换源**（v1.1）。`mode: 'overlay'` + `sheetSize: 'large'` + `showHeader: false`（阅读页必须自绘头部：面板跟随日夜模式，标题栏的固定 `text_1` 在夜间不可读），内容组件 `components/SourceSwitchPanel.ets`，宿主 `pages/Reader.ets`。§2 表与 §1.5 `showHeader` 约定同步；**样式与动效未动**（§1.1–§1.4 检查项均未受影响） |
 | 2026-10-06 | 「源状态」抽屉内容整改（真机验证）：去「搜索源名」输入框；关闭抽屉即复位为全部收起；分组按**置信度影响**排序（成功置顶，`penaltyFor` 与扣分同表）；展开后的书源行去色点（组头保留）；修「组头 3 源只展开 2 行」（ForEach key 用 URL 撞上同 URL 重复书源 → 改组内序号 key）。另：统计区改 `padding { top:16, bottom:24 }` 并在与列表之间加通栏分割线。**同步本文件**：`sheetSize` 实际使用为 6×`large` + 1×`fit`（阅读页设置）——「源状态」「选择来源」均改为 `large`（§1.6 / §2 原记 `fit` / `medium` 系陈旧），`medium` 暂无调用点 |
 | 2026-10-06 | 全部抽屉统一 overlay：`BookSourceManage` / `SearchResult` / `Listening` 去 `system` 改常驻挂载；面板改**常驻测量**（消除首开"弹出"）；补 §1.4 命中测试（修复页面不可滚动）；保留圆角阴影。基线 `6054929`，改动未提交 |

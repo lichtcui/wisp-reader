@@ -20,6 +20,12 @@ const MEASURE_WAIT_MS: number = 32;
 export struct BottomDrawer {
   @Param visible: boolean = false;
   @Param title: string = '';
+  // Title/close colors follow the app tokens by default. A drawer whose panel
+  // background follows the *reader's* day/night switch (Reader passes `bgColor()`,
+  // and `reader_bg` is dark even under a light system theme) must override both,
+  // otherwise `text_1` (#333333) lands on a near-black panel.
+  @Param titleColor: ResourceColor = $r('app.color.text_1');
+  @Param iconColor: ResourceColor = $r('app.color.text_3');
   @Param sheetSize: AppSheetSize = 'medium';
   @Param mode: AppSheetMode = 'system';
   @Param showHeader: boolean = true;
@@ -177,7 +183,7 @@ export struct BottomDrawer {
     Row() {
       SymbolGlyph($r('sys.symbol.xmark'))
         .fontSize(20)
-        .fontColor([$r('app.color.text_3')])
+        .fontColor([this.iconColor])
     }
     .width(40)
     .height(40)
@@ -193,7 +199,7 @@ export struct BottomDrawer {
       Text(this.title)
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_1'))
+        .fontColor(this.titleColor)
         .layoutWeight(1)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })

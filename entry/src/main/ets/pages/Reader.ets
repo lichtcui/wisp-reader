@@ -99,6 +99,8 @@ export struct ReaderPage {
   @Local book: Book | undefined = undefined;
   /** 换源抽屉的开启令牌（自增 → 面板重新读源并重新检索）。 */
   @Local sourcePanelToken: number = 0;
+  /** 换源候选数：由 `SourceSwitchPanel.onCount` 上报，拼进抽屉标题（「换源 · N 个候选」）。 */
+  @Local switchCount: number = 0;
   /** 换源执行中：抽屉列表整体禁用，避免连点两次。 */
   @Local switching: boolean = false;
   @Local chapters: Chapter[] = [];
@@ -905,6 +907,8 @@ export struct ReaderPage {
     if (mode === PANEL_SOURCE) {
       // 自增令牌而不是 `visible`：面板常驻挂载，只有令牌变化才会触发它重读书源 + 重新检索。
       this.sourcePanelToken = this.sourcePanelToken + 1;
+      // 候选数归零：避免抽屉滑出的一瞬间还挂着上一次打开时的数量（本轮由面板 onCount 重新累计）。
+      this.switchCount = 0;
     }
     this.panel = mode;
     this.menuVisible = true;
@@ -932,6 +936,7 @@ export struct ReaderPage {
       this.toast('本地书籍不支持换源');
       return;
     }
+    // 候选数归零由 openPanel 的 PANEL_SOURCE 分支负责（面板常驻，这里是同一入口）。
     this.openPanel(PANEL_SOURCE);
   }
 
@@ -1643,9 +1648,13 @@ export struct ReaderPage {
 
       BottomDrawer({
         visible: this.panel === PANEL_SOURCE,
+        title: '换源 · ' + this.switchCount.toString() + ' 个候选',
         sheetSize: 'large',
         mode: 'overlay',
-        showHeader: false,
+        // 面板底色跟随阅读页日夜主题（`reader_bg` 在浅色系统下也是深色），
+        // 而标题栏默认用全局令牌（浅色系统下 `text_1` = #333333）→ 必须显式传色。
+        titleColor: this.textColor(),
+        iconColor: this.dimColor(),
         panelBackground: this.bgColor(),
         onClose: () => {
           this.panel = PANEL_NONE;
@@ -1655,10 +1664,12 @@ export struct ReaderPage {
           runToken: this.sourcePanelToken,
           book: this.book,
           currentSourceUrl: this.source !== undefined ? this.source.bookSourceUrl : '',
-          currentSourceName: this.source !== undefined ? this.source.bookSourceName : '',
           textColor: this.textColor(),
           dimColor: this.dimColor(),
           busy: this.switching,
+          onCount: (count: number) => {
+            this.switchCount = count;
+          },
           onPick: (source: BookSource, item: BookSearchItem) => this.confirmSwitch(source, item)
         })
       }

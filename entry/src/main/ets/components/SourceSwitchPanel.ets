@@ -38,6 +38,10 @@ function stripLatest(raw: string): string {
  * 搜索是**渐进**的（`SourceResultPage` 同款滑动窗口：每源一次 `search` 调用，
  * 谁先回来谁先上屏），因为聚合调用要等最慢的源到 10s 超时，抽屉会长时间空白。
  *
+ * 文案分工：候选数由 `onCount` 上报宿主拼进抽屉标题（「换源 · N 个候选」，与搜索结果
+ * 「选择来源 · N」同规格），内容区顶部只剩进度行（**始终占位**：检索中显示 x/y，检索完留空，
+ * 避免列表在搜索结束时上跳）；当前源不用文字徽标，而是行首品牌色竖条 + 品牌色源名（见 `row`）。
+ *
  * 组件常驻挂载（BottomDrawer 规范）：`runToken` 每次打开自增，`@Monitor` 里重读书源
  * 列表并重新搜索 —— 关闭期间不主动取消在飞的请求，靠 `gen` 令牌丢弃过期结果。
  */
@@ -47,11 +51,12 @@ export struct SourceSwitchPanel {
   @Param runToken: number = 0;
   @Param book: Book | undefined = undefined;
   @Param currentSourceUrl: string = '';
-  @Param currentSourceName: string = '';
   @Param textColor: ResourceColor = Color.Black;
   @Param dimColor: ResourceColor = Color.Gray;
   /** 宿主正在执行切换：列表整体不可点，避免连点两次。 */
   @Param busy: boolean = false;
+  /** 候选行数上报：宿主拼进抽屉标题（检索中会随上屏逐次上报）。 */
+  @Event onCount: (count: number) => void = () => {};
   @Event onPick: (source: BookSource, item: BookSearchItem) => void = () => {};
 
   @Local rows: SwitchRow[] = [];
@@ -95,6 +100,8 @@ export struct SourceSwitchPanel {
     this.scanned = 0;
     this.nextIndex = 0;
     this.total = this.sources.length;
+    // 标题里的候选数不在本轮开头归零：宿主在 `openPanel` 里已重置为 0（`Reader.switchCount`），
+    // 这里只在结果上屏时递增上报（避免在 `@Monitor` 回调里回写宿主状态）。
     const book: Book | undefined = this.book;
     if (book === undefined || book.name.trim().length === 0 || this.sources.length === 0) {
       this.searching = false;
@@ -142,6 +149,7 @@ export struct SourceSwitchPanel {
     }
     if (added.length > 0) {
       this.rows = this.rows.concat(added);
+      this.onCount(this.rows.length);
     }
     this.scanned = this.scanned + 1;
     if (this.scanned >= this.total) {
@@ -161,56 +169,44 @@ export struct SourceSwitchPanel {
     };
   }
 
-  private statusText(): string {
-    if (this.total === 0) {
-      return '没有启用的书源';
-    }
-    if (this.searching) {
-      return '已检索 ' + this.scanned.toString() + '/' + this.total.toString() + ' 个书源';
-    }
-    return '共 ' + this.rows.length.toString() + ' 个候选';
+  /** 检索进度文案；候选总数不在这里（已上移到标题栏）。 */
+  private progressText(): string {
+    // 非检索中返回一个空格（而不是空串）：保证这一行仍是满行高，不塌成 16vp。
+    return this.searching ? '已检索 ' + this.scanned.toString() + '/' + this.total.toString() + ' 个书源' : ' ';
   }
 
+  // 与搜索结果页「选择来源」的状态行同一规格：12fp、次要色、上下 padding 8。
+  // 检索完仍留这一行（文本为空），保证列表不会在搜索结束时上跳。
   @Builder
-  header() {
-    Row() {
-      Text('换源')
-        .fontSize(15)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.textColor)
-      Text(this.currentSourceName.length > 0 ? ' · 当前 ' + this.currentSourceName : '')
-        .fontSize(13)
-        .fontColor(this.dimColor)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .layoutWeight(1)
-      Text(this.statusText())
-        .fontSize(12)
-        .fontColor(this.dimColor)
-    }
-    .width('100%')
-    .padding({ left: 16, right: 16, top: 12, bottom: 10 })
-    .alignItems(VerticalAlign.Center)
+  statusBar() {
+    Text(this.progressText())
+      .fontSize(12)
+      .fontColor(this.dimColor)
+      .width('100%')
+      .padding({ top: 8, bottom: 8 })
+      .maxLines(1)
+      .textOverflow({ overflow: TextOverflow.Ellipsis })
   }
 
   @Builder
   row(r: SwitchRow) {
     Row() {
-      Column() {
+      // 当前源标记槽：品牌色竖条；其余行留同宽透明占位，保证所有源名左对齐。
+      // 不用「当前源」文字徽标，也不加整行底色（12% 品牌底色真机观感脏）：靠竖条 + 品牌色源名。
+      Row()
+        .width(3)
+        .height(36)
+        .borderRadius(2)
+        .backgroundColor(r.current ? $r('app.color.brand') : Color.Transparent)
+        .margin({ right: 8 })
+
+      Column({ space: 3 }) {
         Row() {
           Text(r.label)
             .fontSize(15)
-            .fontColor(this.textColor)
+            .fontColor(r.current ? $r('app.color.brand') : this.textColor)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-          if (r.current) {
-            Text('当前源')
-              .fontSize(11)
-              .fontColor($r('app.color.brand'))
-              .border({ width: 1, color: $r('app.color.brand'), radius: 4 })
-              .padding({ left: 4, right: 4, top: 1, bottom: 1 })
-              .margin({ left: 6 })
-          }
           Blank()
           Text('置信 ' + r.confidence.toString())
             .fontSize(11)
@@ -219,13 +215,14 @@ export struct SourceSwitchPanel {
         .width('100%')
         .alignItems(VerticalAlign.Center)
 
-        Text(r.chapter.length > 0 ? '最新：' + r.chapter : '（该源未返回最新章节）')
+        // 空 = 该源的搜索规则里没有 `lastChapter`（或没命中），不是源故障；换源面板
+        // 不像搜索结果页有「详情缓存」可回退（见 `SearchResult.rebuildGroups`）。
+        Text(r.chapter.length > 0 ? '最新：' + r.chapter : '（该源无最新章节规则）')
           .fontSize(12)
           .fontColor(this.dimColor)
           .width('100%')
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .margin({ top: 4 })
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
@@ -235,11 +232,12 @@ export struct SourceSwitchPanel {
           .fontSize(13)
           .fontColor(this.busy ? this.dimColor : $r('app.color.brand'))
           .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-          .margin({ left: 8 })
       }
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+    // 定高 60vp：「选择来源」同一行规格，且虚拟化按定高估算可视区。
+    // 当前源靠行首竖条 + 品牌色源名区分（刻意不加整行高亮底色）。
+    .height(60)
     .alignItems(VerticalAlign.Center)
     .onClick(() => {
       if (this.busy || r.current) {
@@ -251,11 +249,9 @@ export struct SourceSwitchPanel {
 
   build() {
     Column() {
-      this.header()
-      Divider()
-        .color($r('app.color.divider'))
-        .strokeWidth(1)
-        .margin({ left: -16, right: -16 })
+      // 进度行常驻（检索完只有空文本）：避免检索结束时列表上跳约 33vp。
+      // 这一行下面**不画分割线**（真机上紧贴标题栏分割线的第二条横线观感多余）。
+      this.statusBar()
 
       if (this.rows.length === 0) {
         Column() {
@@ -268,6 +264,14 @@ export struct SourceSwitchPanel {
               .fontSize(13)
               .fontColor(this.dimColor)
               .margin({ top: 10 })
+          } else if (this.total === 0) {
+            Text('没有启用的书源')
+              .fontSize(14)
+              .fontColor(this.dimColor)
+            Text('到「书源管理」启用至少一个书源')
+              .fontSize(12)
+              .fontColor(this.dimColor)
+              .margin({ top: 8 })
           } else {
             Text('没有其它书源收录这本书')
               .fontSize(14)
@@ -285,13 +289,7 @@ export struct SourceSwitchPanel {
         List({ space: 0 }) {
           ForEach(this.rows, (r: SwitchRow) => {
             ListItem() {
-              Column() {
-                this.row(r)
-                Divider()
-                  .color($r('app.color.divider'))
-                  .strokeWidth(1)
-                  .margin({ left: 16 })
-              }
+              this.row(r)
             }
           }, (r: SwitchRow) => r.key)
         }
