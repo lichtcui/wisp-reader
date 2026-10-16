@@ -94,6 +94,48 @@ export function normalizeRemoteVoice(voice: string): string {
 /** 远端每段合成的预取深度（比系统 TTS 的 AHEAD=2 略深，抵消网络往返）。 */
 export const AHEAD_REMOTE: number = 3;
 
+// ── TTS 预生成（T-TTS-7 阶段二；契约与播放路径见 research/TTS-PREGEN-IMPL.md §1/§3）──
+// 两套声线：实时链路是 VITS 的 5 个标签音色，预生成是 GPT-SoVITS 的 3 个微调音色（跨章会换，章内不换）。
+
+/** 预生成音色（服务端 worker 的 `--voice`）；默认建议实时音色选「甘雨」，跨章切换仍在女声同一区。 */
+export const KEY_TTS_PREGEN_VOICE: string = 'tts_pregen_voice';
+export const TTS_PREGEN_VOICE_DEFAULT: string = '流萤';
+/** 服务端 worker 只加载一个音色（当前 `--voice 流萤`）；换音色要先重启 worker，否则条目被判失败。 */
+export const TTS_PREGEN_VOICE_OPTIONS: string[] = ['流萤', '花火', '卡芙卡'];
+
+/** 把偏好里的预生成音色收敛到 `TTS_PREGEN_VOICE_OPTIONS` 之一（未知名回默认）。 */
+export function normalizePregenVoice(voice: string): string {
+  for (const name of TTS_PREGEN_VOICE_OPTIONS) {
+    if (name === voice) {
+      return voice;
+    }
+  }
+  return TTS_PREGEN_VOICE_DEFAULT;
+}
+
+/** 书级入口「预生成后续 N 章」的默认 N（真实上限在服务端磁盘，见 IMPL §2.6）。 */
+export const KEY_TTS_PREGEN_AHEAD: string = 'tts_pregen_ahead';
+export const TTS_PREGEN_AHEAD_DEFAULT: number = 10;
+export const TTS_PREGEN_AHEAD_OPTIONS: number[] = [5, 10, 20, 30];
+
+/** 仅 Wi-Fi 时提交预生成（音色与实时链路共用服务器地址/Key）。 */
+export const KEY_TTS_PREGEN_WIFI_ONLY: string = 'tts_pregen_wifi_only';
+export const TTS_PREGEN_WIFI_ONLY_DEFAULT: boolean = true;
+
+/** 缓存优先播放：关掉则总是走实时 VITS（排查用）。 */
+export const KEY_TTS_PREGEN_PREFER: string = 'tts_pregen_prefer';
+export const TTS_PREGEN_PREFER_DEFAULT: boolean = true;
+
+/** 服务端 worker 的引擎名（`tts-job.service --engine`）；不匹配的条目在服务端被判失败。 */
+export const TTS_PREGEN_ENGINE: string = 'gsv_v2proplus';
+
+/**
+ * 缓存路径的听感标定（**不是**语速换算）：GPT-SoVITS `speed=1.0` 实测 4.86 字/秒，
+ * 约等于现在「0.75 档」的听感（VITS 5.2 字/秒 × 0.75）。
+ * **不要**把服务端给 VITS 标定的 `SPEED_SCALE=0.75` 套到缓存路径上（那会慢一档）。
+ */
+export const TTS_PREGEN_SPEED_SCALE: number = 1.0;
+
 // ── 缓存上限策略（T-DATA-4 / plan §7）────────────────────────────────
 // 口径：已读=软保护（未读先删，仍超配额才按「最久未访问」删已读），另加未读 TTL。
 

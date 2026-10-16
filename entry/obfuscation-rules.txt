@@ -159,6 +159,51 @@ inShelf
 paragraphIndex
 percent
 updatedAt
+# TTS 预生成（T-TTS-7 阶段二）：服务端 JSON 往返 + 章节缓存里的 pregKey
+# （`TtsPregen.ets` 自己 declare 的 interface，同样要进 keep；核对：make check）
+pregKey
+jobId
+key
+evicted
+protected
+neededBytes
+chunks
+t0Ms
+t1Ms
+p0
+p1
+chars
+audioMs
+engine
+paragraphs
+queued
+running
+done
+failed
+expired
+err
+skipped
+startMs
+endMs
+path
+currentTitle
+failures
+# 预生成「提交项 ↔ 服务端响应项」的配对/纠偏结果（纯内存结构，只因同文件也有 JSON 往返而被扫描到；make check）
+keys
+reordered
+# 没配上键的条数（同名/无标题章 ⇒ 退实时，见 matchPregKeys；PregKeyFix 的字段名与上面重复）
+unmapped
+# SourceStore 的投影 / 筛选（`model/SourceStore.ets` 是纯内存结构，只因同文件里有 `json` 列的
+# JSON 往返而被扫描到；make check）
+id
+url
+group
+detectState
+detectAt
+respondMs
+states
+added
+updated
 # Native NAPI import names (liblegado_core.so) — must match the .so exports
 -keep-global-name
 bookInfo

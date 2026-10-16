@@ -13,6 +13,8 @@
 //                resetQueues / clearInflight（PCM 预合成 AHEAD 段 + 乱序到达重排在这里）
 //   刷新与进度： startFlushTimer / stopFlushTimer / tickProgress / tryFlush / startProgressTimer / stopProgressTimer /
 //                scheduleParagraphEnd / onParagraphEnd / playedMs / paragraphAt / estimateDurationMs / persistProgress
+//   预生成缓存： pregMode / beginFrom（路由选择）/ startPregChapter / playPregFrom / startPregRenderer / fillFromPreg /
+//                onPregEnded / completePregChapter / abandonCachePath / releasePregAudio / prefetchNextPreg
 //   调试：       traceFormat（hilog 格式化）
 // ──────────────────────────────────────────────────────────────────────
 
@@ -26,10 +28,11 @@ import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { Book, BookSource, Chapter } from '../engine/types';
 import { isReadable, nextReadable, prevReadable } from '../common/ChapterUtil';
 import { loadChapterParagraphs } from './BookContent';
+import { clearChapterPregKey, getChapterPregKey } from './ChapterCache';
 import { protectBook } from './CacheTrim';
 import { saveProgress } from './ShelfRepository';
 import { claimProgress, releaseProgress, ProgressWriter } from './ProgressOwner';
-import { getNumber, putNumber, getString, putString } from '../common/Prefs';
+import { getNumber, putNumber, getString, putString, getBoolean, putBoolean } from '../common/Prefs';
 import {
   KEY_TTS_SPEED,
   KEY_TTS_VOICE,
@@ -37,6 +40,8 @@ import {
   KEY_TTS_SERVER,
   KEY_TTS_API_KEY,
   KEY_TTS_REMOTE_VOICE,
+  KEY_TTS_PREGEN_PREFER,
+  KEY_TTS_PREGEN_WIFI_ONLY,
   TTS_SPEED_DEFAULT,
   TTS_VOICE_DEFAULT,
   TTS_ENGINE_SYSTEM,
@@ -44,11 +49,19 @@ import {
   TTS_SERVER_DEFAULT,
   TTS_API_KEY_DEFAULT,
   TTS_REMOTE_VOICE_DEFAULT,
+  TTS_PREGEN_PREFER_DEFAULT,
+  TTS_PREGEN_WIFI_ONLY_DEFAULT,
   normalizeRemoteVoice,
   effectiveSpeed,
   AHEAD_REMOTE
 } from '../common/Const';
 import { remoteSynthesize } from './RemoteTtsClient';
+import { PregAudioSource } from './PregAudioSource';
+import {
+  AUDIO_CACHE, PregAudio, PregenError, PregenTiming,
+  chapterAudioRoute, deletePregCache, deletePregFile, isPregKeyPending, loadPregAudio, onWifi, pregPlaybackRate, pregTimeline,
+  pregenErrorMessage, sweepPregFiles
+} from './TtsPregen';
 
 const ENGINE_NAME: string = 'source-reader-tts';
 const SESSION_TAG: string = 'source-reader-listen';
@@ -151,6 +164,11 @@ export class TtsController {
   private engine: textToSpeech.TextToSpeechEngine | undefined = undefined;
   private session: avSession.AVSession | undefined = undefined;
   private renderer: audio.AudioRenderer | undefined = undefined;
+  /**
+   * 当前渲染器建立时的采样率。缓存章是 24 kHz（GSV），实时（系统 TTS）是 16 kHz，
+   * 两者不能混：进章时按 `chapterAudioRoute` 的结果重建（见 `ensureRenderRate`）。
+   */
+  private renderRate: number = SAMPLE_RATE_SYSTEM;
   private ctx: common.UIAbilityContext | undefined = undefined;
   private source: BookSource | undefined = undefined;
   private book: Book | undefined = undefined;
@@ -172,6 +190,33 @@ export class TtsController {
   private progressTimerId: number = -1;
   private lastStatePushAt: number = 0;
   private playStartWallMs: number = 0;
+
+  // ── 预生成缓存播放（T-TTS-7 阶段二；设计与契约见 research/TTS-PREGEN-IMPL.md）──
+  /** 本章正在放预生成音频（UI 用它显示「预生成缓存」）。 */
+  @Trace pregMode: boolean = false;
+  /** 缓存路径正在下载 / 等首字节。 */
+  @Trace pregBuffering: boolean = false;
+  /** 已下载字节（「缓冲中 · 已下载 12 MB」）。 */
+  @Trace pregBytes: number = 0;
+  private pregPlayKey: string = '';
+  private pregSource: PregAudioSource | undefined = undefined;
+  /** seek 基准：源时间 ms + 那一刻的渲染帧位置 / 墙上时间。 */
+  private pregSeekBaseMs: number = 0;
+  private pregSeekFramePos: number = -1;
+  private pregSeekWallMs: number = 0;
+  /** 真的出过声了：之后本章不再换路线（IMPL §3.4 的章级原子切换）。 */
+  private pregPlaying: boolean = false;
+  /** 整章已经放完（`resume()` 据此决定要不要从头重来）。 */
+  private pregEnded: boolean = false;
+  /** 音频句柄 + 断点已就绪（下载完但当时暂停着，等 resume 再拉渲染器）。 */
+  private pregReady: boolean = false;
+  /** 渲染器已为当前断点拉起来，可以从文件读；否则 `fillFromPreg` 只给静音。 */
+  private pregPump: boolean = false;
+  /** 请求代次：换章/重开会自增，晚到的下载/seek 回调按代次丢弃。 */
+  private pregSeq: number = 0;
+  private prefPregenPrefer: boolean = TTS_PREGEN_PREFER_DEFAULT;
+  /** 「仅 Wi-Fi 时预生成」：只阻预取（正常播放要下就下，否则当场退回实时也照样费流量）。 */
+  private prefPregenWifiOnly: boolean = TTS_PREGEN_WIFI_ONLY_DEFAULT;
 
   private creating: boolean = false;
   private voiceSwitching: boolean = false;
@@ -196,15 +241,33 @@ export class TtsController {
     }
     this.speed = getNumber(ctx, KEY_TTS_SPEED, TTS_SPEED_DEFAULT);
     this.voice = getNumber(ctx, KEY_TTS_VOICE, TTS_VOICE_DEFAULT);
-    this.engineKind = getNumber(ctx, KEY_TTS_ENGINE, TTS_ENGINE_SYSTEM);
+    // D17：远端 VITS 实时链路已停用（音质太差），实时恒为系统 TTS；VPS 只服务
+    // 预生成缓存（走 `serverUrl` / `apiKey`）。存量偏好里的 REMOTE 一次性迁掉。
+    const storedEngine: number = getNumber(ctx, KEY_TTS_ENGINE, TTS_ENGINE_SYSTEM);
+    if (storedEngine === TTS_ENGINE_REMOTE) {
+      putNumber(ctx, KEY_TTS_ENGINE, TTS_ENGINE_SYSTEM);
+      hilog.info(DOMAIN, TAG, 'tts engine migrated remote->system (D17)');
+    }
+    this.engineKind = TTS_ENGINE_SYSTEM;
     this.serverUrl = getString(ctx, KEY_TTS_SERVER, TTS_SERVER_DEFAULT);
     this.apiKey = getString(ctx, KEY_TTS_API_KEY, TTS_API_KEY_DEFAULT);
     this.remoteVoice = normalizeRemoteVoice(getString(ctx, KEY_TTS_REMOTE_VOICE, TTS_REMOTE_VOICE_DEFAULT));
+    this.prefPregenPrefer = getBoolean(ctx, KEY_TTS_PREGEN_PREFER, TTS_PREGEN_PREFER_DEFAULT);
+    this.prefPregenWifiOnly = getBoolean(ctx, KEY_TTS_PREGEN_WIFI_ONLY, TTS_PREGEN_WIFI_ONLY_DEFAULT);
   }
 
-  /** PCM frame rate of the active engine's renderer (system 16 kHz / remote 24 kHz). */
+  /** 预生成链路与实时链路共用同一台服务器 / 同一个 Key（单一来源）。 */
+  serverBase(): string {
+    return this.serverUrl;
+  }
+
+  apiKeyValue(): string {
+    return this.apiKey;
+  }
+
+  /** 当前这一章的 PCM 采样率：缓存章 24 kHz（GSV），实时（系统 TTS）16 kHz。 */
   private get sampleRate(): number {
-    return this.engineKind === TTS_ENGINE_REMOTE ? SAMPLE_RATE_REMOTE : SAMPLE_RATE_SYSTEM;
+    return this.pregMode ? SAMPLE_RATE_REMOTE : SAMPLE_RATE_SYSTEM;
   }
 
   isActiveFor(bookId: string): boolean {
@@ -236,10 +299,6 @@ export class TtsController {
   ): Promise<void> {
     this.ctx = ctx;
     this.loadPrefs();
-    if (this.engineKind === TTS_ENGINE_REMOTE && this.serverUrl.trim().length === 0) {
-      hilog.warn(DOMAIN, TAG, 'remote engine selected but no server URL, using system TTS');
-      this.engineKind = TTS_ENGINE_SYSTEM;
-    }
     if (this.active && this.book !== undefined && this.book.bookId !== book.bookId) {
       this.stop();
     }
@@ -256,11 +315,10 @@ export class TtsController {
       book.name, chapterIndex, paragraphIndex);
     this.loading = true;
     try {
-      // The remote engine needs no local TTS engine; only the renderer/session.
-      if (this.engineKind !== TTS_ENGINE_REMOTE) {
-        await this.ensureEngine();
-      }
+      await this.ensureEngine();
       await this.ensureSession();
+      // 这里还不知道本章走哪条路（`beginFrom` 才定），先按实时采样率建；
+      // 缓存章会在 `ensureRenderRate` 里重建为 24 kHz。
       await this.ensureRenderer();
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'init failed');
@@ -286,6 +344,9 @@ export class TtsController {
     this.stopProgressTimer();
     this.setPlaying(false);
     this.active = false;
+    this.pregSeq++;
+    // 保留缓存文件（cacheDir 由系统回收，重开同一章不必重下）；只放句柄
+    this.releasePregAudio();
     if (this.engine !== undefined) {
       try {
         this.engine.stop();
@@ -375,8 +436,12 @@ export class TtsController {
     if (this.renderer !== undefined) {
       return;
     }
+    // 本次创建所属的代次。创建是异步的：期间可能换了章或停了播（`pregSeq` 变），
+    // 那时这个实例不该挂上去（否则 24 kHz 的实例可能接到 16 kHz 的章上，或
+    // 停播后一直被占着不放）。
+    const gen: number = this.pregSeq;
     const streamInfo: audio.AudioStreamInfo = {
-      samplingRate: this.engineKind === TTS_ENGINE_REMOTE
+      samplingRate: this.renderRate === SAMPLE_RATE_REMOTE
         ? audio.AudioSamplingRate.SAMPLE_RATE_24000
         : audio.AudioSamplingRate.SAMPLE_RATE_16000,
       channels: audio.AudioChannel.CHANNEL_1,
@@ -393,6 +458,14 @@ export class TtsController {
     };
     try {
       const renderer: audio.AudioRenderer = await audio.createAudioRenderer(options);
+      if (gen !== this.pregSeq || !this.active) {
+        try {
+          renderer.release();
+        } catch (err) {
+        }
+        hilog.info(DOMAIN, TAG, 'renderer discarded gen=%{public}d', gen);
+        return;
+      }
       renderer.on('writeData', (buffer: ArrayBuffer) => {
         return this.fill(buffer);
       });
@@ -403,12 +476,25 @@ export class TtsController {
         }
       });
       this.renderer = renderer;
-      hilog.info(DOMAIN, TAG, 'renderer ready');
+      hilog.info(DOMAIN, TAG, 'renderer ready rate=%{public}d', this.renderRate);
     } catch (err) {
       const e = err as BusinessError;
       hilog.error(DOMAIN, TAG, 'renderer create failed code=%{public}d msg=%{public}s', e.code, e.message);
       throw new Error(e.message);
     }
+  }
+
+  /**
+   * 按本章路线准备渲染器：采样率变了就重建（D17：缓存 24 kHz / 系统 TTS 16 kHz）。
+   * 只在**进章时**调用——一旦出声，这一章内不再换采样率。
+   */
+  private async ensureRenderRate(rate: number): Promise<void> {
+    if (rate !== this.renderRate) {
+      hilog.info(DOMAIN, TAG, 'render rate %{public}d -> %{public}d', this.renderRate, rate);
+      this.releaseRenderer();
+      this.renderRate = rate;
+    }
+    await this.ensureRenderer();
   }
 
   private async startRenderer(): Promise<void> {
@@ -568,6 +654,7 @@ export class TtsController {
   // ── Content / synthesis queue ─────────────────────────────────
 
   private setChapter(index: number, title: string, paragraphs: string[]): void {
+    this.releasePregAudio();
     this.chapterIndex = index;
     this.chapterTitle = title;
     this.paragraphs = paragraphs;
@@ -579,6 +666,25 @@ export class TtsController {
       sum += p.length;
     }
     this.totalChars = sum;
+    // 章节文件里已经记过预生成键？没有就说明这一章还没被预生成过 → ''
+    this.pregPlayKey = this.lookupPregKey(index);
+  }
+
+  /** 该章的预生成音频键（同步读章节缓存；无键/无 ctx 返回 ''）。 */
+  private lookupPregKey(index: number): string {
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    const book: Book | undefined = this.book;
+    if (ctx === undefined || book === undefined) {
+      return '';
+    }
+    if (index < 0 || index >= this.chapters.length) {
+      return '';
+    }
+    try {
+      return getChapterPregKey(ctx, book.bookId, index, this.chapters[index].url);
+    } catch (err) {
+      return '';
+    }
   }
 
   private async loadChapter(index: number, startAtEnd: boolean, autoplay: boolean): Promise<void> {
@@ -647,6 +753,7 @@ export class TtsController {
       }
     }
     this.resetQueues();
+    this.releasePregAudio();
     this.currentIndex = target;
     this.paragraphIndex = target;
     this.issuedIndex = target;
@@ -654,8 +761,45 @@ export class TtsController {
     this.setPlaying(true);
     this.startBackground();
     this.persistProgress();
-    hilog.info(DOMAIN, TAG, 'begin para=%{public}d', target);
     this.updatePlaybackState(avSession.PlaybackState.PLAYBACK_STATE_PLAY);
+    const seq: number = ++this.pregSeq;
+    // 路由照旧（有键就走缓存）：**不做「pending 就跳过」**——同一 job 里有的章可能早就算好了
+    // （重新提交 / 别处提交过），跳过反而白走 16 kHz 实时（还会来回重建采样率）。
+    // 没算好的那几章多付一次 404 很便宜，退实时前会记 `preg key kept`。
+    const route: string = chapterAudioRoute(this.prefPregenPrefer, this.pregPlayKey);
+    const cache: boolean = route === AUDIO_CACHE;
+    // 采样率随路线走（缓存 24 kHz / 实时 16 kHz），重建渲染器是异步的：
+    // 两条分支都等它就位再动；期间换了章或停了播，`seq` 已变，直接放弃。
+    this.ensureRenderRate(cache ? SAMPLE_RATE_REMOTE : SAMPLE_RATE_SYSTEM).then((): void => {
+      if (seq !== this.pregSeq || !this.active) {
+        return;
+      }
+      if (cache) {
+        // 预生成音频是「整章一份」：从章头起放，段落边界靠官方 chunks 时间轴还原
+        hilog.info(DOMAIN, TAG, 'begin para=%{public}d route=cache', target);
+        this.startPregChapter(this.pregPlayKey, target, seq);
+        return;
+      }
+      hilog.info(DOMAIN, TAG, 'begin para=%{public}d route=realtime', target);
+      this.startRealtime();
+    }).catch((): void => {
+      if (seq !== this.pregSeq || !this.active) {
+        return;
+      }
+      hilog.error(DOMAIN, TAG, 'renderer init failed route=%{public}s', route);
+      this.error = '听书初始化失败';
+      this.setPlaying(false);
+    });
+  }
+
+  /** 实时链路（系统 TTS AHEAD 预合成 / 服务端整段 HTTP），两条预生成之外的路径共用。 */
+  private startRealtime(): void {
+    this.pregMode = false;
+    this.pregBuffering = false;
+    if (!this.playing) {
+      // 下载期间被暂停 / 停下了：等 resume() 再拉数据，别现在就把渲染器跑起来
+      return;
+    }
     this.ensureSynthesized();
     this.startFlushTimer();
     this.startProgressTimer();
@@ -665,6 +809,11 @@ export class TtsController {
   /** Issue synth requests for upcoming paragraphs so playback has a small buffer. */
   private ensureSynthesized(): void {
     if (!this.playing) {
+      return;
+    }
+    // 缓存章整章一份音频，不走 /tts；缓存还在下载时也不能先起实时合成，
+    // 否则下载完成会把刚合成的 PCM 整段丢掉（白烧服务器）
+    if (this.pregMode || this.pregBuffering) {
       return;
     }
     if (this.engineKind === TTS_ENGINE_REMOTE) {
@@ -869,15 +1018,34 @@ export class TtsController {
 
   /** Frames actually rendered since the last `flush()` → milliseconds. */
   private playedMs(): number {
-    const renderer: audio.AudioRenderer | undefined = this.renderer;
-    if (renderer !== undefined) {
-      try {
-        const info: audio.AudioTimestampInfo = renderer.getAudioTimestampInfoSync();
-        return info.framePos / this.sampleRate * 1000;
-      } catch (err) {
+    const frames: number = this.framePos();
+    if (this.pregMode) {
+      // 缓存路径：帧数增量 ÷ 采样率 = 已渲染的**源**毫秒（与 estimateDurationMs 同单位），
+      // seek 之后就落在 seek 基准上；平台不给帧位置时退化到墙上时钟 × 倍速。
+      const rate: number = pregPlaybackRate(this.speed);
+      if (frames >= 0 && this.pregSeekFramePos >= 0) {
+        return this.pregSeekBaseMs + Math.max(frames - this.pregSeekFramePos, 0) / this.sampleRate * 1000;
       }
+      return this.pregSeekBaseMs + Math.max(Date.now() - this.pregSeekWallMs, 0) * rate;
+    }
+    if (frames >= 0) {
+      return frames / this.sampleRate * 1000;
     }
     return Math.max(Date.now() - this.playStartWallMs, 0);
+  }
+
+  /** 渲染器已渲染的帧数；平台不支持时 -1（调用方退化到墙上时钟）。 */
+  private framePos(): number {
+    const renderer: audio.AudioRenderer | undefined = this.renderer;
+    if (renderer === undefined) {
+      return -1;
+    }
+    try {
+      const info: audio.AudioTimestampInfo = renderer.getAudioTimestampInfoSync();
+      return info.framePos;
+    } catch (err) {
+      return -1;
+    }
   }
 
   /** Latest timeline slot whose start has been reached. */
@@ -959,6 +1127,9 @@ export class TtsController {
   // ── Renderer data source ──────────────────────────────────────
 
   private fill(buffer: ArrayBuffer): audio.AudioDataCallbackResult {
+    if (this.pregMode) {
+      return this.fillFromPreg(new Uint8Array(buffer));
+    }
     const view: Uint8Array = new Uint8Array(buffer);
     const space: number = view.length;
     let pos: number = 0;
@@ -987,6 +1158,33 @@ export class TtsController {
     return audio.AudioDataCallbackResult.VALID;
   }
 
+  /** 缓存路径的写回调：直接从文件读；读不到就补零（静音），整章读完时收尾。 */
+  private fillFromPreg(view: Uint8Array): audio.AudioDataCallbackResult {
+    const source: PregAudioSource | undefined = this.pregSource;
+    // 断点刚摆好、渲染器还没拉起来：给静音（否则它会把 seek 之后的字节抢在 flush 前读走）
+    if (source === undefined || !this.pregPump) {
+      return audio.AudioDataCallbackResult.VALID;
+    }
+    const n: number = source.read(view);
+    if (n > 0 && !this.pregPlaying) {
+      // 第一个字节真的进了渲染器 = 本章已经出声；此后不再换路线（IMPL §3.4）
+      this.pregPlaying = true;
+      hilog.info(DOMAIN, TAG, 'preg playing key=%{public}s', this.pregPlayKey);
+    }
+    if (n < view.length) {
+      view.fill(0, n);
+      if (source.atEnd() && !this.pregEnded) {
+        this.pregEnded = true;
+        // 写回调里不能做重活（异步收尾 + 换章）→ 让出这一帧，并带上代次里的 key
+        const key: string = this.pregPlayKey;
+        setTimeout(() => {
+          this.onPregEnded(key);
+        }, 0);
+      }
+    }
+    return audio.AudioDataCallbackResult.VALID;
+  }
+
   private scheduleParagraphEnd(index: number): void {
     setTimeout(() => {
       this.onParagraphEnd(index);
@@ -994,6 +1192,10 @@ export class TtsController {
   }
 
   private onParagraphEnd(index: number): void {
+    // 缓存路径没有段落边界回调（整章一份音频），章末走 onPregEnded
+    if (this.pregMode || this.pregBuffering) {
+      return;
+    }
     if (!this.playing || index !== this.paragraphs.length - 1) {
       return;
     }
@@ -1048,7 +1250,13 @@ export class TtsController {
     }
     // Natural completion drained every paragraph; restart the chapter so the
     // play button is not a silent no-op after the book ends.
-    if (this.queueExhausted()) {
+    if (this.pregMode) {
+      // 缓存路径：文件位置就是暂停处，直接续（别重开文件 / 重下整章）
+      if (this.pregSource === undefined || this.pregEnded) {
+        this.beginFrom(0);
+        return;
+      }
+    } else if (this.queueExhausted()) {
       this.beginFrom(0);
       return;
     }
@@ -1058,10 +1266,20 @@ export class TtsController {
     this.playStartWallMs = Date.now() - this.elapsedMs;
     this.startBackground();
     this.ensureSynthesized();
-    this.startFlushTimer();
+    if (!this.pregMode) {
+      this.startFlushTimer();
+    }
     this.startProgressTimer();
     this.updatePlaybackState(avSession.PlaybackState.PLAYBACK_STATE_PLAY);
     const renderer: audio.AudioRenderer | undefined = this.renderer;
+    if (this.pregMode && this.pregReady) {
+      // 缓存音频在下暂停期间就绪：断点已摆好，现在把渲染器拉起来
+      this.pregReady = false;
+      this.startProgressTimer();
+      this.startPregRenderer(this.pregSeq);
+      this.updatePlaybackState(avSession.PlaybackState.PLAYBACK_STATE_PLAY);
+      return;
+    }
     if (renderer === undefined) {
       this.beginFrom(this.currentIndex);
       return;
@@ -1130,6 +1348,12 @@ export class TtsController {
     if (!this.active || this.totalChars === 0) {
       return;
     }
+    if (this.pregMode) {
+      // 缓存路径的时间轴已经是音频源时间（与上报给锁屏的 position 同单位），
+      // 直接查表到段落头（章内对齐，见 IMPL §3.3）
+      this.beginFrom(this.paragraphAt(time));
+      return;
+    }
     const targetChars: number = (time / 1000) * CHARS_PER_SECOND * this.speed;
     let index: number = 0;
     for (let i = 0; i < this.prefixChars.length; i++) {
@@ -1149,6 +1373,13 @@ export class TtsController {
     const ctx: common.UIAbilityContext | undefined = this.ctx;
     if (ctx !== undefined) {
       putNumber(ctx, KEY_TTS_SPEED, this.speed);
+    }
+    if (this.pregMode) {
+      // 缓存音频已经把语速烘死了（PREGEN_SPEED），只能在渲染器上改倍速
+      this.applyPregRate();
+      this.updateMetadata();
+      this.updatePlaybackStateFromPlaying();
+      return;
     }
     if (this.active && this.playing && this.engineKind === TTS_ENGINE_REMOTE) {
       // Remote PCM arrives already spoken at the new rate, so there is nothing to
@@ -1295,7 +1526,7 @@ export class TtsController {
     }
     const playback: avSession.AVPlaybackState = {
       state: state,
-      speed: this.speed,
+      speed: this.effectiveRate(),
       position: {
         elapsedTime: this.elapsedMs,
         updateTime: Date.now()
@@ -1312,11 +1543,344 @@ export class TtsController {
       : avSession.PlaybackState.PLAYBACK_STATE_PAUSE);
   }
 
+  /**
+   * 「缓存优先播放」开关（听书设置）：改完**下一次进章**生效（本章不换路线，见 IMPL §3.4）。
+   * 关掉之后所有章节都走实时 VITS——排查缓存链路用。
+   */
+  setPregenPrefer(value: boolean): void {
+    this.prefPregenPrefer = value;
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    if (ctx !== undefined) {
+      putBoolean(ctx, KEY_TTS_PREGEN_PREFER, value);
+    }
+  }
+
+  /** 「仅 Wi-Fi 时预生成」：进章时的下载不拦（那是用户当下要听），只拦后台预取。 */
+  setPregenWifiOnly(value: boolean): void {
+    this.prefPregenWifiOnly = value;
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    if (ctx !== undefined) {
+      putBoolean(ctx, KEY_TTS_PREGEN_WIFI_ONLY, value);
+    }
+  }
+
+  /**
+   * 当前的实际播放速率。实时链路把语速烘在 PCM 里（`effectiveSpeed`），缓存链路在
+   * 渲染器上改倍速（`pregPlaybackRate`）；锁屏与「听感」小字都用这个值。
+   */
+  effectiveRate(): number {
+    if (this.pregMode) {
+      return pregPlaybackRate(this.speed);
+    }
+    return effectiveSpeed(this.speed, this.engineKind);
+  }
+
   estimateDurationMs(): number {
+    // 缓存章有真实时长（整章一份），比按字数估的准
+    if (this.pregMode && this.pregSource !== undefined) {
+      return this.pregSource.durationMs();
+    }
     if (this.paragraphCount <= 0 || this.totalChars === 0) {
       return 0;
     }
     return (this.totalChars / (CHARS_PER_SECOND * this.speed)) * 1000;
+  }
+
+  // ── 预生成缓存路径（设计 / 契约见 docs/research/TTS-PREGEN-IMPL.md）────────
+  //
+  // 进章前定路线（`chapterAudioRoute`），出声之后不再改：缓存是 24 kHz GPT-SoVITS，
+  // 系统 TTS 是 16 kHz，混着放会变调；**出声之前**失败（404/超时/开文件失败）才退回实时。
+
+  /** 缓存章：整章下载到本地 → 建段落时间轴 → 从段落头开播。 */
+  private startPregChapter(key: string, target: number, seq: number): void {
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    if (ctx === undefined) {
+      this.abandonCachePath(seq, target, 'no-ctx');
+      return;
+    }
+    this.pregBuffering = true;
+    this.pregBytes = 0;
+    // 只留本章这一份（下一章会在 prefetchNextPreg 里落到同一目录，最多两份）
+    sweepPregFiles(ctx, [key]);
+    loadPregAudio(this.serverUrl, this.apiKey, ctx, key, (bytes: number): void => {
+      if (seq === this.pregSeq) {
+        this.pregBytes = bytes;
+      }
+    }).then((audio: PregAudio): void => {
+      if (seq !== this.pregSeq || !this.active) {
+        return;
+      }
+      this.pregBuffering = false;
+      this.pregBytes = 0;
+      this.installPregTimeline(audio);
+      try {
+        this.pregSource = new PregAudioSource(audio.path);
+      } catch (err) {
+        this.pregSource = undefined;
+        this.abandonCachePath(seq, target, 'open');
+        return;
+      }
+      this.playPregFrom(target, seq);
+      this.prefetchNextPreg();
+    }).catch((err: Error): void => {
+      if (seq !== this.pregSeq || !this.active) {
+        return;
+      }
+      this.pregBuffering = false;
+      const e: PregenError = err as PregenError;
+      const kind: string = e.kind !== undefined ? e.kind : 'unknown';
+      hilog.warn(DOMAIN, TAG, 'preg audio failed kind=%{public}s msg=%{public}s',
+        kind, pregenErrorMessage(kind, e.message));
+      if (kind === 'notfound') {
+        // `notfound` 只说明「**现在**拿不到」：① job 还没算完（等几分钟就有）② 音频真没了（听完删过 / 被淘汰）。
+        // 键是**内容寻址**的 ⇒ 一律留住：① 算好了（或重新提交同一章）还是同一条 key，下次进章就命中；
+        // ② 留着也无害，只多一次注定 404 的请求。作废却会把刚付了算力的缓存永久丢掉（本地书尤其，
+        // 那边正文不进缓存、只靠旁路存键）。`pending=` 只用于日志区分两种 notfound（不改变行为）。
+        hilog.info(DOMAIN, TAG, 'preg key kept key=%{public}s why=notfound pending=%{public}d',
+          key, isPregKeyPending(key) ? 1 : 0);
+      }
+      this.abandonCachePath(seq, target, kind);
+    });
+  }
+
+  /** 缓存路径在**出声之前**失败：退回实时，用户感知不到声线变化。 */
+  private abandonCachePath(seq: number, target: number, why: string): void {
+    if (seq !== this.pregSeq || !this.active) {
+      return;
+    }
+    hilog.warn(DOMAIN, TAG, 'preg fallback=realtime why=%{public}s para=%{public}d', why, target);
+    this.releasePregAudio();
+    this.currentIndex = target;
+    this.paragraphIndex = target;
+    this.issuedIndex = target;
+    this.flushIndex = target;
+    // 退回实时前把渲染器换回 16 kHz（刚才按缓存章建的是 24 kHz）
+    this.ensureRenderRate(SAMPLE_RATE_SYSTEM).then((): void => {
+      if (seq !== this.pregSeq || !this.active) {
+        return;
+      }
+      this.startRealtime();
+    }).catch((): void => {
+    });
+  }
+
+  /**
+   * 从段落 `target` 起放整章音频（seek 靠文件读指针，渲染器只负责重新拉数据）。
+   * 下载期间有可能被暂停：那就只把断点摆好，`resume()` 再把渲染器拉起来。
+   */
+  private playPregFrom(target: number, seq: number): void {
+    const source: PregAudioSource | undefined = this.pregSource;
+    if (source === undefined) {
+      return;
+    }
+    this.pregMode = true;
+    this.pregEnded = false;
+    this.pregPlaying = false;
+    this.pregReady = true;
+    // 先停抽水：从实时章换过来时渲染器还在跑，它可能抢在 pause/flush 前把
+    // seek 位置之后的字节读走（那几帧随后被 flush 丢掉 = 丢音频）。
+    this.pregPump = false;
+    this.pregSeekBaseMs = this.timelineStartMs(target);
+    this.pregSeekWallMs = Date.now();
+    this.pregSeekFramePos = -1;
+    source.seekMs(this.pregSeekBaseMs);
+    this.elapsedMs = this.pregSeekBaseMs;
+    this.paragraphIndex = target;
+    this.currentIndex = target;
+    this.applyPregRate();
+    this.updateMetadata();
+    // 注意：hilog 不支持 `%f`（会原样打出 `}f`），倍速自己格成字符串。
+    hilog.info(DOMAIN, TAG, 'preg play para=%{public}d base=%{public}d rate=%{public}s',
+      target, this.pregSeekBaseMs, pregPlaybackRate(this.speed).toFixed(2));
+    if (!this.playing) {
+      hilog.info(DOMAIN, TAG, 'preg ready while paused para=%{public}d', target);
+      return;
+    }
+    this.startProgressTimer();
+    this.startPregRenderer(seq);
+    this.updatePlaybackState(avSession.PlaybackState.PLAYBACK_STATE_PLAY);
+  }
+
+  /**
+   * 把渲染器拉回「从头喂」的状态：flush 掉实时链路的残留队列，再 start；
+   * 真正的断点位置在文件读指针上（`source.seekMs`），渲染器没有 seek API。
+   */
+  private async startPregRenderer(seq: number): Promise<void> {
+    const renderer: audio.AudioRenderer | undefined = this.renderer;
+    if (renderer === undefined) {
+      this.abandonCachePath(seq, this.currentIndex, 'no-renderer');
+      return;
+    }
+    try {
+      await renderer.pause();
+    } catch (err) {
+    }
+    try {
+      await renderer.flush();
+    } catch (err) {
+    }
+    if (seq !== this.pregSeq || !this.pregMode) {
+      return;
+    }
+    try {
+      await renderer.start();
+    } catch (err) {
+      const e: BusinessError = err as BusinessError;
+      hilog.error(DOMAIN, TAG, 'preg renderer start failed code=%{public}d', e.code);
+    }
+    if (seq !== this.pregSeq || !this.pregMode) {
+      return;
+    }
+    // 基准在 start 之后取：flush/start 可能把 framePos 清零也可能继续累加，
+    // 进度只算「此刻起的增量」，两种平台行为都对。
+    this.pregSeekFramePos = this.framePos();
+    this.pregSeekWallMs = Date.now();
+    this.pregReady = false;
+    this.pregPump = true;
+  }
+
+  /** 缓存音频的语速烘死在服务端，只能在渲染器上改倍速（见 `pregPlaybackRate`）。 */
+  private applyPregRate(): void {
+    const renderer: audio.AudioRenderer | undefined = this.renderer;
+    if (renderer === undefined) {
+      return;
+    }
+    try {
+      renderer.setSpeed(pregPlaybackRate(this.speed));
+      // 变速的验收判据（IMPL §4.2 第 4 项）：改语速**不重下**，只改这里的倍速
+      hilog.info(DOMAIN, TAG, 'preg rate=%{public}s', pregPlaybackRate(this.speed).toFixed(2));
+    } catch (err) {
+      const e: BusinessError = err as BusinessError;
+      hilog.warn(DOMAIN, TAG, 'preg setSpeed failed code=%{public}d', e.code);
+    }
+  }
+
+  /** 块锚点 → 段落时间轴；拿不到锚点就按字数摊平（高亮边界会偏，但不会错乱）。 */
+  private installPregTimeline(audio: PregAudio): void {
+    const timings: PregenTiming[] = pregTimeline(audio.chunks, this.paragraphs, audio.audioMs);
+    this.timeline = [];
+    for (const seg of timings) {
+      this.timeline.push(new ParagraphTiming(seg.index, seg.startMs, seg.endMs));
+    }
+    if (timings.length > 0) {
+      const last: PregenTiming = timings[timings.length - 1];
+      if (last.index !== this.paragraphs.length - 1) {
+        // 服务端存的正文与本地解析出的段落数不一致（正文变了）：音频照放，
+        // 高亮会停在最后一段——日志里留证据，不静默
+        hilog.warn(DOMAIN, TAG, 'preg timeline covers=%{public}d/%{public}d',
+          last.index + 1, this.paragraphs.length);
+      }
+    }
+  }
+
+  /** 段落 `index` 在整章音频里的起点（源时间 ms）；找不到就当章头。 */
+  private timelineStartMs(index: number): number {
+    for (const seg of this.timeline) {
+      if (seg.index === index) {
+        return seg.startMs;
+      }
+    }
+    return 0;
+  }
+
+  /** 整章音频放完（`fill` 读到文件尾）：听完即删，再进下一章。 */
+  private onPregEnded(key: string): void {
+    if (!this.active || !this.playing || !this.pregMode || key !== this.pregPlayKey) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'preg chapter end key=%{public}s', key);
+    this.completePregChapter(key);
+    const next: number = nextReadable(this.chapters, this.chapterIndex);
+    if (next < 0) {
+      this.setPlaying(false);
+      this.clearTimer();
+      this.stopProgressTimer();
+      this.stopBackground();
+      if (this.renderer !== undefined) {
+        this.renderer.pause().catch((err: BusinessError) => {
+        });
+      }
+      this.updatePlaybackState(avSession.PlaybackState.PLAYBACK_STATE_COMPLETED);
+      return;
+    }
+    this.loadChapter(next, false, true);
+  }
+
+  /**
+   * 听完即删：本地音频 + 服务端缓存 + 章节缓存里的键。
+   *
+   * 删服务端是为了让「生成完就一直占着盘」不会积累（用户重听同一章会重新生成或
+   * 退回实时，见 IMPL §3.4）；本地那份顺手删是因为键已经没了。
+   */
+  private completePregChapter(key: string): void {
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    if (ctx !== undefined) {
+      deletePregFile(ctx, key);
+    }
+    deletePregCache(this.serverUrl, this.apiKey, key).catch((err: Error): void => {
+    });
+    if (key === this.pregPlayKey) {
+      this.invalidatePregKey();
+    }
+  }
+
+  /** 把当前章的预生成键从章节缓存里抹掉（服务端已无对应音频）。 */
+  private invalidatePregKey(): void {
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    const book: Book | undefined = this.book;
+    this.pregPlayKey = '';
+    if (ctx === undefined || book === undefined || this.chapterIndex < 0
+      || this.chapterIndex >= this.chapters.length) {
+      return;
+    }
+    try {
+      clearChapterPregKey(ctx, book.bookId, this.chapterIndex, this.chapters[this.chapterIndex].url);
+    } catch (err) {
+    }
+  }
+
+  /** 当前章开播之后，后台把下一章备到本地；失败无所谓（正常走下载 / 实时）。 */
+  private prefetchNextPreg(): void {
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    if (ctx === undefined || !this.prefPregenPrefer) {
+      return;
+    }
+    if (this.prefPregenWifiOnly && !onWifi()) {
+      hilog.info(DOMAIN, TAG, 'preg prefetch skipped (wifi-only)');
+      return;
+    }
+    const next: number = nextReadable(this.chapters, this.chapterIndex);
+    if (next < 0) {
+      return;
+    }
+    const key: string = this.lookupPregKey(next);
+    if (key.length === 0 || key === this.pregPlayKey) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'preg prefetch next=%{public}d key=%{public}s', next, key);
+    loadPregAudio(this.serverUrl, this.apiKey, ctx, key, (bytes: number): void => {
+    }).then((audio: PregAudio): void => {
+      // 预取只要落盘，时间轴等真正进章时再装
+      hilog.info(DOMAIN, TAG, 'preg prefetch ready ms=%{public}d', audio.audioMs);
+    }).catch((err: Error): void => {
+      const e: PregenError = err as PregenError;
+      hilog.warn(DOMAIN, TAG, 'preg prefetch failed msg=%{public}s', e.message);
+    });
+  }
+
+  /** 放掉当前章的音频句柄（不动磁盘文件）：换章 / 停播 / 退实时都走这里。 */
+  private releasePregAudio(): void {
+    const source: PregAudioSource | undefined = this.pregSource;
+    this.pregSource = undefined;
+    this.pregMode = false;
+    this.pregPlaying = false;
+    this.pregBuffering = false;
+    this.pregReady = false;
+    this.pregPump = false;
+    this.pregBytes = 0;
+    if (source !== undefined) {
+      source.close();
+    }
   }
 
   // ── Progress persistence ──────────────────────────────────────

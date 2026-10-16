@@ -19,6 +19,11 @@ interface CachedChapter {
   url: string;
   content: string;
   fetchedAt: number;
+  /**
+   * 该章预生成音频的服务端缓存键（`POST /job` / `POST /cache/probe` 返回；客户端**不自己拼**）。
+   * 键跟着正文缓存一起失效：正文变了（`url` 变）或条目被清掉，键自然作废。
+   */
+  pregKey?: string;
 }
 
 const memory: Map<string, CachedChapter> = new Map();
@@ -79,20 +84,23 @@ function touchFile(path: string, key: string): void {
   }
 }
 
-/** Return cached chapter content if present and still matching `url`. */
-export function getCachedChapter(
+/**
+ * Read one entry (memory first, then disk), validating it against the chapter `url`.
+ * The returned object is the **same reference** held in `memory`, so callers may mutate it.
+ */
+function readEntry(
   ctx: common.UIAbilityContext,
   bookId: string,
   index: number,
   url: string
-): string | undefined {
+): CachedChapter | undefined {
   const key: string = memoryKey(bookId, index);
   const mem: CachedChapter | undefined = memory.get(key);
   if (mem !== undefined) {
     if (mem.url === url) {
       touchMemory(key, mem);
       touchFile(filePath(ctx, bookId, index), key);
-      return mem.content;
+      return mem;
     }
     memory.delete(key);
   }
@@ -108,21 +116,14 @@ export function getCachedChapter(
     }
     touchMemory(key, entry);
     touchFile(path, key);
-    return entry.content;
+    return entry;
   } catch (err) {
     return undefined;
   }
 }
 
-/** Store chapter content in memory and on disk. Failures are non-fatal. */
-export function putCachedChapter(
-  ctx: common.UIAbilityContext,
-  bookId: string,
-  index: number,
-  url: string,
-  content: string
-): void {
-  const entry: CachedChapter = { url: url, content: content, fetchedAt: Date.now() };
+/** Write one entry to `filesDir/chapters`. Failures are non-fatal. */
+function writeEntry(ctx: common.UIAbilityContext, bookId: string, index: number, entry: CachedChapter): void {
   touchMemory(memoryKey(bookId, index), entry);
   const dir: string = cacheDir(ctx);
   try {
@@ -143,14 +144,181 @@ export function putCachedChapter(
   } catch (err) {
     return;
   }
+}
+
+/** Return cached chapter content if present and still matching `url`. */
+export function getCachedChapter(
+  ctx: common.UIAbilityContext,
+  bookId: string,
+  index: number,
+  url: string
+): string | undefined {
+  const entry: CachedChapter | undefined = readEntry(ctx, bookId, index, url);
+  return entry !== undefined ? entry.content : undefined;
+}
+
+/**
+ * 预生成音频键的**旁路**存储（T-TTS-7）。
+ *
+ * 正文进了章节缓存（`filesDir/chapters`）的书，键跟着条目走（`CachedChapter.pregKey`），
+ * 正文重抽即作废。**本地导入的书正文不进章节缓存**（`LocalBook` 直读导入的文件）⇒ 键没有落点，
+ * 落到这里：`filesDir/pregkeys/<bookId>_<index>.json`，只有 `url` + `pregKey` 两个字段
+ * （两个名字本来就在 `obfuscation-rules.txt` 里，release 一样安全）。
+ *
+ * 权威顺序：**正文条目在 ⇒ 只信条目里的键**（不吃旁路，避免正文换了、键还活着）；
+ * 没有条目（本地书）⇒ 才读旁路。`url` 一变（换源 / 目录重排）两边都自动失效。
+ */
+interface PregKeyEntry {
+  url: string;
+  pregKey: string;
+}
+
+const PREGKEY_DIR_NAME: string = 'pregkeys';
+
+function pregKeyDir(ctx: common.UIAbilityContext): string {
+  return ctx.filesDir + '/' + PREGKEY_DIR_NAME;
+}
+
+function pregKeyPath(ctx: common.UIAbilityContext, bookId: string, index: number): string {
+  return pregKeyDir(ctx) + '/' + bookId + '_' + index.toString() + '.json';
+}
+
+/** `url` 对得上才返回键；文件不在 / 读不了 / url 变了都当没有。 */
+function readPregKeyFile(ctx: common.UIAbilityContext, bookId: string, index: number, url: string): string {
+  const path: string = pregKeyPath(ctx, bookId, index);
+  try {
+    if (!fileIo.accessSync(path)) {
+      return '';
+    }
+    const entry: PregKeyEntry = JSON.parse(fileIo.readTextSync(path)) as PregKeyEntry;
+    return entry.url === url ? entry.pregKey : '';
+  } catch (err) {
+    return '';
+  }
+}
+
+function writePregKeyFile(
+  ctx: common.UIAbilityContext,
+  bookId: string,
+  index: number,
+  url: string,
+  pregKey: string
+): boolean {
+  const dir: string = pregKeyDir(ctx);
+  try {
+    if (!fileIo.accessSync(dir)) {
+      fileIo.mkdirSync(dir);
+    }
+  } catch (err) {
+    return false;
+  }
+  try {
+    const file = fileIo.openSync(
+      pregKeyPath(ctx, bookId, index),
+      fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC
+    );
+    const entry: PregKeyEntry = { url: url, pregKey: pregKey };
+    fileIo.writeSync(file.fd, JSON.stringify(entry));
+    fileIo.closeSync(file);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function deletePregKeyFile(ctx: common.UIAbilityContext, bookId: string, index: number): void {
+  const path: string = pregKeyPath(ctx, bookId, index);
+  try {
+    if (fileIo.accessSync(path)) {
+      fileIo.unlinkSync(path);
+    }
+  } catch (err) {
+    return;
+  }
+}
+
+/** The pre-generated cache key stored with this chapter, or '' when there is none. */
+export function getChapterPregKey(
+  ctx: common.UIAbilityContext,
+  bookId: string,
+  index: number,
+  url: string
+): string {
+  const entry: CachedChapter | undefined = readEntry(ctx, bookId, index, url);
+  if (entry !== undefined) {
+    return entry.pregKey === undefined ? '' : entry.pregKey;
+  }
+  // 正文不在缓存（本地书）：只有旁路文件可能知道键。
+  return readPregKeyFile(ctx, bookId, index, url);
+}
+
+/**
+ * Remember the cache key the server returned for this chapter ('预生成' job).
+ * 正文已经在章节缓存里 ⇒ 键跟着条目走（正文重抽即作废）；正文不在缓存（本地书）
+ * ⇒ 落到旁路文件。返回键是否真的落盘（调用方用它统计，别再数「尝试」）。
+ */
+export function setChapterPregKey(
+  ctx: common.UIAbilityContext,
+  bookId: string,
+  index: number,
+  url: string,
+  pregKey: string
+): boolean {
+  if (pregKey.length === 0) {
+    return false;
+  }
+  const entry: CachedChapter | undefined = readEntry(ctx, bookId, index, url);
+  if (entry === undefined) {
+    return writePregKeyFile(ctx, bookId, index, url, pregKey);
+  }
+  // 正文条目是权威：顺手清掉可能残留的旁路文件，避免正文换了之后两边打架。
+  deletePregKeyFile(ctx, bookId, index);
+  if (entry.pregKey === pregKey) {
+    return true;
+  }
+  entry.pregKey = pregKey;
+  writeEntry(ctx, bookId, index, entry);
+  return true;
+}
+
+/**
+ * Forget the pre-generated key (the server-side audio is gone: played once / evicted).
+ * The body stays cached, so the next play of this chapter goes realtime instead of
+ * asking for a file that no longer exists.
+ */
+export function clearChapterPregKey(
+  ctx: common.UIAbilityContext,
+  bookId: string,
+  index: number,
+  url: string
+): void {
+  const entry: CachedChapter | undefined = readEntry(ctx, bookId, index, url);
+  if (entry !== undefined && entry.pregKey !== undefined) {
+    entry.pregKey = undefined;
+    writeEntry(ctx, bookId, index, entry);
+  }
+  deletePregKeyFile(ctx, bookId, index);
+}
+
+/** Store chapter content in memory and on disk. Failures are non-fatal. */
+export function putCachedChapter(
+  ctx: common.UIAbilityContext,
+  bookId: string,
+  index: number,
+  url: string,
+  content: string
+): void {
+  const entry: CachedChapter = { url: url, content: content, fetchedAt: Date.now() };
+  // 正文重新落盘（章节内容更新 / 缓存被清后重抓）时，旧的预生成键一并作废。
+  writeEntry(ctx, bookId, index, entry);
   // Cheap gate (one directory listing at most every N writes) → async quota trim.
   maybeTrimCaches(ctx);
 }
 
 /**
- * Drop every cached body of one book: the in-memory entries and the
- * `filesDir/chapters/{bookId}_{index}.json` files. Best-effort — a file that
- * denies deletion is skipped; the caller has already removed the DB row.
+ * Drop every cached body of one book: the in-memory entries, the `filesDir/chapters/{bookId}_{index}.json`
+ * files **and** its `pregkeys` sidecar files (if any). Best-effort — a file that denies deletion is
+ * skipped; the caller has already removed the DB row.
  *
  * Prefix safety: `bookId` is hex (`computeBookId`) and the file prefix ends with
  * `_`, so no other book's files can match.
@@ -167,8 +335,12 @@ export function deleteBookChapters(ctx: common.UIAbilityContext, bookId: string)
       lastTouchAt.delete(key);
     }
   });
-  const dir: string = cacheDir(ctx);
-  const prefix: string = bookId + '_';
+  sweepBookFiles(cacheDir(ctx), bookId + '_');
+  sweepBookFiles(pregKeyDir(ctx), bookId + '_');
+}
+
+/** Delete every `<prefix><anything>.json` in `dir` (missing dir → nothing to do). Best-effort. */
+function sweepBookFiles(dir: string, prefix: string): void {
   let names: string[] = [];
   try {
     if (!fileIo.accessSync(dir)) {

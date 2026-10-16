@@ -1,9 +1,12 @@
 import { common } from '@kit.AbilityKit';
 import { BookCover } from '../components/BookCover';
 import { ListenParam, TTS_SPEED_OPTIONS, TTS_TIMER_OPTIONS, TTS_VOICE_OPTIONS,
-  TTS_ENGINE_REMOTE, TTS_REMOTE_VOICE_OPTIONS, TTS_REMOTE_SPEED_MAX, effectiveSpeed } from '../common/Const';
+  KEY_TTS_PREGEN_AHEAD, TTS_PREGEN_AHEAD_DEFAULT } from '../common/Const';
+import { getNumber } from '../common/Prefs';
 import { Chapter } from '../engine/types';
 import { TtsController } from '../model/TtsController';
+import { TtsPregenRunner } from '../model/TtsPregenRunner';
+import { PregenFailure, pregenFailureText } from '../model/TtsPregen';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 
 function voiceName(person: number): string {
@@ -35,6 +38,8 @@ export struct ListeningPage {
 
   @Local sheetVisible: boolean = false;
   @Local tts: TtsController = TtsController.instance();
+  /** 预生成作业跟踪器：进程级单例（听书页收起再打开时作业还在服务端跑） */
+  @Local runner: TtsPregenRunner = TtsPregenRunner.instance();
 
   aboutToAppear(): void {
     const p: ListenParam | undefined = this.param;
@@ -42,12 +47,16 @@ export struct ListeningPage {
       return;
     }
     if (this.tts.isActiveFor(p.book.bookId)) {
+      // 会话还在（从书架/书城再进来）：预生成作业也还在跑，把轮询接回来
+      this.runner.resumePolling();
       return;
     }
     const ctx: common.UIAbilityContext | undefined = this.ctx();
     if (ctx === undefined) {
       return;
     }
+    // 新起一次听书：上一本书的预生成跟踪状态作废（服务端作业不受影响）
+    this.runner.reset();
     this.tts.start(ctx, p.source, p.book, p.chapters, p.chapterIndex, p.paragraphs, p.paragraphIndex);
   }
 
@@ -79,13 +88,10 @@ export struct ListeningPage {
   }
 
   private speedMenuItems(): MenuElement[] {
-    const remote: boolean = this.tts.engineKind === TTS_ENGINE_REMOTE;
     const items: MenuElement[] = [];
     for (const value of TTS_SPEED_OPTIONS) {
       items.push({
         value: value.toFixed(1) + 'x',
-        // 远端服务器单字合成 0.13-0.16s，有效语速 >1.0 就会段间空档（见 TTS_REMOTE_SPEED_MAX）。
-        enabled: !remote || value <= TTS_REMOTE_SPEED_MAX,
         action: () => this.tts.setSpeed(value)
       });
     }
@@ -105,15 +111,6 @@ export struct ListeningPage {
 
   private voiceMenuItems(): MenuElement[] {
     const items: MenuElement[] = [];
-    if (this.tts.engineKind === TTS_ENGINE_REMOTE) {
-      for (const voice of TTS_REMOTE_VOICE_OPTIONS) {
-        items.push({
-          value: voice,
-          action: () => this.tts.setRemoteVoice(voice)
-        });
-      }
-      return items;
-    }
     for (const value of TTS_VOICE_OPTIONS) {
       items.push({
         value: voiceName(value),
@@ -130,6 +127,74 @@ export struct ListeningPage {
     const m: number = Math.floor(this.tts.timerRemain / 60);
     const s: number = this.tts.timerRemain % 60;
     return (m < 10 ? '0' + m.toString() : m.toString()) + ':' + (s < 10 ? '0' + s.toString() : s.toString());
+  }
+
+  // ── 预生成（TTS-PREGEN-IMPL §3.3）────────────────────────────
+
+  private aheadCount(): number {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      return TTS_PREGEN_AHEAD_DEFAULT;
+    }
+    return Math.max(getNumber(ctx, KEY_TTS_PREGEN_AHEAD, TTS_PREGEN_AHEAD_DEFAULT), 1);
+  }
+
+  private mbText(bytes: number): string {
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  }
+
+  /** 当前章的音频来源：缓存章 / 还在下 / 实时合成 / 系统兜底（发错路线一眼看得出来）。 */
+  private sourceLabel(): string {
+    if (this.tts.pregMode) {
+      return '预生成缓存 · 24 kHz';
+    }
+    if (this.tts.pregBuffering) {
+      return this.tts.pregBytes > 0
+        ? '正在下载预生成音频 · ' + this.mbText(this.tts.pregBytes)
+        : '正在下载预生成音频…';
+    }
+    // 实时只有系统 TTS 一条路（D17：远端 VITS 已停用）；
+    // 缓存音频只在预生成命中时出现，上面两个分支已经盖住。
+    return '系统 TTS 实时（这一章没有预生成音频）';
+  }
+
+  private pregenDetail(): string {
+    if (this.runner.message.length > 0) {
+      return this.runner.message;
+    }
+    return '电脑端后台合成：每章约 1 小时、单章约 31 MB';
+  }
+
+  private pregenActionLabel(): string {
+    if (this.runner.busy) {
+      return '处理中…';
+    }
+    if (this.runner.polling) {
+      return '停止查看';
+    }
+    if (this.runner.active && this.runner.failed + this.runner.expired > 0) {
+      return '重试失败';
+    }
+    if (this.runner.active) {
+      return '再排一批';
+    }
+    return '开始';
+  }
+
+  private pregenTap(): void {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined || this.runner.busy) {
+      return;
+    }
+    if (this.runner.polling) {
+      this.runner.stopPolling();
+      return;
+    }
+    if (this.runner.active && this.runner.failed + this.runner.expired > 0) {
+      this.runner.retryFailed(ctx, this.tts);
+      return;
+    }
+    this.runner.startPregen(ctx, this.tts);
   }
 
   // ── UI builders ───────────────────────────────────────────────
@@ -194,6 +259,7 @@ export struct ListeningPage {
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .margin({ top: 24 })
+      this.sourceRow()
       Row() {
         Text(this.subtitle())
           .fontSize(14)
@@ -261,7 +327,7 @@ export struct ListeningPage {
         SymbolGlyph($r('sys.symbol.video_speed'))
           .fontSize(24)
           .fontColor([$r('app.color.listen_text')])
-        Text(effectiveSpeed(this.tts.speed, this.tts.engineKind).toFixed(1) + 'x')
+        Text(this.tts.effectiveRate().toFixed(1) + 'x')
           .fontSize(13)
           .fontColor($r('app.color.listen_text_dim'))
           .margin({ top: 6 })
@@ -307,9 +373,7 @@ export struct ListeningPage {
   @Builder
   voiceRow() {
     Row() {
-      Text(this.tts.engineKind === TTS_ENGINE_REMOTE
-        ? '远端音色 · ' + this.tts.remoteVoice
-        : '朗读音色 · ' + voiceName(this.tts.voice))
+      Text('朗读音色 · ' + voiceName(this.tts.voice))
         .fontSize(15)
         .fontColor($r('app.color.listen_text'))
       Blank()
@@ -324,6 +388,87 @@ export struct ListeningPage {
     .margin({ top: 24 })
     .accessibilityText('朗读音色')
     .bindMenu(this.voiceMenuItems())
+  }
+
+  @Builder
+  sourceRow() {
+    Row() {
+      if (this.tts.pregMode || this.tts.pregBuffering) {
+        Row()
+          .width(6)
+          .height(6)
+          .borderRadius(3)
+          .backgroundColor($r('app.color.brand'))
+      }
+      Text(this.sourceLabel())
+        .fontSize(12)
+        .fontColor($r('app.color.listen_text_dim'))
+        .margin({ left: 6 })
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+    .margin({ top: 6 })
+  }
+
+  /** 书级入口：把「后续 N 章」排到服务端后台生成（进度 5 s 轮询一次）。 */
+  @Builder
+  pregenRow() {
+    Column() {
+      Row() {
+        Column() {
+          Text('预生成后续 ' + this.aheadCount().toString() + ' 章')
+            .fontSize(15)
+            .fontColor($r('app.color.listen_text'))
+          Text(this.pregenDetail())
+            .fontSize(12)
+            .fontColor($r('app.color.listen_text_dim'))
+            .margin({ top: 4 })
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+        if (this.runner.busy) {
+          LoadingProgress()
+            .width(18)
+            .height(18)
+            .color($r('app.color.brand'))
+        } else {
+          Text(this.pregenActionLabel())
+            .fontSize(14)
+            .fontColor($r('app.color.brand'))
+        }
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      if (this.runner.active && this.runner.total > 0) {
+        Progress({ value: this.runner.done, total: this.runner.total, type: ProgressType.Linear })
+          .width('100%')
+          .height(4)
+          .color($r('app.color.brand'))
+          .margin({ top: 12 })
+      }
+      if (this.runner.failures.length > 0) {
+        ForEach(this.runner.failures, (failure: PregenFailure) => {
+          Text(pregenFailureText(failure))
+            .fontSize(12)
+            .fontColor($r('app.color.listen_text_dim'))
+            .width('100%')
+            .margin({ top: 6 })
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }, (failure: PregenFailure) => failure.key)
+      }
+    }
+    .width('100%')
+    .padding({ left: 20, right: 20, top: 16, bottom: 16 })
+    .backgroundColor($r('app.color.listen_card'))
+    .borderRadius(16)
+    .margin({ top: 12 })
+    .onClick(() => this.pregenTap())
   }
 
   @Builder
@@ -374,6 +519,7 @@ export struct ListeningPage {
               this.progressBlock()
               this.controls()
               this.voiceRow()
+              this.pregenRow()
               if (this.tts.error.length > 0) {
                 Text(this.tts.error)
                   .fontSize(13)
