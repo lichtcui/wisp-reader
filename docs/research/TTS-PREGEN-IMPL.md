@@ -2,40 +2,42 @@
 
 > 上游：[`TTS-PREGEN-PLAN.md`](./TTS-PREGEN-PLAN.md)（判据改写 + ZipVoice/GPT-SoVITS 实测 + 坑清单）、决策 [`../decisions.md`](../decisions.md) **D15**、
 > 任务 [`../bugfix/TASKS.md`](../bugfix/TASKS.md) **T-TTS-7**；引擎细节 [`TTS-ENGINE-COMPARISON.md`](./TTS-ENGINE-COMPARISON.md)、音色 [`TTS-VOICE-SOURCES.md`](./TTS-VOICE-SOURCES.md)。
-> **状态（2026-10-12）**：**已立项**，本文是可直接开工的实现方案，**尚未写一行实现代码**（仓库与线上服务行为未变）。
+> **状态（2026-10-14）**：**阶段一（服务端）已上 VPS 并 7/7 验收（§4.1.1）；阶段二（App 侧）真机验收 6 项中 5 项已拍到（§4.2：缓存章 24 kHz 命中 / 跨章 16k↔24k 双向重建 / 未算完退实时不混声线 / 听完即删 + 自动续章），剩拖动·变速的逐项拍照、锁屏、`expired` 分支**；同轮修三个真 bug（本地书键存 sidecar / hilog 不支持 `%f` / `notfound` 不再作废缓存键，最后一个真机待验）。
+> **as-built 偏差以 §3.6 为准**（整章先落盘再播、块级段落下标、入口在听书页等）。
 > **用户已拍板三件事**：① 默认引擎 = **GPT-SoVITS v2ProPlus（流萤微调）**；② 缓存 **WAV 直出（24 kHz mono）** + 严格淘汰；
 > ③ 素材来源 = **先手动喂（curl）**，客户端入口后置（阶段二）。本文 §6 是给**下一个 session** 的启动 prompt。
 
 <!-- TOC:BEGIN -->
-- 0. 一页速览 — L40
-- 1. 数据契约（先定这个，阶段一/二都依赖） — L67
-  - 1.1 缓存键（服务端算，客户端只存） — L69
-  - 1.2 `POST /job` 的 item（= 客户端能直接产出的东西） — L81
-  - 1.3 落盘布局 — L93
-  - 1.4 HTTP 接口表（除 `/health` 外都要 `X-API-Key`，与 `POST /tts` 同一把） — L118
-- 2. 服务端实现（阶段一，客户端零改动） — L131
-  - 2.1 进程架构 — L133
-  - 2.2 合成流程（worker） — L145
-  - 2.3 引擎与内存（`gsv_v2proplus`） — L159
-  - 2.4 让出 CPU / 内存（唯一会伤到线上的地方） — L170
-  - 2.5 磁盘预算（**先做这一步**，否则一跑就满） — L178
-  - 2.6 淘汰策略（**别把用户马上要听的那章挤掉**） — L195
-  - 2.7 QC 与失败处理 — L202
-  - 2.8 部署（as-built） — L208
-  - 2.9 实现期与本文档的偏差（as-built，实现时改的，均已入库） — L235
-- 3. 客户端设计（阶段二，含「填写方式」） — L256
-  - 3.1 现有设置照旧 + 「两套音色」的取舍 — L258
-  - 3.2 新增设置项表（「填写方式」= 用户在设置页怎么填） — L268
-  - 3.3 入口与交互 — L286
-  - 3.4 播放路径改造（章级原子切换 + 变速 + 进度锚点） — L295
-  - 3.5 字段与 obfuscation 三处同步清单（**漏一个就是 release 读到 undefined**） — L311
-- 4. 验证 — L322
-  - 4.1 阶段一（主机侧 curl + 线上回归，**不上设备**） — L324
-  - 4.1.1 实测结果（2026-10-13，VPS `103.236.96.53`，worker `tts-job`） — L338
-  - 4.2 阶段二（真机） — L363
-- 5. 风险 / 未决 — L368
-- 6. 附录：阶段一（服务端）的启动 prompt（**已完成，留作历史**） — L379
-- 7. 附录：阶段二（客户端接入）的启动 prompt — L421
+- 0. 一页速览 — L43
+- 1. 数据契约（先定这个，阶段一/二都依赖） — L70
+  - 1.1 缓存键（服务端算，客户端只存） — L72
+  - 1.2 `POST /job` 的 item（= 客户端能直接产出的东西） — L84
+  - 1.3 落盘布局 — L96
+  - 1.4 HTTP 接口表（除 `/health` 外都要 `X-API-Key`，与 `POST /tts` 同一把） — L121
+- 2. 服务端实现（阶段一，客户端零改动） — L134
+  - 2.1 进程架构 — L136
+  - 2.2 合成流程（worker） — L148
+  - 2.3 引擎与内存（`gsv_v2proplus`） — L162
+  - 2.4 让出 CPU / 内存（唯一会伤到线上的地方） — L173
+  - 2.5 磁盘预算（**先做这一步**，否则一跑就满） — L181
+  - 2.6 淘汰策略（**别把用户马上要听的那章挤掉**） — L198
+  - 2.7 QC 与失败处理 — L205
+  - 2.8 部署（as-built） — L211
+  - 2.9 实现期与本文档的偏差（as-built，实现时改的，均已入库） — L238
+- 3. 客户端设计（阶段二，含「填写方式」） — L259
+  - 3.1 现有设置照旧 + 「两套音色」的取舍 — L261
+  - 3.2 新增设置项表（「填写方式」= 用户在设置页怎么填） — L271
+  - 3.3 入口与交互 — L289
+  - 3.4 播放路径改造（章级原子切换 + 变速 + 进度锚点） — L298
+  - 3.5 字段与 obfuscation 三处同步清单（**漏一个就是 release 读到 undefined**） — L314
+  - 3.6 实现偏差（as-built，2026-10-13） — L329
+- 4. 验证 — L345
+  - 4.1 阶段一（主机侧 curl + 线上回归，**不上设备**） — L347
+  - 4.1.1 实测结果（2026-10-13，VPS `103.236.96.53`，worker `tts-job`） — L361
+  - 4.2 阶段二（真机） — L386
+- 5. 风险 / 未决 — L423
+- 6. 附录：阶段一（服务端）的启动 prompt（**已完成，留作历史**） — L434
+- 7. 附录：阶段二（客户端接入）的启动 prompt — L476
 <!-- TOC:END -->
 
 ## 0. 一页速览
@@ -120,10 +122,10 @@ key       = sha256(canonical + "|" + voice + "|1.0|" + engine + "|v1").hexdigest
 
 | 接口 | 请求 | 响应 | 备注 |
 |---|---|---|---|
-| `POST /job` | `{"items":[item,…]}` | `{"jobId":"…","items":[{"key","state"}]}` | `state ∈ queued/ready/running`；**幂等**：已 ready 直接回 `ready` 不重排 |
-| `GET /job/status` | `?jobId=` 或 `?key=` | `{"queued":n,"running":n,"done":n,"failed":n,"items":[…]}` | 客户端轮询用（阶段二每 5 s） |
+| `POST /job` | `{"items":[item,…]}` | `{"jobId":"…","items":[{"key","state","title"}]}` | `state ∈ queued/ready/running`；**幂等**：已 ready 直接回 `ready` 不重排。⚠️ **响应顺序 ≠ 提交顺序**（已 ready/queued 的在循环内 append、新条目循环外 append）⇒ 客户端**必须按 `title` 配对，不能按下标**；2026-10-14 真机踩过：按下标 ⇒ 键张冠李戴（缓存章读出别章正文）。2026-10-16 加固：只有标题**两侧都唯一**时才配对（同名/无标题章留空退实时），并用 `/job/status` 的 `bookId`+`chapterIndex`（服务端存的就是提交 meta）**按章号纠偏**（`healPregKeys`） |
+| `GET /job/status` | `?jobId=` 或 `?key=` | `{"queued":n,"running":n,"done":n,"failed":n,"items":[…]}` | 客户端轮询用（阶段二每 5 s）。**判「算好了没」只信这里**：提交→开跑实测可能排 ~14 min、单章合成 ~3.7 min（2026-10-16 实测）⇒ 别用 `/audio` 的 404 计时 |
 | `GET /audio/<key>` | `Range: bytes=…` | `200/206` WAV；`404` | **必须支持 Range**（`AudioRenderer` 流式 + 拖动进度）；命中即 `utime` + 写 `lastPlayedAt` |
-| `DELETE /cache/<key>` | — | `204` | 客户端听完整章后调（阶段二；阶段一手动 curl） |
+| `DELETE /cache/<key>` | — | `204` | 客户端听完整章后调（阶段二；阶段一手动 curl）。**同路径没有 GET**（取音频走 `/audio/{key}`）⇒ 用 GET 探存在性会回 **405**，别据此判「文件没了」；被删的章 meta 仍在，重提交会重新合成 |
 | `GET /cache/stats` | — | `{"files","bytes","maxBytes","freeBytes","protected"}` | 运维/验收用 |
 | `POST /cache/probe` | `{paragraphs,voice,engine}` | `{"key","state"}` | **阶段二可选**：客户端没存 key 时（换设备/重装）先探一次 |
 | `POST /tts` | 现状不变 | 现状不变 | **不加缓存查找**：章级命中由客户端用 `/audio` 走（少一次全文上传） |
@@ -268,7 +270,7 @@ RestartSec=30
 
 ### 3.2 新增设置项表（「填写方式」= 用户在设置页怎么填）
 
-写在 `common/Const.ets`（常量）+ `pages/ListeningSettings.ets`（控件，**仅当 `engine === TTS_ENGINE_REMOTE` 时显示**），存储走 `common/Prefs.ts`。
+写在 `common/Const.ets`（常量）+ `pages/ListeningSettings.ets`（控件，**D17 起与朗读引擎无关，常显**；服务器地址 / API Key 也归到这组）。存储走 `common/Prefs.ts`。
 `chips()` / `TextInput` / `Toggle` 全部复用该页现有写法与 `color.json` 令牌（**不要**引入新配色）。
 
 | 设置项 | Prefs key | 控件 | 默认 | 校验 / 生效 |
@@ -320,6 +322,26 @@ RestartSec=30
 | `chars` `audioMs` `synthMs` `chunks` `t0Ms` `t1Ms` `p0` `p1` `lastPlayedAt` `createdAt` | 仅阶段二若落盘/缓存 meta；若只内存解析可不进 | 落盘则**要** |
 | `maxBytes` `freeBytes` `bytes` `files` `protected` `reason` | 接口响应（内存解析） | 建议一并加，成本为零 |
 
+**实际做法（2026-10-13）**：`TtsPregen.ets` 里所有 `interface` 字段**一律进 keep**（包括纯客户端字段）——`check-keep-props.sh` 是机械判定，
+「哪些字段真的跨 JSON」靠人判一定会判错；实际新增 **27** 个名字（`pregKey` / `jobId` / `key` / `p0` `p1` / `t0Ms` `t1Ms` / `chunks` / `state`…），
+现共 **172** 个 keep 名，`make check` 绿。
+
+### 3.6 实现偏差（as-built，2026-10-13）
+
+| # | 计划（§） | 实际实现与理由 |
+|---|---|---|
+| 1 | `GET /audio/<key>` 带 `Range` **边下边播**（§3.4-1） | **整章先落盘再播**：`TtsPregen.loadPregAudio` 下到 `filesDir/preg/<key>.wav.part` → `rename`（同卷原子）→ `PregAudioSource` 只读文件。理由：① 拖动进度只能靠 `seek`；② 进度锚点用 `AudioRenderer` 的 `framePos` 增量（真实出声时间）比「下了多少字节」准；③ 预取下一章复用同一份文件，重听不再打网络。代价：**进章要等下完**（局域网 1–3 s，移动网 10–60 s）——期间日志/文案是「正在下载预生成音频」，失败或 `no-ctx`/`no-renderer` 才退实时 |
+| 2 | 块内按 `chars` 插值求段落（§3.4-4） | 服务端 meta 的 **`chunks[].p0/p1` 给了块级段落下标**（合成时就知道这块吃了哪些段）→ 客户端只在块内按段长插值（`pregTimeline`）：高亮误差从「块内 ±20%（≈±1 min）」降到「段内 ±1 段」；段落数与音频不同源时只在日志里报 `preg timeline covers=x/y`，不错乱 |
+| 3 | 入口在 `BookDetail` / `Reader` 长按菜单（§3.3） | 实现在**听书页**（`pages/Listening.ets` 预生成行）：「后续 N 章」只有在听的书上有意义，且与播放器同页；长按菜单留给 v2 |
+| 4 | 设置页新增「预生成」分组（§3.2） | `pages/ListeningSettings.ets`，**仅远端引擎下可见**（系统引擎没有服务端，显示了只会误导）：音色 chip 3 档 / 提前章数 `5·10·20·30` / 仅 Wi-Fi / **缓存优先播放** |
+| 5 | 「仅 Wi-Fi 时生成」（§3.2） | 语义收窄为**只拦后台行为**：拦预取下一章（`prefetchNextPreg`）与预提交（`TtsPregenRunner.startPregen`），**不拦进章时下载**——那是用户当下要听的 |
+| 6 | 章级原子切换的判据（§3.4-3） | `chapterAudioRoute(preferCache, pregKey)` **两条件**全中才走缓存（D17 起不再看引擎）；**第一条 PCM 进渲染器那一刻锁死路线**（`pregPlaying`），此后到章尾不再换；只有**出声前**的失败（404 / 下载失败 / 打不开）才退实时（`preg fallback=realtime why=`）。**`notfound` 不再作废缓存键**（`preg key kept key=… why=notfound`）：键是**内容寻址**的，留着它「算好了 / 重新提交」就能命中，作废反而会把刚付了算力的缓存**永久丢掉**（真机 2026-10-14 实测：提交后立刻进章 = job 还没算完 = 404，旧逻辑把刚提交的两个键全抹了）；job 还在 `queued`/`running` 时**不跳过、照旧试一次**：同一个 job 里可能已经有章算好了（重新提交 / 别处提交过），跳过反而白走一遭 16 kHz 实时（还多一次采样率重建）；没算好的那几章多付一次 404 很便宜。「已提交没算完」的登记用 `markPregKeyPending` / `isPregKeyPending`（`model/TtsPregen.ets` 进程内 `Set`），由 `TtsPregenRunner` 在 job 到终态（无 queued/running）时撤销，**只喂日志**（`preg key kept … pending=1/0` 区分两种 `notfound`），不改变行为 |
+| 7 | **D17：实时不再走 VPS**（2026-10-13） | 实时朗读恒为系统 TTS（16 kHz）；缓存章 24 kHz。采样率由 `renderRate` 记录、`ensureRenderRate(rate)` 在**进章时**比对并重建渲染器（`beginFrom` / `abandonCachePath` 改异步等它就位，用 `seq` 守卫防换章竞态）；`sampleRate` getter 改成「按路线」而不是「按引擎」。存量 `KEY_TTS_ENGINE=2` 在 `loadPrefs` 迁回 0；REMOTE 分支代码保留但不可达 |
+| 7 | 读完一章 `DELETE /cache/<key>` + 清 `pregKey`（§3.4-4） | 再加**本地文件一起删**（键都没了，留着只能占盘）；`onPregEnded` 一气做完三件事。**代价（接受）**：重听刚听完的章要重新生成或退回实时——磁盘只剩 ~2 G 换来的取舍 |
+| 8 | `TTS_PREGEN_SPEED_SCALE = 1.0`（§3.4-2） | 按计划；`pregPlaybackRate` = `clamp(pref × 1.0, 0.5, 2.0)` 交给 `renderer.setSpeed()`，**不**套 VITS 的 `0.75` |
+| 9 | 「自动续播预生成（后置）」 | 先做了一半：**下一章预取**（开播後台落地音频，`prefPregenPrefer` + 仅 Wi-Fi 双门）；「剩余不足自动补交 job」仍未做 |
+| 10 | 缓存键存在章节条目里（§3.4-3） | **本地书的键存不进条目**：本地书正文不进 `ChapterCache`（直接读导入文件），而 `setChapterPregKey` 要求条目已在缓存里 ⇒ 键被静默丢弃、进章永远退实时（首轮真机「拿不到缓存章」的真因）。修法 = **sidecar** `filesDir/pregkeys/<bookId>_<index>.json`（`{url, pregKey}`，`url` 对不上即视为无 → 换源/目录重排自动失效）。权威顺序：**正文条目在 ⇒ 只信条目**（不吃旁路，免得正文换了键还活者）；没有条目（本地书）⇒ 才读旁路；正文条目回来时顺手删残留 sidecar。`clearChapterPregKey` / `deleteBookChapters`（现扫 `chapters` + `pregkeys` 两目录）同步清理。`setChapterPregKey` 改**返回 `boolean`**，提交计数按它算（不再数「尝试次数」——首轮日志的 `stored=2` 是「尝试了 2 次」，易误读成「已落盘 2 章」） |
+
 ## 4. 验证
 
 ### 4.1 阶段一（主机侧 curl + 线上回归，**不上设备**）
@@ -365,6 +387,38 @@ RestartSec=30
 
 按 skill `harmony-device-run` 的闭环：`make run` → `uitest dumpLayout` 确认设置项渲染 → 点「预生成 10 章」→ 看 `job/status` 轮询进度 →
 **断网/未就绪章**走系统 TTS 且**不半章换声线**（抓 `hilog` 的 `TtsController` 分支日志）→ 缓存章播放 + 拖动进度 + 章节进度锚点（对比段落高亮）→ 听完一章后 `audio/` 文件被删。
+
+**已完成（2026-10-13，静态）**：代码全部落地；`make hap` 成功（ArkTS 严格模式，含新增 `Progress` 组件与 chip/`Toggle` 行）；
+`scripts/check-keep-props.sh` ✓ 172 keep 名覆盖全部 JSON 字段；**`make test-pregen`（`scripts/tts-pregen-sim.py`）87/87 通过**
+（第二十七次同步时是 88 条；D17 把路由真值表由 5 条收到 2 参 4 条，并新增一条 Python 侧回归门：`chapterAudioRoute` 源码里出现 `engine`/`TTS_ENGINE` 即 fail）——
+从真源码机械切片（`Const.ets` + `TtsPregen.ets` 去 `import` 全文）编到 JS 跑断言，覆盖本文 §3.4 的路由/时间轴/倍速/文案。
+**真机进度（首轮 2026-10-13 夜 · `33Z0224424136564` · debug · `make run` 闭环）**：① 设置页渲染 ✓、② 系统 TTS 实时 16 kHz 播放 ✓（`tts engine migrated remote->system (D17)` → `renderer ready rate=16000` → `begin para=0 route=realtime`；跨章自然续播恒 `route=realtime`、同路线不重建渲染器）；
+③ 提交被「仅 Wi-Fi 时预生成」拦下（`wlan0` 已有 192.168.10.110 ⇒ 默认网络疑似仍为蜂窝，**待 `ip route` 取证**）；④～⑥ 未跑——当时以为是「拿不到 key 对得上的缓存章」，真因见次轮。
+
+**真机进度（次轮 2026-10-14 · 自造短章 TXT 本地书《短章测试》4 章 120/272/391/150 字，bookId `c9af6cb1`）**：
+**先修一个真 bug**（§3.6-10）：本地书的正文不进 `ChapterCache`，`setChapterPregKey` 于是把键静默丢掉 ⇒ 每章都退实时；改成 sidecar 落盘，并把提交计数从「尝试次数」改成「真落盘数」。
+
+| # | 结果 | 真机证据（`make log`，按 bundle 名筛；设备时间戳） |
+|---|---|---|
+| 1 | ✓ | 预生成 4 行常显；D17 后无「朗读引擎」chip（02:0x 截图式 dump） |
+| 2 | ✓ | `18:09:04 preg submit jobId=6acf54abc6c6f1 items=2 stored=2 evicted=0` → `preg job done total=2 done=2 failed=0 expired=0`；服务端 `queue/run` 出现**与首轮完全相同的 key**（`ec27bbff1308dcb4` / `e059f05aa885e9c4` ⇒ 内容寻址 ✓） |
+| 3 | ✓ | `preg chapter end key=ec27bbff1308dcb4` → `begin para=0 route=cache` → `preg play para=0 base=0 rate=1.00`（修完 `%f` 后；修复前实测是 `rate=}f`）→ `preg playing key=e059f05aa885e9c4` → `play para=1..6`（每 ~5.6 s）⇒ 缓存章 24 kHz 真的在放 |
+| 4 | 未跑 | 拖动 / 变速 / 段落高亮跟随（`rate=` 的可读性已由本次修好） |
+| 5 | ✓ | 音频未算完时进章：`render rate 16000 -> 24000` → `renderer ready rate=24000` → `begin para=0 route=cache` → `preg audio failed kind=notfound msg=服务器上找不到这一章（可能已被清理）` → `preg fallback=realtime why=notfound para=0` → `render rate 24000 -> 16000` → `renderer ready rate=16000` ⇒ **退实时前把渲染器换回 16 kHz，同一章内只有一种声线/一种采样率** |
+| 6 | ✓ | `preg chapter end key=ec27bbff1308dcb4` → `preg cache delete key=… code=204`；第二章听完同理（`e059f05a…`）；设备 `filesDir/pregkeys/` 清空（`total 0`）、`cache/pregen/` 空 ⇒ 两章都真的删干净；第三章末 → 第四章**自动接着播**（无人干预） |
+
+**顺带修掉的日志缺陷**：`preg play … rate=%{public}f` 在真机上打成 `rate=}f`（**hilog 不支持 `%f`**，不报错、值直接丢）⇒ 改 `pregPlaybackRate(this.speed).toFixed(2)` + `%{public}s`，并新增 `scripts/check-hilog-format.sh` 接进 `make check` 防复发（已记入 `docs/PITFALLS.md`）。
+**第三个真 bug（同轮发现，代码已改、真机待验）**：提交后立刻进章时 `GET /audio/<key>` 必然是 404（worker 还没算完），旧逻辑把这种 `notfound` 当成「音频已失效」**把键抹了** ⇒ 刚付了算力的缓存永久丢掉。现改为：`notfound` **一律保留键**（内容寻址 ⇒ 算好了或重新提交还是同一条 key；**不跳过下载**，同 job 里已算好的章照样命中）；登记面 `markPregKeyPending` / `isPregKeyPending`（`TtsPregenRunner` 在 job 终态撤销）**只用来区分日志**（`preg key kept … pending=1/0`），仿真 +4 条断言 = **91/91**。**真机验证待设备重连**（要看的日志：提交后马上进章 → `preg key kept … pending=1` → 实时；算完再进章 → `route=cache` + `preg playing`）。
+**仍未跑**：拖动/变速的逐项拍照、锁屏媒体卡、`expired`（服务端清理）分支的真机形态、Wi-Fi 门禁取证（本轮未触发）。
+
+| # | 场景 | 判据（真机上要看的东西） |
+|---|---|---|
+| 1 | 设置页渲染 | 预生成 4 行（音色 chip / 提前章数 chip / 仅 Wi-Fi / 缓存优先）**常显**（D17 起与引擎无关，无「朗读引擎」chip）；服务器地址 / API Key 同组 |
+| 2 | 提交与轮询 | 听书页点「开始」→ `hilog` 见 `preg submit jobId=… items=N stored=N`；进度行 `done/total` 与当前章标题每 5 s 动；点「停止查看」只停客户端轮询（服务端继续）；只有 `expired` 时「重试失败」必须真的能重提（仿真覆盖了清单，真机只看按钮行为） |
+| 3 | 缓存章播放 | 进已就绪的章：`preg play para=0 base=0 rate=1.00` → `preg playing key=…`（**必须是同一条 key**）；听感与 `curl` 下的成品一致 |
+| 4 | 拖动 / 变速 | 拖进度条：`preg play para=K base=<ms>`，段落高亮跟着跳、不错位；改语速后**不重下**、`rate=` 改变、`elapsedMs/总长` 按源时间走 |
+| 5 | 退实时不换声线 | 未就绪章（键无效 / 服务端被删）：`preg fallback=realtime why=notfound` 或直接走实时；退实时前渲染器要从 24 kHz 换回 16 kHz（`renderRate` 重建）；**同一章内不得出现两种声线，也不得两种采样率**（日志里没有先 `preg playing` 再走系统 TTS） |
+| 6 | 听完即删 | 章末：`preg chapter end key=…` → 服务端 `GET /audio/<key>` 变 404、`/cache/stats files` 减 1、设备 `filesDir/preg/` 为空；下一章自动接着播 |
 
 ## 5. 风险 / 未决
 
