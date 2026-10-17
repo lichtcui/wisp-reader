@@ -19,8 +19,6 @@ ABILITY  := EntryAbility
 HAP      := entry/build/default/outputs/default/entry-default-signed.hap
 SO       := entry/libs/arm64-v8a/liblegado_core.so
 DTS      := entry/src/main/cpp/types/liblegado_core/index.d.ts
-LOG_TAG  := SourceReaderPoC
-
 # hvigorw 依赖 DevEco 自带的 node/ohpm，必须在 PATH 里（否则报找不到 node）。
 export DEVECO_SDK_HOME := $(SDK)
 export OHOS_NDK_HOME   := $(NDK_HOME)
@@ -87,19 +85,21 @@ run: hap install restart ## 编译 → 安装 → force-stop → 启动（真机
 run-release: hap-release install restart ## 同上但用 release 包（验证混淆 / 备份等只在 release 现形的问题）
 	@echo "已启动（release）。抓日志： make log"
 
-log: ## 清日志后实时过滤本应用日志（Ctrl-C 退出；可再用 Q=关键词 筛，如 make log Q=Backup）
-	$(HDC) shell hilog -r
-	$(HDC) shell hilog -x -T $(LOG_TAG) $(if $(Q),| grep --line-buffered "$(Q)")
+log: ## 抓本应用日志（一次性 dump 当前缓冲区；可再用 Q=关键词 筛，如 make log Q=preg）
+	$(HDC) shell hilog -x | grep --line-buffered "$(BUNDLE)" $(if $(Q),| grep --line-buffered "$(Q)")
 
 ## ── 自检 ────────────────────────────────────────────────────────────────────
 
 doctor: ## 自检：.so / index.d.ts / HAP 是否落后于源码 + 设备是否连着
 	@scripts/doctor.sh
 
-check: ## 自检文档与契约（行号目录是否过期 / md 失效链接 / JSON 字段是否都进 keep 列表）
+check: ## 自检文档与契约（行号目录 / md 链接 / JSON keep 列表 / hilog 格式 / 书源读路径）
 	@scripts/docs-toc.sh --check
 	@scripts/check-docs-links.sh
 	@scripts/check-keep-props.sh
+	@scripts/check-hilog-format.sh
+	@scripts/check-source-consumers.sh
+	@scripts/check-t16-bench.sh
 
 ## ── 文档 ────────────────────────────────────────────────────────────────────
 

@@ -2,7 +2,8 @@ import { common } from '@kit.AbilityKit';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { Book, BookSource, ReadProgress } from '../engine/types';
-import { loadSources, saveSources } from '../model/SourceRepository';
+import { countRows, exportAll, initSourceStore, replaceAll } from '../model/SourceStore';
+import { migrateFromPrefsOnce } from '../model/SourceStoreMigration';
 import { getAllProgress, getBooks, initShelf, replaceShelf } from '../model/ShelfRepository';
 import { GroupTitle } from '../components/ListCells';
 
@@ -34,12 +35,18 @@ export struct BackupManagePage {
     this.getUIContext().getPromptAction().showToast({ message: message });
   }
 
+  private async prepareSourceStore(ctx: common.UIAbilityContext): Promise<void> {
+    await initSourceStore(ctx);
+    await migrateFromPrefsOnce(ctx);
+  }
+
   private async reload(): Promise<void> {
     const ctx: common.UIAbilityContext | undefined = this.ctx();
     if (ctx === undefined) {
       return;
     }
-    this.sourceCount = loadSources(ctx).length;
+    await this.prepareSourceStore(ctx);
+    this.sourceCount = (await countRows()).total;
     this.bookCount = (await getBooks()).length;
     this.progressCount = (await getAllProgress()).size;
   }
@@ -54,7 +61,8 @@ export struct BackupManagePage {
   }
 
   private async collect(ctx: common.UIAbilityContext): Promise<BackupPayload> {
-    const sources: BookSource[] = loadSources(ctx);
+    await this.prepareSourceStore(ctx);
+    const sources: BookSource[] = await exportAll();
     const books: Book[] = await getBooks();
     const progressMap: Map<string, ReadProgress> = await getAllProgress();
     const progress: ReadProgress[] = [];
@@ -142,9 +150,10 @@ export struct BackupManagePage {
         this.toast('备份内容不完整');
         return;
       }
+      await this.prepareSourceStore(ctx);
       await initShelf(ctx);
-      // 全量覆盖：书源整体替换（saveSources 写的就是整段 JSON），书架/进度先清表再写。
-      saveSources(ctx, sources);
+      // 备份恢复是全量覆盖，不能走 upsert，否则会保留备份中不存在的书源。
+      await replaceAll(sources);
       await replaceShelf(books, progress);
       await this.reload();
       this.toast('已恢复：书源 ' + this.sourceCount + ' / 书架 ' + this.bookCount + ' / 进度 ' + this.progressCount);

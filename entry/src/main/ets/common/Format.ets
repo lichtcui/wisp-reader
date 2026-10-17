@@ -74,6 +74,40 @@ export function computeBookId(sourceUrl: string, bookUrl: string): string {
   return fnv1a(normalizeUrl(sourceUrl) + '|' + normalizeUrl(bookUrl));
 }
 
+/**
+ * 书源规则常把页面上的标签一起抓进来：`作者：烽火戏诸侯` / `最新章节：第83章 完`。
+ * 同一个字段在两处表现不同（搜索结果带标签、详情页/书架不带），比较与显示前都得削掉。
+ *
+ * 为什么必须共用一份：`SourceSwitch.isSameBook` 拿它决定「是不是同一本书」——
+ * 漏一个标签就是**静默丢候选**（2026-10-13 真机 13 源搜《剑来》：8 条同名结果里 2 条带 `作者：`
+ * 前缀（`小说` / `黑炎小说`），修复前它们被当成别的书丢掉，早停窗口内抽屉里只剩 2 个候选）。
+ */
+export const AUTHOR_LABELS: string[] = ['作者：', '作者:', '作者', '作家：', '作家:'];
+export const CHAPTER_LABELS: string[] = [
+  '最新章节：', '最新章节:', '最新章节.', '最新章节', '最新：', '最新:', '最新.'
+];
+
+/** 逐个剥掉开头的已知标签（只剥前缀，且只在开头命中时剥）。 */
+export function stripLabel(value: string, labels: string[]): string {
+  let out: string = value.trim();
+  for (const label of labels) {
+    if (out.startsWith(label)) {
+      out = out.substring(label.length).trim();
+    }
+  }
+  return out;
+}
+
+/** 作者名：削掉 `作者：` / `作家：` 之类标签。 */
+export function cleanAuthor(raw: string): string {
+  return stripLabel(raw, AUTHOR_LABELS);
+}
+
+/** 最新章节名：削掉 `最新章节：` / `最新：` 之类标签。 */
+export function cleanChapter(raw: string): string {
+  return stripLabel(raw, CHAPTER_LABELS);
+}
+
 export function formatBytes(n: number): string {
   if (n <= 0) {
     return '0 B';

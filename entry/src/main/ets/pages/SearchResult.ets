@@ -4,8 +4,8 @@
 //                          statusVisible / shelfKeys / pickerVisible / pickerDs / expandedReason
 //   搜索主流程（滑动窗口 + 并发 8 + 每源超时，见 docs/decisions.md D4）：
 //     aboutToAppear / onSearchTokenChange（@Monitor）/ startSearch / drain / searchOne / searchGen（代次守卫）/ nextIndex
-//   富化与合并：enrichMerged / enrichOne / infoCache / rebuildGroups / bucketOf / cleanAuthor / cleanChapter /
-//               stripPrefix / weightOf / metaLine / primaryOrigin
+//   富化与合并：enrichMerged / enrichOne / infoCache / rebuildGroups / bucketOf /
+//               weightOf / metaLine / primaryOrigin（`作者：`/`最新章节：` 前缀清洗在 common/Format）
 //   置信度（失败扣分/成功回分，持久化）：persistConfidence / confidenceLabel / failLabel / sourceSummary /
 //                                        okCount / failCount / successPct / elapsedLabel
 //   来源抽屉（状态/原因分组）：preparePicker / statusGroups / statusesOfReason / statusesOfGroup / statusRows /
@@ -21,11 +21,22 @@ import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSearchItem, BookSource, SourceStatus } from '../engine/types';
 import { BookCover } from '../components/BookCover';
 import { EmptyView } from '../components/EmptyView';
-import { dedupeByUrl, enabledSources, loadSources, saveSources } from '../model/SourceRepository';
-import { applyOutcomes, confidenceOf, penaltyFor, sortByConfidence } from '../model/SourceConfidence';
+import {
+  confidenceAfterStatus,
+  ConfidenceUpdate,
+  dedupeRowsByUrl,
+  getSource,
+  listRows,
+  patchConfidences,
+  penaltyFor,
+  sortRowsByConfidence,
+  SourceRow
+} from '../model/SourceStore';
+import { ensureSourceStore } from '../model/SourceStoreMigration';
 import { getBooks } from '../model/ShelfRepository';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 import { PickerRow, SourceListDataSource } from '../common/SourceListDataSource';
+import { cleanAuthor, cleanChapter } from '../common/Format';
 
 const SEARCH_TIMEOUT_MS: number = 10_000;
 /** 搜索并发上限：由 Rust `buffer_unordered` 按输入顺序调度（高置信先执行）。 */
@@ -85,8 +96,8 @@ export struct SearchResultPage {
   @Local expandedOk: boolean = false;
 
   private ctx: common.UIAbilityContext | undefined = undefined;
-  private sources: BookSource[] = [];
-  private allSources: BookSource[] = [];
+  private sources: SourceRow[] = [];
+  private rowByUrl: Map<string, SourceRow> = new Map<string, SourceRow>();
   private sourceMap: Map<string, BookSource> = new Map<string, BookSource>();
   private rawItems: BookSearchItem[] = [];
   private searchGen: number = 0;
@@ -100,14 +111,33 @@ export struct SearchResultPage {
       return;
     }
     this.ctx = ctx;
-    // 保留全量列表（含 disabled）用于持久化；搜索按置信度从高到低排序启用源。
-    // 同一 `bookSourceUrl` 只保留一条：Legado 书源集合里存在同一站点的重复导入
-    // （内置集就有 bbiquge8 / 笔趣阁8 同指 m.bbiquge8.net），不去重会重复请求同一站点、
-    // 命中重复，且 `sourceMap` 按 URL 取值时被后写入的那条覆盖。
-    this.allSources = loadSources(ctx);
-    this.sources = dedupeByUrl(sortByConfidence(enabledSources(this.allSources)));
-    for (const s of this.sources) {
-      this.sourceMap.set(s.bookSourceUrl, s);
+    this.prepareSearch();
+  }
+
+  private async prepareSearch(): Promise<void> {
+    const token: number = this.searchToken;
+    // A token change starts a new projection read; drop results from the previous search now.
+    this.searchGen = this.searchGen + 1;
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    if (ctx === undefined) {
+      return;
+    }
+    let rows: SourceRow[] = [];
+    try {
+      await ensureSourceStore(ctx);
+      rows = await listRows({ enabled: true });
+    } catch (err) {
+      // A store failure leaves search empty; never fall back to the legacy full JSON blob.
+    }
+    if (token !== this.searchToken) {
+      return;
+    }
+    // 同一 URL 只请求一次。排序后保留置信度最高的一条，id 仍是该行的稳定存储主键。
+    this.sources = dedupeRowsByUrl(sortRowsByConfidence(rows));
+    this.rowByUrl.clear();
+    this.sourceMap.clear();
+    for (const row of this.sources) {
+      this.rowByUrl.set(row.url, row);
     }
     this.total = this.sources.length;
     this.searchKey = this.keyword;
@@ -121,8 +151,7 @@ export struct SearchResultPage {
     if (kw.length === 0) {
       return;
     }
-    this.searchKey = kw;
-    this.startSearch();
+    this.prepareSearch();
   }
 
   private async startSearch(): Promise<void> {
@@ -141,7 +170,7 @@ export struct SearchResultPage {
     this.searching = true;
     this.nextIndex = 0;
     // 每次搜索前按最新置信度排序，保证高置信源排在前面先被调度。
-    this.sources = sortByConfidence(this.sources);
+    this.sources = sortRowsByConfidence(this.sources);
     if (this.sources.length === 0) {
       this.searching = false;
       return;
@@ -166,29 +195,38 @@ export struct SearchResultPage {
     }
   }
 
-  private async searchOne(source: BookSource, gen: number): Promise<void> {
+  private async searchOne(row: SourceRow, gen: number): Promise<void> {
     let status: SourceStatus = {
-      sourceUrl: source.bookSourceUrl,
-      sourceName: source.bookSourceName,
+      sourceUrl: row.url,
+      sourceName: row.name,
       ok: false,
       count: 0,
       error: 'timeout',
       elapsedMs: SEARCH_TIMEOUT_MS
     };
     try {
-      const result = await bookEngine.search([source], this.searchKey, {
-        timeoutMs: SEARCH_TIMEOUT_MS,
-        concurrency: 1
-      });
+      const source: BookSource | undefined = await getSource(row.id);
       if (gen !== this.searchGen) {
         return;
       }
-      if (result.sources.length > 0) {
-        status = result.sources[0];
-      }
-      if (result.items.length > 0) {
-        this.rawItems = this.rawItems.concat(result.items);
-        this.rebuildGroups();
+      if (source === undefined) {
+        status.error = 'store_error';
+      } else {
+        this.sourceMap.set(row.url, source);
+        const result = await bookEngine.search([source], this.searchKey, {
+          timeoutMs: SEARCH_TIMEOUT_MS,
+          concurrency: 1
+        });
+        if (gen !== this.searchGen) {
+          return;
+        }
+        if (result.sources.length > 0) {
+          status = result.sources[0];
+        }
+        if (result.items.length > 0) {
+          this.rawItems = this.rawItems.concat(result.items);
+          this.rebuildGroups();
+        }
       }
     } catch (err) {
       status.error = 'network_error';
@@ -201,7 +239,7 @@ export struct SearchResultPage {
     this.statuses = next;
     if (this.statuses.length === this.sources.length) {
       this.searching = false;
-      this.persistConfidence();
+      await this.persistConfidence(this.statuses.slice());
       this.enrichMerged(gen);
     }
   }
@@ -219,18 +257,41 @@ export struct SearchResultPage {
     return name.trim() + '|' + author.trim();
   }
 
-  /** 一轮搜索结束：把结果套用到置信度并持久化，供下一轮按新置信度排序。 */
-  private persistConfidence(): void {
-    const ctx: common.UIAbilityContext | undefined = this.ctx;
-    if (ctx === undefined || this.allSources.length === 0) {
+  /** 一轮搜索结束：只把投影置信度变化写回列，不重新解析或序列化任何书源 JSON。 */
+  private async persistConfidence(statuses: SourceStatus[]): Promise<void> {
+    const byUrl: Map<string, SourceStatus> = new Map<string, SourceStatus>();
+    for (const status of statuses) {
+      byUrl.set(status.sourceUrl, status);
+    }
+    const updates: ConfidenceUpdate[] = [];
+    for (const row of this.sources) {
+      const status: SourceStatus | undefined = byUrl.get(row.url);
+      if (status === undefined) {
+        continue;
+      }
+      const value: number = confidenceAfterStatus(row.confidence, status);
+      if (value === row.confidence) {
+        continue;
+      }
+      row.confidence = value;
+      updates.push({ url: row.url, name: row.name, confidence: value });
+      const loaded: BookSource | undefined = this.sourceMap.get(row.url);
+      if (loaded !== undefined) {
+        loaded.confidence = value;
+      }
+    }
+    this.sources = sortRowsByConfidence(this.sources);
+    this.rowByUrl.clear();
+    for (const row of this.sources) {
+      this.rowByUrl.set(row.url, row);
+    }
+    if (updates.length === 0) {
       return;
     }
-    applyOutcomes(this.allSources, this.statuses);
-    saveSources(ctx, this.allSources);
-    this.sources = sortByConfidence(enabledSources(this.allSources));
-    this.sourceMap.clear();
-    for (const s of this.sources) {
-      this.sourceMap.set(s.bookSourceUrl, s);
+    try {
+      await patchConfidences(updates);
+    } catch (err) {
+      // Results are already rendered; the next round still uses the in-memory values.
     }
   }
 
@@ -306,7 +367,7 @@ export struct SearchResultPage {
     const map: Map<string, SearchGroup> = new Map<string, SearchGroup>();
     for (const item of this.rawItems) {
       const name: string = item.name.trim();
-      const author: string = this.cleanAuthor(item.author);
+      const author: string = cleanAuthor(item.author);
       const cached: Book | undefined = this.infoCache.get(this.infoKey(item));
       const cover: string = item.coverUrl.length > 0
         ? item.coverUrl
@@ -314,7 +375,7 @@ export struct SearchResultPage {
       const intro: string = item.intro.trim().length > 0
         ? item.intro.trim()
         : (cached !== undefined ? cached.intro : '');
-      const rawChapter: string = this.cleanChapter(item.lastChapter);
+      const rawChapter: string = cleanChapter(item.lastChapter);
       const chapter: string = rawChapter.length > 0
         ? rawChapter
         : (cached !== undefined ? cached.lastChapterTitle : '');
@@ -383,25 +444,6 @@ export struct SearchResultPage {
   }
 
   /** Some sources keep the label inside the extracted field, e.g. "作者：唐家三少". */
-  private cleanAuthor(raw: string): string {
-    return this.stripPrefix(raw.trim(), ['作者：', '作者:', '作者', '作家：', '作家:']);
-  }
-
-  /** e.g. "最新章节：第123章 完" / "最新章节.第123章 完". */
-  private cleanChapter(raw: string): string {
-    return this.stripPrefix(raw.trim(), ['最新章节：', '最新章节:', '最新章节.', '最新章节', '最新：', '最新:', '最新.']);
-  }
-
-  private stripPrefix(value: string, labels: string[]): string {
-    let out: string = value;
-    for (const label of labels) {
-      if (out.startsWith(label)) {
-        out = out.substring(label.length).trim();
-      }
-    }
-    return out;
-  }
-
   private weightOf(g: SearchGroup): number {
     let max: number = 0;
     for (const o of g.origins) {
@@ -436,13 +478,13 @@ export struct SearchResultPage {
     const rows: PickerRow[] = [];
     for (let i = 0; i < g.origins.length; i++) {
       const o: BookSearchItem = g.origins[i];
-      const src: BookSource | undefined = this.sourceMap.get(o.sourceUrl);
-      const chapter: string = this.cleanChapter(o.lastChapter);
+      const row: SourceRow | undefined = this.rowByUrl.get(o.sourceUrl);
+      const chapter: string = cleanChapter(o.lastChapter);
       rows.push({
         key: o.sourceUrl + '|' + i.toString(),
         item: o,
         name: o.sourceName.length > 0 ? o.sourceName : o.sourceUrl,
-        confidence: src !== undefined ? confidenceOf(src) : 100,
+        confidence: row !== undefined ? row.confidence : 100,
         chapter: chapter,
         chapterNo: this.chapterNo(chapter)
       });
@@ -544,8 +586,8 @@ export struct SearchResultPage {
   }
 
   private confidenceLabel(status: SourceStatus): string {
-    const s: BookSource | undefined = this.sourceMap.get(status.sourceUrl);
-    return s === undefined ? '—' : confidenceOf(s).toString();
+    const row: SourceRow | undefined = this.rowByUrl.get(status.sourceUrl);
+    return row === undefined ? '—' : row.confidence.toString();
   }
 
   /** Rust `FailReason` 短码 → 中文。与 rust/legado-engine/src/status.rs `fail_message` 保持同步。 */

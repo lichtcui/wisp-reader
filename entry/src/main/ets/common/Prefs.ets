@@ -68,6 +68,16 @@ export function putBoolean(ctx: common.UIAbilityContext, key: string, value: boo
   }
 }
 
+/** Boolean write for paths that must not report success until the value is flushed. */
+export function putBooleanStrict(ctx: common.UIAbilityContext, key: string, value: boolean): void {
+  const p: preferences.Preferences | undefined = getPref(ctx);
+  if (p === undefined) {
+    throw new Error('preferences unavailable');
+  }
+  p.putSync(key, value);
+  p.flushSync();
+}
+
 export function getString(ctx: common.UIAbilityContext, key: string, def: string): string {
   const p: preferences.Preferences | undefined = getPref(ctx);
   if (p === undefined) {

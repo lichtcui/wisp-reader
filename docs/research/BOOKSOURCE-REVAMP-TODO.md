@@ -1,0 +1,638 @@
+# BOOKSOURCE-REVAMP — 任务清单（Phase 3: Tasks）
+
+状态：**待审** · 日期：2026-10-14 · 上游：[`BOOKSOURCE-REVAMP-PLAN.md`](./BOOKSOURCE-REVAMP-PLAN.md)（Plan）、
+[`../specs/SPEC-BOOKSOURCE-REVAMP.md`](../specs/SPEC-BOOKSOURCE-REVAMP.md)（capability map）
+
+> 存放位置同 Plan（项目约定：根目录不收新文档，方案/计划进 `docs/research/`）。
+> 本文件 = Phase 3 产出：20 个任务卡片（acceptance / verify / files / 依赖）+ 6 个检查点 + 并行分工。
+> 卡片全部获批后进入 Phase 4（Implement），逐个任务按 `incremental-implementation` 执行。
+
+## 0. 执行约定
+
+- **每个任务收尾都跑 `make check`**（md 链接 / JSON keep 列表 / hilog 格式 / 行号目录）。
+- **动 Rust 的任务先 `make test`；改引擎规则先 `make probe`；改 ArkTS 走 `make run` 闭环。**
+- 一个任务只碰 ≤5 个文件；超出就在动手前拆成两任务并回写本文件。
+- 任务完成即勾选，并在 `docs/progress.md` 记一行当前状态。
+
+## 1. 并行分工（已批准：两会话并行）
+
+| 会话 | 承担 | 顺序 |
+|---|---|---|
+| **A（存储 + 列表）** | T1.1–T1.6 → T3.1–T3.4 | ArkTS 线；**T1.1 不受任何门禁阻塞，可立刻开工** |
+| **B（引擎 + 作业）** | T0.2 → T0.1 → T2.1–T2.3 → T4.1–T4.4 | Rust 线；两个门禁都在 B（它们的结论只影响 B 的参数）；等 A 的 `T1.1` 落地后开 `T4.3` |
+| **汇合** | T5.1–T5.4 | 单会话串行（同一批文件） |
+
+**必须先冻结的两个契约**（冻结后两边照它做，不许各写各的）：
+
+1. **`SourceRow` 投影形状** — 由 `T1.1` 冻结；`T3.*` 只消费不改，B 的 `T4.3` 依赖
+   `SourceStore.allForEngine()` / `patchDetect()` 的同批签名。
+2. **`DetectJobRunner` 的 `@Trace` 字段名** — 由 `T4.1` 冻结；`T4.3` 与 `T5.2` 照用。
+
+**等待窗口的用法**：B 在等 `T1.1` 时做 `T2.1`–`T2.3`（纯 Rust，不依赖存储）；A 全程不依赖引擎，`T3.*` 可直接做。
+
+---
+
+## 2. Phase 0 — 门禁验证
+
+### Task T0.1 长时任务能力验证（真机）✅ **已完成（2026-10-15）**
+
+**结论（A1，证据与分析全文见 [`../research/T0.1-LONG-TASK-EVIDENCE.md`](../research/T0.1-LONG-TASK-EVIDENCE.md)）**：
+① `BackgroundMode.DATA_TRANSFER` **存在且可用**（真机申请成功 + 常驻通知；`module.json5` 已加 `dataTransfer`）；
+② **息屏 606 秒零丢 tick**（07:46:38→07:56:39，PID 未重启），停表恰在**10 分 03 秒**，与 SDK 原文规则
+「进度 >10 分钟不更新即取消（进度通知须为**实况窗 live view**）」吻合 ⇒ 作业必须按 **≤10 分钟节奏更新进度**；
+③ **同一 UIAbility 不能持两个长时任务**（第二个 `start` 报 `9800005`），并存正解是**一个任务带多类型**
+（`startBackgroundRunning(ctx, bgModes[], wantAgent)` / `updateBackgroundRunning(ctx, bgModes)`，均 @since 12）
+—— 该路径需待急 P0 修复后复验；④ **新 P0**：TTS 的 `AUDIO_PLAYBACK` 任务约 **24 秒**后即被系统停
+（`AVSessionNotifyUpdateNotification failed ret=980000502`）、息屏 50 秒应用被冻结 ⇒ 「靠听书任务保命」不可依赖。
+
+**Description:** 确认 `backgroundTaskManager.BackgroundMode.DATA_TRANSFER` 存在且可用；确认同一应用
+能否同时持有「音频播放」与「数据传输」两个长时任务；确认息屏后作业仍在推进。产出 plan 的 A1 决定。
+
+**Acceptance criteria:**
+- [x] 在真机上 `startBackgroundRunning(ctx, DATA_TRANSFER, wantAgent)` 成功返回，且通知栏出现常驻通知
+- [x] TTS 正在播放时启动作业，10 分钟内二者都没有被系统终止 —— **结论为否**：第二个任务直接 `9800005`；
+      TTS 自己的任务 24 秒后被系统停（P0）。并存须改「一任务多类型」，待 P0 后再验
+- [x] 息屏 10 分钟，作业推进计数持续增长（不依赖应用处于前台）—— 实测 606 秒连续、零丢 tick，随后按 10 分钟规则取消
+- [x] 结论 + 证据（SDK 版本、hilog 片段）写入 [`../specs/SPEC-DETECT-JOB.md`](../specs/SPEC-DETECT-JOB.md) §3.6
+
+**Verification:**
+- [x] `make run` 后在真机手工走：起 TTS → 起作业 → 息屏 10 min
+- [x] 抓日志：`hilog -x | grep` + 探针落盘文件 `filesDir/t0-1-probe.log`（**hilog 缓冲区会滚**，落盘才可数）
+- [x] 降级路径**未触发**（`DATA_TRANSFER` 可用），仍保留在 spec §3.6 备案
+
+**临时探针已清理（2026-10-15）**：`model/BackgroundProbe.ets` 已删除、`Settings.ets` 顶部 TEMP 组已移除
+（该文件已回到与 HEAD 一致，`make hap` ✓、真机 `make run` 后设置页无残留）；`module.json5` 的
+`"backgroundModes": ["audioPlayback", "dataTransfer"]` **保留**（Phase 4 沿用）。
+
+**Dependencies:** None
+**Files likely touched:** `entry/src/main/module.json5`（如需）、`docs/specs/SPEC-DETECT-JOB.md`、
+`docs/research/`（结论记录）
+**Estimated scope:** Small（允许写一次性验证代码，验完删除；正式实现归 `T4.4`）
+
+### Task T0.2 并发 / 超时实测调参 ✅ **已完成（2026-10-15）**
+
+**结论（Ask first 已确认）**：并发 **16**、L1 超时 **8 s**、L2 保持 45 s；3000 源 L1 单轮 ≈4.4 min
+（判据 ≤20 min 留 ~4.5× 余量）；32/64 的实测数据已备，真机若 >15 min 改一个常量上调到 32。
+实测台 `scripts/detect-bench.py`（可复现，一条命令重跑四档）；结论已回写
+[`../specs/SPEC-DETECT-ENGINE.md`](../specs/SPEC-DETECT-ENGINE.md) §3.3 / §3.5 + [`BOOKSOURCE-REVAMP-PLAN.md`](./BOOKSOURCE-REVAMP-PLAN.md) §2 的 A2。
+
+**Description:** 用 `make probe` 对同一批真实书源跑并发 8 / 16 / 32，记录吞吐、成功率、超时率与
+限流迹象，定并发上限与 L1 超时。产出 plan 的 A2 决定。
+
+**Acceptance criteria:**
+- [x] 三个并发档位的「源/分钟、成功率、超时率、其他失败」成表记录 —— 实测 8/16/32 **+ 补测 64** 四档，
+      每档 800 次观测（400 源 × 2 轮）：L1 312.5 / 582.5 / 879.1 / 1241.3 源/分钟，命中率 9.1–9.2%，
+      L1 超时率 5.0 / 5.4 / 5.6 / 5.9%，L2 超时率 5.4 / 5.6 / 5.9 / **6.9%**；失败构成逐项同表
+- [x] 给出推荐并发值 + 依据 —— **16**：主机上 64 仍 +41%（测不到拐点，瓶颈不在本机），故按「失败率不再
+      上升的最后一档」取并优先保守：8→16 近乎线性（1.86×），8/16/32 的失败构成逐项一致（`blocked`
+      恒 5.8%、`rate_limited` 0.5%），且逐源比对 6 次观测**没有任何源「某档 ok、某档失败」**；
+      32 留作真机上调档（收益真实但翻倍在途连接，手机侧未测），64 不取（超时率抬头，只再省 ~1 min）
+- [x] 给出 L1 超时推荐值 + 3000 源单轮估算 —— **8 s**（命中耗时 p99=8.5 s、max 9.65 s；2400 次观测里
+      只有 2 次命中 >8 s，且落「待复查」不误删）→ 3000 源单轮 ≈**4.4 min**（并发 16；8 s cap 已折算 −14%）
+- [x] 结论写入 [`../specs/SPEC-DETECT-ENGINE.md`](../specs/SPEC-DETECT-ENGINE.md) §3.3 / §3.5，
+      并回写 plan §2 的 A2
+
+**Verification:**
+- [x] `make probe … detect <关键词> --concurrency N --timeout M` 多轮 —— 本轮用 `scripts/detect-bench.py`
+      把 probe 包成「抽样 → 多档 → 多轮 → 统计」，原命令与参数见 spec §3.5 的复现行
+- [x] **必做**：`clamp(1, 8)` 临时放宽 —— 改成 `clamp(1, 64)`（search 侧 `clamp(1, 16)` → 64）测完 16/32/64，
+      **已回退**（`git diff rust/` 为空，probe 二进制已重建）；转正归 `T2.2`，spec §3.5 记录了这次临时改动
+- [x] 样本量 —— 内置 13 条只有 2 个波次，故另拼源池：一份 3911 条 Legado 导出里「启用 + 有搜索规则」的
+      3180 条（≈ 用户的 3000 源导入），固定种子抽 400 条；内置 13 条与「L1 命中过的 38 条存活源」作对照
+      （存活源逐源耗时中位在 8/16/32/64 下为 1.55/1.58/1.61/1.64 s —— 并发没把源拖慢）
+
+本轮原始日志（临时，重启即失）：`/tmp/detect-bench/`（`sweep-*.log` 为汇总表，`l1/`、`l2/`、`alive2/`、
+`bundled/` 下是每档每轮的 `--json` 原始结果；汇总 JSON 为各自的 `summary-*.json`）。
+
+**Dependencies:** None
+**Files likely touched:** `scripts/`（一次性测速脚本）、`docs/specs/SPEC-DETECT-ENGINE.md`
+**Estimated scope:** Small
+
+### Checkpoint 0 — 门禁
+
+- [ ] A1 / A2 两条决定已落进 spec，且 map §9-4 / §9-6 仍可达（或已按降级改写）
+      —— **A2 ✅ 已落**（T0.2 实测 + 用户确认：并发 16 / L1 8 s）；**A1 待 `T0.1`**（真机，未做）
+- [ ] **与人对齐后再进 Phase 1**
+
+---
+
+## 3. Phase 1 — `source-store`（会话 A）
+
+### Task T1.1 `SourceStore.ets`：建表 + 接口（冻结契约）
+
+**Description:** 新建 SQLite 存储层，取代 preferences 单键。建 `sources` 表（索引列 + JSON 列，
+自然键 `(url, name)` 唯一索引），实现轻量投影读与单行/单事务写。**本任务冻结 `SourceRow` 形状。**
+
+**Acceptance criteria:**
+- [x] 表与索引按 [`../specs/SPEC-SOURCE-STORE.md`](../specs/SPEC-SOURCE-STORE.md) §关键设计决策 2
+      建好（`grp` 而非 `group`；`json` 列存完整书源）
+- [x] `SourceRow` 投影 + 接口齐全：`listRows` / `countRows` / `getSource` / `setEnabled` / `remove` /
+      `patchDetect` / `patchConfidence` / `upsertMany` / `replaceAll` / `allForEngine` / `exportAll`
+- [x] 同 URL 不同名两条各自有独立 `id`，启停/删除互不影响（T-SRC-1 回归不重演）
+- [x] `setEnabled` / `remove` 为单行写，无任何全量序列化
+
+**Verification:**
+- [x] `make run` 后在真机确认建表成功、投影字段完整（`uitest dumpLayout` / hilog）
+      —— 2026-10-17 一次性自检：`add=2 upd=1 dupid=1 idstable=1 grp=1 proj=1 iso=1 patch=1 flt=1 exp=2 rm=1 rows=2`
+- [x] `make check` 通过
+- [x] 形状冻结：把 `SourceRow` 与接口签名贴进 `SPEC-SOURCE-STORE.md`（替换「建议签名」措辞）
+
+**Dependencies:** None
+**Files likely touched:** `entry/src/main/ets/model/SourceStore.ets`（新）、`common/Const.ets`、
+`docs/specs/SPEC-SOURCE-STORE.md`
+**Estimated scope:** Medium
+
+### Task T1.2 迁移：preferences → SQLite（幂等 + 回退）
+
+**Description:** 首次启动把 `book_sources_v1` 迁入 `sources` 表。**必须整条跑通再切消费点**——
+迁移没稳就改读取方等于丢数据。
+
+**Acceptance criteria:**
+- [x] 幂等：连续调用两次结果一致，不重复插入
+- [x] 迁移前自动导出一份备份到 `filesDir`；迁移后 `countRows` == 迁移前解析条数（不一致即中止并报错）
+- [x] 旧 preferences 键**保留**（1 个版本的回退路径）
+- [x] 迁移失败时不破坏旧键、不产生半张表数据（事务内完成）
+
+**Verification:**
+- [x] 真机：导入一份多源文件 → 触发迁移 → 核对条数与备份文件存在
+      —— 2026-10-17：13 条迁入，备份 23068 B 与迁移前 preferences 原文逐字节一致
+- [x] 手工制造「第二次启动」确认幂等
+      —— 第一次 `migrated count=13`，第二次 `already-migrated count=0`
+- [x] `make check` 通过
+
+**Dependencies:** T1.1
+**Files likely touched:** `model/SourceStoreMigration.ets`（新）、`model/SourceStore.ets`、
+`model/SourceRepository.ets`
+**Estimated scope:** Medium
+
+### Task T1.3 `confidence` 迁入 `sources` 表（A6）
+
+**Description:** 把置信度从「随 `BookSource` 全量 blob 落盘」改为 `sources.confidence` 列，消除第二套
+存储与第二次全量 parse。
+
+**Acceptance criteria:**
+- [x] `confidence` 读写全部走 `patchConfidence` / `patchConfidences` / 投影列，不再有独立的全量写路径
+- [x] 既有置信度数据在迁移中一并带入（不丢）
+- [x] `model/SourceConfidence.ets` 的调用方全部改完，无残留
+
+**Verification:**
+- [x] `rg -n "SourceConfidence" entry/src/main/ets` 确认只剩存储层引用
+- [x] 真机：改一次置信度 → 重启 → 值仍在
+      —— 2026-10-17：👍玄幻阁 `90→100`、黑炎小说 `40→50`、云中书库 `35→45`；force-stop 重启后保持
+- [x] `make check` 通过
+
+**Dependencies:** T1.1、T1.2
+**Files likely touched:** `model/SourceStore.ets`、`model/SourceConfidence.ets`
+**Estimated scope:** Small
+
+### Task T1.4 消费点切换 A：备份导出/导入 + 换源面板
+
+**Description:** 去掉这两处的全量 `getString` + `JSON.parse`，改走存储层接口。
+**不改备份 JSON 的对外格式。**
+
+**Acceptance criteria:**
+- [x] `BackupManage` 的导入/导出走 `upsertMany` / `replaceAll` / `exportAll`
+- [x] `SourceSwitchPanel` 走投影查询，不再全量 parse
+- [x] 导出的备份 JSON 与既有格式**逐字段一致**（`BACKUP_SCHEMA_VERSION` 不变）
+- [x] 旧备份文件仍可导入
+
+**Verification:**
+- [x] 真机：导出 → 与改动前的备份逐字段对比（diff）
+- [x] 真机：用旧备份文件导入成功
+- [x] `make check` 通过
+
+**证据（2026-10-17 真机）：** 导出备份保持 `schemaVersion=1`，顶层与全部嵌套字段路径不变；旧备份导入后计数 `13 / 3 / 7`，最新备份回导后恢复为 `13 / 4 / 8`。换源面板直接显示
+`换源 · 3 个候选` / `已检索 8/12 个书源`，候选来自已启用书源的投影查询。
+
+**Dependencies:** T1.2
+**Files likely touched:** `pages/BackupManage.ets`、`components/SourceSwitchPanel.ets`、
+`model/SourceStore.ets`
+**Estimated scope:** Medium
+
+### Task T1.5 消费点切换 B：阅读链路
+
+**Description:** 启动、书架、搜索结果三处改走投影查询，消除每次进页面的主线程全量 parse。
+
+**Acceptance criteria:**
+- [x] `Index.ets` / `Shelf.ets` / `SearchResult.ets` 不再调用 `loadSources()` 全量
+- [x] 启动路径无 >1 MB 的 `JSON.parse`（正常启动只查投影；唯一例外是 T1.2 尚未执行的一次性旧 preferences 迁移）
+- [x] 换源/启用状态在上述三处与书源页保持一致（同一份 `sources.db`；页面均先 `ensureSourceStore()`，再查 `listRows()`）
+
+**Verification:**
+- [x] `rg -n "loadSources" entry/src/main/ets` 确认调用点只剩存储层与迁移
+- [x] `make run` 真机走一遍：启动 → 书架 → 搜索 → 换源（2026-10-17，`33Z0224424136564`）
+- [x] `make check` 通过
+
+**Implementation evidence (2026-10-17):** `make run` 编译、签名、安装、force-stop、启动全部成功；启动日志为
+`source migration status=already-migrated count=0`，书架网络书《剑来》可进入阅读页并换源成功。
+`Index.ets` / `Shelf.ets` / `SearchResult.ets` 改为 `ensureSourceStore()` + `listRows()`，仅按书架实际使用的 URL
+或逐源搜索的稳定 `id` 调用 `getSource()`；`SourceSwitchPanel.ets` 与 `BookSourceManage.ets` 同读 SQLite 投影。
+`rg -n "loadSources" entry/src/main/ets` 仅命中 `model/SourceRepository.ets:22`（定义）。
+新增 `scripts/check-source-consumers.sh` 并接入 `make check`，同时锁定启动/三个阅读消费点不得出现 `JSON.parse`。
+启用状态一致性实测：管理页关闭一条后为 `书源（12/13 启用）`，搜索显示 `源 8/11 成功`，换源面板显示
+`已检索 10/11 个书源`；force-stop 重启后仍为 `12/13`，恢复启用后回到 `13/13`，再次搜索显示 `源 10/12 成功`。
+`SearchResult.ets` 现在每次 `searchToken` 变化都会重读启用投影，避免在管理页改启停后沿用旧集合。
+
+**Dependencies:** T1.2
+**Files likely touched:** `pages/Index.ets`、`pages/Shelf.ets`、`pages/SearchResult.ets`
+**Estimated scope:** Medium
+
+### Task T1.6 3000 条造数入口 + 性能实测（真机）
+
+**Description:** 提供一次性造数路径（导入一份 3000 条 JSON），实测冷启动就绪时间、单条 toggle、
+批量 upsert。造数文件不入仓库。
+
+**Acceptance criteria:**
+- [x] 能在一台真机上得到 3000 条书源（含同 URL 不同名、多分组、混合启用状态）
+- [x] 实测：进书源页数据就绪 ≤ 300 ms 且首帧不阻塞（map §9-1）
+- [x] 实测：单条 toggle / 删除 ≤ 16 ms 且不触发全量序列化（map §9-2）
+- [x] 实测：`upsertMany` 3000 条单事务 ≤ 2 s
+
+**Verification:**
+- [x] `make log` 抓 hilog 中的耗时打点，`rg` 出三组数字
+- [x] 造数脚本/数据存放路径记进 `docs/research/`（不入仓库）
+- [x] `make check` 通过
+
+**Implementation evidence (2026-10-17, `33Z0224424136564`):** debug-only 入口位于书源管理页「工具」组，
+由 `BuildProfile.DEBUG` 门控。临时 JSON 为 3000 行（1000 个 URL × 3 个不同名称、12 组、
+2000 enabled / 1000 disabled）；最新轮 `upsertMany=477 ms`、冷就绪 `44 ms`（首帧 `18 ms`）、
+首次 toggle `10 ms`、10 次中位 `1 ms`、remove `1 ms`、`jsonSerialize=0`。测后恢复原 13 条书源，
+`exact=1`。前一轮首次 toggle 为 `20 ms`，保留在证据中作为调度抖动风险。
+路径、哈希、日志与复跑说明 →
+[`T1.6-SOURCE-STORE-BENCH.md`](./T1.6-SOURCE-STORE-BENCH.md)。新增 `scripts/check-t16-bench.sh`
+锁定 debug 门控、首帧后测量路径、单行写不 reload、`upsertMany` 单事务和无全量序列化。
+
+**Dependencies:** T1.1、T1.2
+**Files likely touched:** `pages/BookSourceManage.ets`（隐藏调试入口）、`common/Const.ets`、
+`docs/research/`（记录）
+**Estimated scope:** Small
+
+### Checkpoint 1 — 存储地基
+
+- [x] map §9-1 / §9-2 有实测数字支撑
+- [x] 迁移幂等、旧键仍在、条数校验通过
+- [x] 备份导出逐字段一致、旧备份可导入（map §9-7）
+- [x] `rg -n "loadSources"` 确认消费点已全部切换
+- [x] `make check` 通过
+- [ ] **与人对齐后再进 Phase 3**
+
+---
+
+## 4. Phase 2 — `detect-engine`（会话 B，可与 Phase 1 并行）
+
+### Task T2.1 `respond_time` / `last_update_time` 接回
+
+**Description:** 书源 JSON 里本就有这两个字段，但 Rust `BookSource` 未声明 → serde 静默丢弃。
+补上并做三处同步，使检测结果的时间/耗时有地方落。
+
+**Acceptance criteria:**
+- [ ] `rust/legado-engine/src/types.rs` 声明两字段（`#[serde(rename_all = "camelCase")]` 语义正确）
+- [ ] `engine/types.ets` 同步；`entry/obfuscation-rules.txt` keep 列表同步
+- [ ] `make check` 的 keep 核对通过（无遗漏、无多余）
+- [ ] 解析带这两个字段的真实书源后，值不丢（`make probe` 或单测验证）
+
+**Verification:**
+- [ ] `make test` 通过
+- [ ] `make check` 通过
+- [ ] `make run-release` 后确认 release 包下字段可读（混淆不吞字段）
+
+**Dependencies:** None
+**Files likely touched:** `rust/legado-engine/src/types.rs`、`entry/src/main/ets/engine/types.ets`、
+`entry/obfuscation-rules.txt`
+**Estimated scope:** Small
+
+### Task T2.2 `detect` 加 `mode`（probe 早退）
+
+**Description:** 复用 `detect` 而不新增 NAPI 函数：加 `mode: "probe" | "full"`，probe 在
+`search_one` 返回后早退（1 次请求），full 保持现状完整链路。`lib.rs` 的 `///` 是契约唯一来源。
+
+**Acceptance criteria:**
+- [ ] `lib.rs` 的 `///` 更新（含 `mode` 取值与两档语义），`make rust` 重生成并拷 `index.d.ts`
+- [ ] probe 只发 1 次请求即收口；full 行为与改动前完全一致
+- [ ] `BookEngineNapi.ets` 透传 `mode`；旧调用方不传时默认 `full`（行为不变）
+- [ ] **probe 未命中记 `no_results`，绝不记 `unavailable`**
+
+**Verification:**
+- [ ] `make rust` 后确认 `index.d.ts` 已更新且未被手改
+- [ ] `make test` 通过
+- [ ] `make check` 通过（keep 列表含 `mode`）
+- [ ] `make run-release` 确认 release 下 `mode` 生效
+
+**Dependencies:** T2.1
+**Files likely touched:** `rust/legado-engine/src/runtime.rs`、`rust/legado-core/src/lib.rs`、
+`entry/src/main/ets/engine/BookEngineNapi.ets`、`entry/src/main/cpp/types/liblegado_core/index.d.ts`（生成）
+**Estimated scope:** Medium
+
+### Task T2.3 L1/L2 真值表 + 真源实测
+
+**Description:** 用固定 HTML 夹具覆盖三条关键路由，并用真实书源对比 L1 与 L2 的耗时与结论一致性。
+
+**Acceptance criteria:**
+- [ ] `make test` 覆盖：L1 命中 / L1 未命中（记 `no_results`）/ L2 在目录阶段失败
+- [ ] `make probe` 真源实测 L1 与 L2 各 ≥3 个源，记录耗时比与结论差异
+- [ ] 确认 **L1 通过的集合 ⊇ L2 通过的集合**（若有反例，记录并评估）
+- [ ] 实测结论写入 `docs/research/`，并回写 `SPEC-DETECT-ENGINE.md` §Success 1
+
+**Verification:**
+- [ ] `make test` 通过
+- [ ] `make probe ARGS='...'` 输出落 `/tmp`，`rg` 出对照表
+- [ ] `make check` 通过
+
+**Dependencies:** T2.2
+**Files likely touched:** `rust/legado-engine/src/runtime.rs`（tests）、`docs/research/`、
+`docs/specs/SPEC-DETECT-ENGINE.md`
+**Estimated scope:** Medium
+
+### Checkpoint 2 — 引擎两档
+
+- [ ] L1 与 L2 的 `DetectResult` 形状一致，`stage` 复用既有 `FailReason`
+- [ ] L1 未命中 ≠ `unavailable`（否则一键清理会误删可用源）
+- [ ] 单轮时长估算对照 map §9-4 的 ≤20 分钟（用 T0.2 定的并发/超时）
+- [ ] `make test` / `make check` / `make run-release` 通过
+- [ ] **与人对齐后再进 Phase 4**
+
+---
+
+## 5. Phase 3 — `source-list`（会话 A）
+
+### Task T3.1 页面骨架：两段 + LazyForEach
+
+**Description:** `BookSourceManage` 重写为壳：段选择器 + 段内容容器 + `LazyForEach` 列表 +
+`＋`/`⋯` 页内行 + 底部作业条占位。撤掉现有导入区与「工具」组。
+
+**Acceptance criteria:**
+- [ ] `SegmentedCell` 两段；两段共用**同一份**投影（不重复持有 3000 行）
+- [ ] 列表用 `LazyForEach`，`build` 里无随行数增长的 filter/sort/map
+- [ ] 导入 / 规则调试器 / 导出 / 恢复内置 收进 `＋` / `⋯`；滚动区第一屏是列表
+- [ ] 两段各自保留滚动与筛选状态；进页面总是「书源」段
+
+**Verification:**
+- [ ] `make run` + `uitest dumpLayout`：确认首屏可见搜索框与筛选条，列表在首屏
+- [ ] 3000 条下滚动目视无掉帧
+- [ ] `make check` 通过
+
+**Dependencies:** T1.1–T1.6
+**Files likely touched:** `pages/BookSourceManage.ets`、`common/Const.ets`
+**Estimated scope:** Medium
+
+### Task T3.2 行 + `⋯` 菜单 + 二次确认
+
+**Description:** 两行式行（名称 / 分组·检测态·耗时）+ 开关 + 行尾 `⋯`（详情 / 启停 / 删除）。
+
+**Acceptance criteria:**
+- [ ] 行尾 `⋯` 菜单含 详情 / 停用（或启用）/ 删除；删除走 `AlertDialog` 二次确认且文案含源名
+- [ ] 「恢复内置」二次确认，文案点明**会替换当前全部书源**
+- [ ] 行内无裸文本「删除」；点行 = 打开详情抽屉
+- [ ] 取消确认后数据与落盘都不变（`remove` 未调用）
+
+**Verification:**
+- [ ] 真机：删除/恢复内置各走一次确认与取消，核对数据未变
+- [ ] `rg -n "removeSource|resetBundled"` 确认无绕过确认的调用路径
+- [ ] `make check` 通过
+
+**Dependencies:** T3.1
+**Files likely touched:** `components/SourceRows.ets`（新）、`pages/BookSourceManage.ets`
+**Estimated scope:** Medium
+
+### Task T3.3 搜索 / 筛选 / 排序（默认视图）
+
+**Description:** 搜索防抖 + 筛选 chips + 三档排序 + 分组筛选 + 空态。
+
+**Acceptance criteria:**
+- [ ] 搜索防抖 150 ms，匹配 `name` / `url` / `group`，大小写不敏感
+- [ ] 默认视图 = 「启用」+ 三档排序（需处理 `不可用` / 待复查 `未测`·`超时`·`无结果` / 正常 `可用`）
+- [ ] chips「全部」「启用」常显，其余计数为 0 时隐藏
+- [ ] 空态两种：搜索/筛选无结果有文案；0 条书源带「恢复内置」出口
+
+**Verification:**
+- [ ] 真机：输入到列表更新 ≤ 100 ms；切换筛选/分组 ≤ 100 ms
+- [ ] 真机：核对排序分档（构造一条 `unavailable`、一条 `timeout`、一条未测、一条可用）
+- [ ] `make check` 通过
+
+**Dependencies:** T3.2
+**Files likely touched:** `components/SourceRows.ets`、`pages/BookSourceManage.ets`、`common/Const.ets`
+**Estimated scope:** Medium
+
+### Task T3.4 详情抽屉 + UI-SPEC 同步
+
+**Description:** `SourceDetailPanel.ets` 替代现在的 `statusContent()`「书源状态」内容，并同步
+`UI-SPEC.md`。**调用点数量不变（仍 8 处）。**
+
+**Acceptance criteria:**
+- [ ] 抽屉展示：名称 / 地址 / 分组 / 启停 / 最近检测（态·耗时·时间）/ 规则字段只读 + 删除
+- [ ] 仍是 `BottomDrawer` 调用点，数量 8 处不变（未新起裸 `bindSheet`）
+- [ ] `docs/specs/UI-SPEC.md` §2 第 6 处调用点的名称与用途已更新
+- [ ] 组件的展示逻辑不含每帧增长的计算
+
+**Verification:**
+- [ ] `rg -n "BottomDrawer" entry/src/main/ets` 计数为 8
+- [ ] 真机：点行打开抽屉，字段与源数据一致
+- [ ] `make check` 通过
+
+**Dependencies:** T3.1
+**Files likely touched:** `components/SourceDetailPanel.ets`（新）、`pages/BookSourceManage.ets`、
+`docs/specs/UI-SPEC.md`
+**Estimated scope:** Small
+
+### Checkpoint 3 — 列表
+
+- [ ] map §9-3（滚动 / 搜索 ≤100 ms）与 §9-10（默认视图 + 首屏）有实测
+- [ ] 删除 / 恢复内置 100% 走确认
+- [ ] 空态齐全
+- [ ] `UI-SPEC.md` 与实现一致（调用点 8 处）
+- [ ] `make check` 通过
+- [ ] **与人对齐后再进 Phase 5**
+
+---
+
+## 6. Phase 4 — `detect-job`（会话 B）
+
+### Task T4.1 `model/DetectJob.ets` 纯状态机（冻结 `@Trace` 字段名）
+
+**Description:** 把作业状态机写成不依赖任何 `@kit.*` 的纯模块，以便主机仿真覆盖。
+**本任务冻结 `@Trace` 字段名**（`T4.3` / `T5.2` 照用）。
+
+**Acceptance criteria:**
+- [ ] 状态机：`idle → running → done | cancelled → running`，非法迁移被拒绝
+- [ ] `fingerprint`（源 id 集合 + `mode` + `keyword`）计算与比较为纯函数
+- [ ] `@Trace` 字段名与语义写明在文件顶部成员索引，并进
+      [`../specs/SPEC-DETECT-JOB.md`](../specs/SPEC-DETECT-JOB.md)
+- [ ] 模块内无 `@kit.*` / `@ohos.*` import
+
+**Verification:**
+- [ ] `rg -n "@kit\.|@ohos\." model/DetectJob.ets` 无结果
+- [ ] `make check` 通过
+
+**Dependencies:** None（可最早开工）
+**Files likely touched:** `model/DetectJob.ets`（新）、`common/Const.ets`、
+`docs/specs/SPEC-DETECT-JOB.md`
+**Estimated scope:** Medium
+
+### Task T4.2 主机仿真 + `make test-detect`
+
+**Description:** 仿 `scripts/tts-pregen-sim.py` 的机械切片 + `tsc` + `node`，把状态机拿到主机上跑。
+
+**Acceptance criteria:**
+- [ ] `make test-detect` 可运行并覆盖：正常完成 / 取消 / 中断续跑 / fingerprint 不匹配作废 /
+      `results.jsonl` 半行损坏的读回
+- [ ] 仿真用真源码切片（不是副本），切片失败的断言明确报错
+- [ ] 失败用例能给出可读的期望-实际差异
+
+**Verification:**
+- [ ] `make test-detect` 通过；故意改坏一个分支确认测试会红
+- [ ] `make check` 通过
+
+**Dependencies:** T4.1
+**Files likely touched:** `scripts/detect-job-sim.py`（新）、`Makefile`
+**Estimated scope:** Medium
+
+### Task T4.3 `DetectJobRunner.ets`：分批派发 + 落盘 + 回写
+
+**Description:** 进程级单例（仿 `TtsPregenRunner`）：取批 → `detect(batch, {mode})` →
+追加 `results-<轮次戳>.jsonl` → `patchDetect` 单行回写 → 更新 `job.json` → 每批一次 `@Trace`。
+
+**Acceptance criteria:**
+- [ ] 批大小 32；每批只刷一次 `@Trace`（3000 源 ≈ 94 次，而非 3000 次）
+- [ ] 结果按轮次落 `results-<轮次戳>.jsonl` 追加写，保留最近 2 轮，更早淘汰
+- [ ] 重启后读 `job.json`：`fingerprint` 匹配则从 `cursor` 续跑，不匹配则作废
+- [ ] 单例**不长期持有 `ctx`**（每次短取 `getContext`）
+
+**Verification:**
+- [ ] 真机：跑到中途强杀 → 重启 → 核对续跑起点与已测条数
+- [ ] 真机：核对 `results-*.jsonl` 与 `job.json` 内容；确认无整文件重写
+- [ ] `make check` 通过
+
+**Dependencies:** T1.1、T2.2、T4.1
+**Files likely touched:** `model/DetectJobRunner.ets`（新）、`model/DetectJob.ets`、
+`model/SourceStore.ets`
+**Estimated scope:** Large → 若动手超过一个会话，拆成「分批派发」与「落盘/续跑」两个任务
+
+### Task T4.4 长时任务 + 取消 + 进度节流
+
+**Description:** 按 `T0.1` 结论接入长时任务（可用则 `DATA_TRANSFER`，否则降级为仅前台推进 +
+明示用户）；取消 = 置状态 + 停派发；结束/取消/失败都 `stopBackgroundRunning`。
+
+**Acceptance criteria:**
+- [ ] 按 A1 结论接入；降级路径下 UI 明示「离开应用会暂停」
+- [ ] 取消后 ≤1 批完全停止，无后续网络请求
+- [ ] 结束 / 取消 / 失败三条路径都会释放长时任务（无残留常驻通知）
+- [ ] 与 TTS 播放不互相终止（按 T0.1 结论核）
+
+**Verification:**
+- [ ] 真机：取消后 `make log` 确认无新请求；通知栏无残留通知
+- [ ] 真机：息屏 10 分钟推进（或降级路径下确认已明示）
+- [ ] `make check` 通过
+
+**Dependencies:** T4.3、T0.1
+**Files likely touched:** `model/DetectJobRunner.ets`、`entry/src/main/module.json5`（如需）
+**Estimated scope:** Medium
+
+### Checkpoint 4 — 后台作业
+
+- [ ] map §9-5（强杀续跑）与 §9-6（息屏/降级）有实测
+- [ ] 取消 ≤1 批、无残留通知、无残留网络请求
+- [ ] `@Trace` 更新次数 ≈ 批次数
+- [ ] `make test-detect` 通过
+- [ ] **与人对齐后再进 Phase 5**
+
+---
+
+## 7. Phase 5 — `detect-ui` 与收尾（汇合，单会话串行）
+
+### Task T5.1 `DetectPanel.ets` 检测段
+
+**Description:** 检测段内容：范围条 + 作业卡三态 + 结果面 + 批量动作。
+
+**Acceptance criteria:**
+- [ ] 范围条：全部 / 未测 / 上次失败 / 分组 ▾（分组来源 = `bookSourceGroup`）；默认档是**增量**
+- [ ] 作业卡三态：运行中（模式 / 已用 / 预计剩余 / 取消）、已完成、已取消（+ 继续）
+- [ ] 结果面用 `LazyForEach`，按检测态筛选（与书源段共用同一套维度）
+- [ ] 批量动作仅对 `unavailable`，次级样式 + 二次确认 + 明确条数
+
+**Verification:**
+- [ ] 真机：三种状态各截一次 `uitest dumpLayout`，`rg` 核对文案与按钮
+- [ ] 真机：确认「无结果 / 超时」在结果面上**没有**一键清理入口
+- [ ] 3000 条结果滚动流畅
+- [ ] `make check` 通过
+
+**Dependencies:** T3.4、T4.3
+**Files likely touched:** `components/DetectPanel.ets`（新）、`pages/BookSourceManage.ets`
+**Estimated scope:** Medium
+
+### Task T5.2 底部作业条（四态，跨段常驻）
+
+**Description:** 从未检测 / 运行中 / 已完成 / 已取消四态；点击切到检测段。
+
+**Acceptance criteria:**
+- [ ] 四态齐备，文案见 [`../specs/SPEC-BOOKSOURCE-LAYOUT.md`](../specs/SPEC-BOOKSOURCE-LAYOUT.md) §3.4
+- [ ] 跨段常驻；离开书源页再回来，进度仍是活的
+- [ ] 运行中可直接取消（无需先进检测段）
+
+**Verification:**
+- [ ] 真机：起作业 → 切段 → 返回列表页 → 再进书源页，进度连续
+- [ ] `make check` 通过
+
+**Dependencies:** T5.1
+**Files likely touched:** `components/DetectPanel.ets`、`pages/BookSourceManage.ets`
+**Estimated scope:** Small
+
+### Task T5.3 增量默认档 + 未测/上次失败筛选
+
+**Description:** 增量窗口（默认 7 天）+ 「未测 / 上次失败」维度接入书源段筛选与检测段范围。
+
+**Acceptance criteria:**
+- [ ] 增量窗口常量入 `Const.ets`（7 天），另有「全部重测」入口
+- [ ] 书源段可筛「未测 / 上次失败」；检测段可据此选范围
+- [ ] 增量档下的耗时显著低于全量（实测对照）
+
+**Verification:**
+- [ ] 真机：同一集合分别跑增量与全量，对比耗时
+- [ ] `make check` 通过
+
+**Dependencies:** T5.1、T3.3
+**Files likely touched:** `components/DetectPanel.ets`、`components/SourceRows.ets`、`common/Const.ets`
+**Estimated scope:** Small
+
+### Task T5.4 收尾
+
+**Description:** 文案、文档、兼容性回归与判据核对。
+
+**Acceptance criteria:**
+- [ ] 判定口径文案（可用 / 无结果 / 超时 / 不可用 语义）收进按需展开，不常驻
+- [ ] `docs/specs/*.md` 与实现对齐；`docs/progress.md` 更新；
+      `docs/research/BOOKSOURCE-REVAMP-PLAN.md` §2 的 A1–A12 标记为已落地
+- [ ] 备份兼容回归：旧备份可导入、新导出逐字段一致
+- [ ] map §9 十条判据逐条有实测证据（缺的补测或改写判据）
+
+**Verification:**
+- [ ] `make check` / `make test` / `make run-release` 全通过
+- [ ] 逐条核对 map §9，把证据链接写进本文件 Checkpoint 5
+- [ ] **与人对齐验收后再宣布完成**
+
+**Dependencies:** T5.1–T5.3
+**Files likely touched:** `docs/specs/UI-SPEC.md`、`docs/progress.md`、
+`docs/research/BOOKSOURCE-REVAMP-PLAN.md`
+**Estimated scope:** Small
+
+### Checkpoint 5 — 完成
+
+- [ ] map §9 十条判据逐条有实测证据
+- [ ] `make check` / `make test` / `make run-release` 全通过
+- [ ] 备份兼容回归通过
+- [ ] **与人对齐验收**
+
+---
+
+## 8. Open Questions（开工前需答 / 实现时必须先定）
+
+1. **`SPEC-SOURCE-LIST.md` Q4：恢复内置是「替换」还是「合并」？** `T3.2` 动手前必须定。
+   现状是替换（`resetToBundled`），对已导入数千源的用户是最危险的按钮。
+2. **`SPEC-DETECT-UI.md` Q4：预检（L1）与完整（L2）结果的展示粒度。** `T5.1` 动手前必须定
+   ——在同一个「可用」列里混两种置信度会误导。
+3. **`SPEC-DETECT-UI.md` Q5：是否需要历史轮次对比。** 若需要，`T4.3` 的落盘保留策略要放宽
+   （现定保留 2 轮）。
+4. **旧 preferences 回退保留几个版本**（现定 1 个）。取决于你对已导入源数量的判断。
+
+## 9. 变更记录
+
+- 2026-10-14：初版。Plan 批准后（同日）追加 A1 降级路径已确认、A7/A9/A10 三条实质变更已回写 spec。

@@ -7,8 +7,8 @@
 |---|---|---|---|
 | D1 | 引擎复用 Rust：`rust/legado-engine`（纯核心）+ `rust/legado-core`（NAPI 壳）+ `ohos-rs`，**不降级** | 复用 `legado-source-filter` 已有规则引擎与链路校验，避免在 ArkTS 重写一遍 | `rust/`、`engine/` |
 | D2 | Rust 持有 HTTP：`reqwest` + `rustls`；每源独立 `Client`（Cookie 隔离，上限 64 后回收）+ `concurrentRate` 限速；**禁用证书放行** | 书源各自需要独立 Cookie/UA/限速；rustls 免 OpenSSL 交叉编译 | `http_client.rs` |
-| D3 | 书源持久化用 `preferences` JSON（`SourceRepository`）；书籍/进度用 `relationalStore`（`ShelfRepository`，表 `books`/`progress`） | 书源是低频小数据；书架需要查询与事务 | `model/` |
-| D4 | 搜索调度：ArkTS 滑动窗口（并发 8）+ **书源置信度**排序（`confidence` 字段持久化：`server_error`/`timeout`/`network_error`/`blocked` 扣分，成功回分） | 端侧无全局调度器；置信度让劣质源自动下沉 | `SearchResult.ets`、`SourceConfidence.ets` |
+| D3 | 书源、书籍、进度统一用 `relationalStore`：书源在 `sources.db`（`sources` 表，索引列 + JSON 列），书架在 `shelf.db`（`books`/`progress`）；旧 `book_sources_v1` 仅保留 1 个版本作迁移回退 | 3000 条书源不能继续全量 parse/序列化；分库让清理书源与书架生命周期解耦 | `SourceStore.ets`、`SourceStoreMigration.ets`、`ShelfRepository.ets` |
+| D4 | 搜索调度：ArkTS 滑动窗口（并发 8）+ **书源置信度**排序；`sources.confidence` 列是唯一权威，搜索结束按变化的自然键单事务批量更新，成功回分、`server_error`/`timeout`/`network_error`/`blocked` 扣分 | 端侧无全局调度器；置信度让劣质源自动下沉，列级写入避免每次改分重写完整书源 JSON | `SearchResult.ets`、`SourceStore.ets`、`SourceConfidence.ets` |
 | D5 | 阅读排版：**横向分页翻页**（Swiper + `measureTextSize` 精确分页，跨章连续滑动） | 接近实体书体验；跨章预取已在 M4 打通 | `Reader.ets` |
 | D6 | 封面由 Rust 代下（带 header/Cookie），落盘后 ArkTS 加载（二进制不过 NAPI） | 部分站点封面需 Cookie/Referer | `downloadCover` |
 | D7 | 状态管理 **V2**（`@ComponentV2` / `@Local` / `@Param` / `@Monitor`）；跨页 `AppStorageV2`、跨启动 `PersistenceV2` | 与既有页面一致（V1/V2 不可混用于同一组件） | 全部 UI |

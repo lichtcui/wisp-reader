@@ -1,11 +1,12 @@
 import { common } from '@kit.AbilityKit';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSearchItem, BookSource, Chapter, ReadProgress } from '../engine/types';
-import { computeBookId } from '../common/Format';
+import { computeBookId, cleanAuthor } from '../common/Format';
 import { removeBooks, saveProgress, upsertBook } from './ShelfRepository';
 import { ProgressWriter } from './ProgressOwner';
 import { deleteBookChapters } from './ChapterCache';
 import { deleteBookToc, putCachedToc } from './TocCache';
+import { takePrefetchedInfo, takePrefetchedToc } from './SourcePrefetch';
 import { isLocalBook } from './LocalBook';
 import { TtsController } from './TtsController';
 
@@ -36,6 +37,11 @@ export function normalizeKey(text: string): string {
  * 是否同一本书：书名归一化后**完全相等**，且作者一致（任一方为空则视为一致，
  * 因为搜索结果经常缺作者，严格相等会把整本书滤掉）。
  *
+ * 比作者前要先削掉页面标签：搜索结果里 `item.author` 常是 `作者：烽火戏诸侯`，
+ * 而书架里的 `book.author` 是干净的 `烽火戏诸侯` —— 不削就直接不相等。
+ * 真机上 13 源搜《剑来》，8 条同名结果里 6 条带前缀，**全被当成另一本书滤掉，只剩 1 个候选**；
+ * 削掉后同一批结果是 8 个候选（`normalizeKey` 不管 `作者：`，它只删空白）。
+ *
  * 刻意不做模糊匹配：同名不同书（如《斗破苍穹》的不同作者版本）会被误判，
  * 而这个动作是破坏性的（删旧行 + 清缓存）。
  */
@@ -45,8 +51,8 @@ export function isSameBook(book: Book, item: BookSearchItem): boolean {
   if (a.length === 0 || a !== b) {
     return false;
   }
-  const aa: string = normalizeKey(book.author);
-  const ba: string = normalizeKey(item.author);
+  const aa: string = normalizeKey(cleanAuthor(book.author));
+  const ba: string = normalizeKey(cleanAuthor(item.author));
   if (aa.length === 0 || ba.length === 0) {
     return true;
   }
@@ -170,9 +176,15 @@ export async function switchSource(
   if (target.bookSourceUrl === oldSource.bookSourceUrl) {
     throw new Error('已经是当前书源');
   }
-  const info: Book = await bookEngine.bookInfo(target, item.bookUrl);
+  // 抽屉里的预热（`SourcePrefetch`）命中就直接用：详情 1.1s / 目录 5.9s 已在用户点「切换」前跑完。
+  const warmedInfo: Book | undefined = takePrefetchedInfo(target.bookSourceUrl, item.bookUrl);
+  const info: Book = warmedInfo !== undefined ? warmedInfo : await bookEngine.bookInfo(target, item.bookUrl);
   const tocUrl: string = info.tocUrl.length > 0 ? info.tocUrl : item.bookUrl;
-  const chapters: Chapter[] = await bookEngine.toc(target, tocUrl);
+  const warmedChapters: Chapter[] | undefined =
+    takePrefetchedToc(target.bookSourceUrl, item.bookUrl, tocUrl);
+  const chapters: Chapter[] = warmedChapters !== undefined && warmedChapters.length > 0
+    ? warmedChapters
+    : await bookEngine.toc(target, tocUrl);
   if (chapters.length === 0) {
     throw new Error('该源目录为空');
   }

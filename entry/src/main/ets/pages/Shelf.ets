@@ -1,10 +1,13 @@
 import { common } from '@kit.AbilityKit';
+import BuildProfile from 'BuildProfile';
 import { BookCover } from '../components/BookCover';
 import { EmptyView } from '../components/EmptyView';
 import { Book, BookSource, ReadProgress } from '../engine/types';
 import { getAllProgress, getBooks, initShelf } from '../model/ShelfRepository';
 import { ShelfEditState } from '../model/ShelfEditState';
-import { loadSources } from '../model/SourceRepository';
+import { getSource, listRows, preferredRowsByUrl, SourceRow } from '../model/SourceStore';
+import { ensureSourceStore } from '../model/SourceStoreMigration';
+import { t16MarkerPhase } from '../model/SourceStoreBench';
 import { isLocalBook, localSource } from '../model/LocalBook';
 import { deriveTotalChapters, shelfProgressText } from '../common/Format';
 import { TtsController } from '../model/TtsController';
@@ -39,7 +42,6 @@ export struct ShelfPage {
 
   /** Monotonic guard: a slow earlier reload must not overwrite a newer shelf. */
   private reloadGen: number = 0;
-
   private async reload(): Promise<void> {
     this.reloadGen = this.reloadGen + 1;
     const gen: number = this.reloadGen;
@@ -48,18 +50,34 @@ export struct ShelfPage {
     if (ctx === undefined) {
       return;
     }
+    if (BuildProfile.DEBUG && t16MarkerPhase(ctx) === 'seeded') {
+      return;
+    }
     await initShelf(ctx);
+    await ensureSourceStore(ctx);
     const books: Book[] = await getBooks();
-    const sources: BookSource[] = loadSources(ctx);
-    const byUrl: Map<string, BookSource> = new Map<string, BookSource>();
-    for (const s of sources) {
-      byUrl.set(s.bookSourceUrl, s);
+    const rows: SourceRow[] = await listRows();
+    const byUrl: Map<string, SourceRow> = preferredRowsByUrl(rows);
+    const needed: Map<number, SourceRow> = new Map<number, SourceRow>();
+    for (const book of books) {
+      const row: SourceRow | undefined = byUrl.get(book.sourceUrl);
+      if (row !== undefined) {
+        needed.set(row.id, row);
+      }
+    }
+    const loaded: Map<number, BookSource> = new Map<number, BookSource>();
+    for (const row of needed.values()) {
+      const source: BookSource | undefined = await getSource(row.id);
+      if (source !== undefined) {
+        loaded.set(row.id, source);
+      }
     }
     const progressMap: Map<string, ReadProgress> = await getAllProgress();
     const entries: ShelfBookItem[] = [];
     for (const book of books) {
       const progress: ReadProgress | undefined = progressMap.get(book.bookId);
-      let source: BookSource | undefined = byUrl.get(book.sourceUrl);
+      const row: SourceRow | undefined = byUrl.get(book.sourceUrl);
+      let source: BookSource | undefined = row === undefined ? undefined : loaded.get(row.id);
       if (source === undefined && isLocalBook(book)) {
         source = localSource();
       }

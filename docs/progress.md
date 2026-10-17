@@ -14,8 +14,9 @@
 - 里程碑状态 — L23
 - M5 结果（2026-09-25，真机验证） — L40
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L80
-- 未决 / 风险 — L114
-- 交接备忘 — L230
+- 在办：书源管理改造（3000 条） — L114
+- 未决 / 风险 — L167
+- 交接备忘 — L283
 <!-- TOC:END -->
 
 ---
@@ -110,6 +111,59 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 - **异常面**：`hilog` 全量扫描 **0 条** JS/ArkTS 错误 + **0 条**本应用 error 级日志。
 - **唯一没验全的 D20**（编辑态滚动）：本机书架只有 3–4 本书（grid 2 行 / list 4 行 ≤ 一屏），**内容不足以滚动**；三条加书路径均不可自动化（硬件键盘态下 `TextInput.onSubmit` 无法注入；`DocumentViewPicker` 内无 `.txt` 且 shell 不可写共享存储；`aa start` 不支持 `--wh/--ww` → `10106107`）。改以「慢滑不误触 + 编辑态慢滑不改选 + 代码层不阻断滚动」三项替代证据（详计划 §12.3）。
 - **临时诊断已清理**：真机排查用的 3 条 `hilog('ShelfDiag')`（+ import）已移除，重新构建/安装并复验 D1–D4/D6 通过。
+
+## 在办：书源管理改造（3000 条）
+
+**状态：specs + plan + 任务清单已批准；`T0.2` / `T0.1` 门禁已完成；`T1.1`–`T1.6`
+均已真机通过（2026-10-17）。Phase 1 存储地基的技术验收已完成，等待 Phase 3 前对齐。**
+
+- 设计（索引）：[`specs/SPEC-BOOKSOURCE-REVAMP.md`](./specs/SPEC-BOOKSOURCE-REVAMP.md)（capability map + 共享契约）
+  + 五份模块 spec（`source-store` / `source-list` / `detect-engine` / `detect-job` / `detect-ui`）
+  + [`specs/SPEC-BOOKSOURCE-LAYOUT.md`](./specs/SPEC-BOOKSOURCE-LAYOUT.md)（布局 2 两段式）
+- 计划：[`research/BOOKSOURCE-REVAMP-PLAN.md`](./research/BOOKSOURCE-REVAMP-PLAN.md)（A1–A12 架构决定 / 依赖图 / 风险表）
+- 任务：[`research/BOOKSOURCE-REVAMP-TODO.md`](./research/BOOKSOURCE-REVAMP-TODO.md)（20 任务 / 6 检查点 / 两会话并行分工）
+- **`T0.2` 并发 / 超时实测已完成（2026-10-15，Ask first 已确认）**：并发 **16**、L1 超时 **8 s**
+  （L2 保持 45 s），3000 源 L1 单轮 ≈4.4 min（判据 ≤20 min 留 ~4.5× 余量）；32/64 数据已备，
+  真机若 >15 min 改一个常量上调到 32。实测台 `scripts/detect-bench.py`（主机 probe；
+  3180 条真实混合源抽 400 × 2 轮 × 并发 8/16/32/64）；`runtime.rs` 的 `clamp(1, 8)` 临时放宽到 64 测完
+  **已回退**，转正归 `T2.2`。结论 → [`specs/SPEC-DETECT-ENGINE.md`](./specs/SPEC-DETECT-ENGINE.md) §3.3/§3.5、
+  plan A2、[`research/BOOKSOURCE-REVAMP-TODO.md`](./research/BOOKSOURCE-REVAMP-TODO.md) §T0.2
+- **`T0.1` 长时任务真机验证已完成（2026-10-15）**：A1 已定 —— `DATA_TRANSFER` **可用**（息屏 **606 s 零丢 tick**）、
+  **一个 Ability 只能一个长时任务**（`9800005`；并存须「一个任务多类型」）、受 SDK 硬约束
+  「**>10 分钟不更新进度即取消**（进度通知须为实况窗）」；降级路径**未触发**，Phase 4 范围不变。证据 →
+  [`research/T0.1-LONG-TASK-EVIDENCE.md`](./research/T0.1-LONG-TASK-EVIDENCE.md)、`specs/SPEC-DETECT-JOB.md` §3.6
+- **T1.1 已完成（2026-10-17 真机）**：`SourceStore.ets` 建表、投影、自然键、启停隔离、检测/置信度写、
+  筛选、导出与删除一次性自检全绿（`add=2 upd=1 dupid=1 idstable=1 grp=1 proj=1 iso=1 patch=1 flt=1 exp=2 rm=1`）；
+  临时自检探针已移除。
+- **T1.2 已完成（2026-10-17 真机）**：`SourceStoreMigration.ets` 将 13 条书源迁入 `sources.db`，
+  原文备份到 `filesDir/book-sources-v1.pre-migration.json`（23068 B，与迁移前 preferences 逐字节一致）；
+  第二次启动 `already-migrated count=0`，旧 `book_sources_v1` 键保留。失败路径已验证事务回滚、无半表残留。
+- **T1.3 已完成（2026-10-17 真机）**：`sources.confidence` 成为唯一权威；搜索结束只按变化的自然键
+  `patchConfidences()` 单事务更新列，启动与换源面板用投影覆盖 `BookSource` 里的旧副本。
+  实测 👍玄幻阁 `90→100`、黑炎小说 `40→50`、云中书库 `35→45`，force-stop 重启后值保持不变。
+- **T1.4 已完成（2026-10-17 真机）**：备份导入/导出改走 `replaceAll()` / `exportAll()`；导出的
+  `schemaVersion=1`，与改动前备份的全部字段路径一致。旧备份成功导入（计数 `13 / 3 / 7`），
+  最新备份回导后恢复 `13 / 4 / 8`；换源面板当时已去掉全量 parse，实测显示 3 个候选、检索进度 `8/12`。
+  `make check` 通过。
+- **T1.5 已完成（2026-10-17 真机）**：`Index.ets` / `Shelf.ets` / `SearchResult.ets` 改为
+  `ensureSourceStore()` + `listRows()` 投影读取；书架按实际书籍 URL、搜索与换源按稳定行 `id` 懒加载完整规则。
+  `SourceSwitchPanel.ets` 与 `BookSourceManage.ets` 共用同一 SQLite 启用/换源状态；完整规则不再在进入页面时全量解析。
+  `rg -n "loadSources" entry/src/main/ets` 只剩 `model/SourceRepository.ets:22`（定义）；正常启动无全量
+  `JSON.parse`，仅 T1.2 的一次性旧 preferences 迁移保留该例外。`make run` 编译、安装、force-stop、启动通过；
+  启动日志 `source migration status=already-migrated count=0`，书架《剑来》进入阅读并换源成功。
+  启用一致性实测：管理页 `13/13 → 12/13`，搜索 `源 8/11 成功`、换源 `已检索 10/11 个书源`；重启后仍为
+  `12/13`，恢复后 `13/13`、搜索 `源 10/12 成功`。`SearchResult.ets` 每次 `searchToken` 变化重读启用投影。
+  新增 `scripts/check-source-consumers.sh` 防止阅读链路回退，并随 `make check` 执行。
+- **T1.6 已完成（2026-10-17 真机）**：debug-only「T1.6 性能造数（3000）」入口完成临时 JSON 校验、
+  原书源备份、单事务造数与恢复；3000 条为 1000 个 URL × 3 个不同名称、12 组、2000/1000 启用状态。
+  最新轮 `upsertMany=477 ms`、冷就绪 `init+list=44 ms`（首帧 `18 ms`）、首次 toggle `10 ms` /
+  中位 `1 ms`、remove `1 ms`、`jsonSerialize=0`；测后恢复原 13 条，`exact=1`。前一轮首次 toggle
+  `20 ms` 作为调度抖动风险保留。路径、哈希、hilog 与复跑说明 →
+  [`research/T1.6-SOURCE-STORE-BENCH.md`](./research/T1.6-SOURCE-STORE-BENCH.md)。
+  新增 `scripts/check-t16-bench.sh`，随 `make check` 执行；`make check` 通过。
+- **下一步**：Phase 1 技术项已收口；进入 Phase 3 前先与人对齐列表任务的范围与交互。
+  T1.6 残留风险是 16 ms 阈值对首次写调度较敏感（前一轮首样本 `20 ms`，稳态中位 `1–2 ms`）。
+- 动手前待答：恢复内置「替换 vs 合并」（`T3.2`）、预检/完整结果的展示粒度（`T5.1`）
 
 ## 未决 / 风险
 

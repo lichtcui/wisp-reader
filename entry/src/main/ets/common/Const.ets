@@ -19,6 +19,16 @@ export const ROUTE_CACHE_MANAGE: string = 'CacheManage';
 export const ROUTE_RULE_DEBUGGER: string = 'RuleDebugger';
 export const ROUTE_BACKUP_MANAGE: string = 'BackupManage';
 
+// T1.6 debug-only storage benchmark. Dataset/backup files live in the app sandbox and
+// are intentionally never committed to the repository.
+export const T16_BENCH_ROW_COUNT: number = 3000;
+export const T16_BENCH_DATA_FILE: string = 't1.6-sources.json';
+export const T16_BENCH_BACKUP_FILE: string = 't1.6-sources-backup.json';
+export const T16_BENCH_MARKER_FILE: string = 't1.6-benchmark.marker';
+export const T16_READY_LIMIT_MS: number = 300;
+export const T16_SINGLE_WRITE_LIMIT_MS: number = 16;
+export const T16_UPSERT_LIMIT_MS: number = 2000;
+
 export const KEY_READER_FONT_SIZE: string = 'reader_font_size';
 export const KEY_READER_LINE_HEIGHT: string = 'reader_line_height';
 export const KEY_READER_NIGHT: string = 'reader_night';

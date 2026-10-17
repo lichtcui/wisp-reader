@@ -204,6 +204,8 @@ respondMs
 states
 added
 updated
+# BookSource T1.2 migration result (logged after startup; keep for release diagnostics)
+backupPath
 # Native NAPI import names (liblegado_core.so) — must match the .so exports
 -keep-global-name
 bookInfo

@@ -25,7 +25,8 @@ import { importLocalTxt } from '../model/LocalBook';
 import { deleteBooks } from '../model/BookRemoval';
 import { ShelfEditState } from '../model/ShelfEditState';
 import { getBooks, initShelf } from '../model/ShelfRepository';
-import { loadSources } from '../model/SourceRepository';
+import { getSource, listRows, SourceRow } from '../model/SourceStore';
+import { ensureSourceStore } from '../model/SourceStoreMigration';
 import { checkShelfUpdates, shelfProgressText, ShelfUpdateOutcome } from '../model/ShelfUpdater';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 import { BookDetailPage } from './BookDetail';
@@ -136,8 +137,33 @@ struct Index {
     let outcome: ShelfUpdateOutcome | undefined = undefined;
     try {
       await initShelf(ctx);
+      await ensureSourceStore(ctx);
       const books: Book[] = await getBooks();
-      const sources: BookSource[] = loadSources(ctx);
+      const rows: SourceRow[] = await listRows();
+      const byUrl: Map<string, SourceRow> = new Map<string, SourceRow>();
+      for (const row of rows) {
+        const current: SourceRow | undefined = byUrl.get(row.url);
+        // Same-URL twins are independent rows. Prefer the enabled one for update checks.
+        if (current === undefined || (!current.enabled && row.enabled)) {
+          byUrl.set(row.url, row);
+        }
+      }
+      const sources: BookSource[] = [];
+      const loaded: Set<string> = new Set<string>();
+      for (const book of books) {
+        if (loaded.has(book.sourceUrl)) {
+          continue;
+        }
+        const row: SourceRow | undefined = byUrl.get(book.sourceUrl);
+        if (row === undefined) {
+          continue;
+        }
+        loaded.add(book.sourceUrl);
+        const source: BookSource | undefined = await getSource(row.id);
+        if (source !== undefined) {
+          sources.push(source);
+        }
+      }
       outcome = await checkShelfUpdates(books, sources, (done: number, total: number, failed: number): void => {
         this.shelfUpdateProgress = shelfProgressText(done, total, failed);
       });

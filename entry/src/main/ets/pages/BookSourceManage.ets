@@ -1,9 +1,29 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
+import BuildProfile from 'BuildProfile';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { BookSource, DetectResult, ExcludedSource, GateResult } from '../engine/types';
-import { enabledSources, loadSources, resetToBundled, saveSources } from '../model/SourceRepository';
+import { loadBundled } from '../model/SourceRepository';
+import {
+  allForEngine,
+  listRows,
+  remove,
+  replaceAll,
+  setEnabled,
+  sourceNaturalKey,
+  SourceRow,
+  upsertMany
+} from '../model/SourceStore';
+import {
+  logT16Ready,
+  measureT16Ready,
+  restoreT16Backup,
+  seedT16Sources,
+  t16MarkerPhase
+} from '../model/SourceStoreBench';
+import { T16ReadyResult, T16RestoreResult, T16SeedResult } from '../model/SourceStoreBenchTypes';
+import { ensureSourceStore } from '../model/SourceStoreMigration';
 import { GroupTitle, InsetDivider, NavCell } from '../components/ListCells';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 import { DEFAULT_DETECT_KEYWORD } from '../common/Const';
@@ -137,7 +157,7 @@ function reasonLabel(reason: string): string {
 
 @ComponentV2
 export struct BookSourceManagePage {
-  @Local sources: BookSource[] = [];
+  @Local sources: SourceRow[] = [];
   @Local summary: string = '';
   @Local excluded: ExcludedSource[] = [];
   @Local showExcluded: boolean = false;
@@ -147,23 +167,76 @@ export struct BookSourceManagePage {
   @Local detectResults: DetectResult[] = [];
   @Local statusVisible: boolean = false;
   @Event onOpenDebugger: () => void = () => {};
+  private pageStartedAt: number = 0;
+  private t16Pending: boolean = false;
+  private t16MeasureStarted: boolean = false;
 
   aboutToAppear(): void {
-    const ctx: common.UIAbilityContext | undefined =
-      this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
-    if (ctx !== undefined) {
-      this.sources = loadSources(ctx);
-    }
+    this.pageStartedAt = Date.now();
+    this.preparePage();
   }
 
   private ctx(): common.UIAbilityContext | undefined {
     return this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
   }
 
-  private persist(): void {
+  private async reload(): Promise<void> {
     const ctx = this.ctx();
-    if (ctx !== undefined) {
-      saveSources(ctx, this.sources);
+    if (ctx === undefined) {
+      return;
+    }
+    try {
+      await ensureSourceStore(ctx);
+      this.sources = await listRows();
+    } catch (err) {
+      this.sources = [];
+    }
+  }
+
+  private async preparePage(): Promise<void> {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      return;
+    }
+    const phase: string = t16MarkerPhase(ctx);
+    if (phase === 'seeded') {
+      this.t16Pending = true;
+      this.summary = 'T1.6 性能测量将在首帧后开始';
+      return;
+    }
+    if (phase === 'seeding') {
+      try {
+        const restored: T16RestoreResult = await restoreT16Backup(ctx);
+        await this.reload();
+        this.summary = `已从造数中断恢复 ${restored.rows} 条书源`;
+      } catch (err) {
+        this.summary = 'T1.6 中断恢复失败，请查看 hilog';
+      }
+      return;
+    }
+    await this.reload();
+  }
+
+  private async runT16Ready(): Promise<void> {
+    if (!this.t16Pending || this.t16MeasureStarted) {
+      return;
+    }
+    this.t16MeasureStarted = true;
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      this.t16MeasureStarted = false;
+      return;
+    }
+    const firstFrameMs: number = Date.now() - this.pageStartedAt;
+    try {
+      const ready: T16ReadyResult = await measureT16Ready(ctx);
+      logT16Ready(ready, firstFrameMs, Date.now() - this.pageStartedAt);
+      const restored: T16RestoreResult = await restoreT16Backup(ctx);
+      this.t16Pending = false;
+      await this.reload();
+      this.summary = `T1.6 实测完成，已恢复 ${restored.rows} 条书源`;
+    } catch (err) {
+      this.summary = 'T1.6 首帧测量失败，请查看 hilog';
     }
   }
 
@@ -186,25 +259,26 @@ export struct BookSourceManagePage {
     }
   }
 
-  private applyGate(list: BookSource[]): void {
+  private async applyGate(list: BookSource[]): Promise<void> {
     if (list.length === 0) {
       this.summary = '未解析到有效书源';
       this.excluded = [];
       return;
     }
     const result: GateResult = bookEngine.gate(list);
-    const existing: BookSource[] = this.sources.slice();
-    const map: Map<string, BookSource> = new Map<string, BookSource>();
-    for (const s of existing) {
-      map.set(s.bookSourceUrl, s);
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      this.summary = '书源保存失败';
+      return;
     }
-    for (const s of result.eligible) {
-      map.set(s.bookSourceUrl, s);
+    try {
+      await ensureSourceStore(ctx);
+      await upsertMany(result.eligible);
+      await this.reload();
+    } catch (err) {
+      this.summary = '书源保存失败';
+      return;
     }
-    const merged: BookSource[] = [];
-    map.forEach((value: BookSource) => merged.push(value));
-    this.sources = merged;
-    this.persist();
     this.excluded = result.excluded;
     this.showExcluded = false;
     // "规则通过" not "成功": the import gate only checks rule shape, it does
@@ -212,8 +286,8 @@ export struct BookSourceManagePage {
     this.summary = `规则通过 ${result.eligible.length} / 规则排除 ${result.excluded.length}`;
   }
 
-  private importText(text: string): void {
-    this.applyGate(this.normalize(text));
+  private async importText(text: string): Promise<void> {
+    await this.applyGate(this.normalize(text));
   }
 
   private async importFromFile(): Promise<void> {
@@ -237,7 +311,7 @@ export struct BookSourceManagePage {
       fileIo.readSync(file.fd, buffer);
       fileIo.closeSync(file);
       const text: string = util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(buffer));
-      this.importText(text);
+      await this.importText(text);
     } catch (err) {
       this.summary = '文件读取失败';
     } finally {
@@ -253,7 +327,7 @@ export struct BookSourceManagePage {
     this.busy = true;
     try {
       const text: string = await bookEngine.fetchText(url);
-      this.importText(text);
+      await this.importText(text);
       this.showUrl = false;
       this.urlInput = '';
     } catch (err) {
@@ -263,28 +337,103 @@ export struct BookSourceManagePage {
     }
   }
 
-  private removeSource(index: number): void {
-    const next: BookSource[] = this.sources.slice();
-    next.splice(index, 1);
-    this.sources = next;
-    this.persist();
-  }
-
-  private toggleSource(index: number, on: boolean): void {
-    const next: BookSource[] = this.sources.slice();
-    const item: BookSource = next[index];
-    item.enabled = on;
-    this.sources = next;
-    this.persist();
-  }
-
-  private resetBundled(): void {
-    const ctx = this.ctx();
+  private async removeSource(row: SourceRow): Promise<void> {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
     if (ctx === undefined) {
       return;
     }
-    this.sources = resetToBundled(ctx);
-    this.summary = `已恢复内置书源 ${this.sources.length} 个`;
+    try {
+      await ensureSourceStore(ctx);
+      await remove(row.id);
+      this.sources = this.sources.filter((source: SourceRow) => source.id !== row.id);
+    } catch (err) {
+      this.summary = '删除失败';
+    }
+  }
+
+  private async toggleSource(row: SourceRow, on: boolean): Promise<void> {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      return;
+    }
+    try {
+      await ensureSourceStore(ctx);
+      await setEnabled(row.id, on);
+      const next: SourceRow[] = this.sources.slice();
+      for (const source of next) {
+        if (source.id === row.id) {
+          source.enabled = on;
+          break;
+        }
+      }
+      this.sources = next;
+    } catch (err) {
+      this.summary = '保存启用状态失败';
+    }
+  }
+
+  private confirmT16Seed(): void {
+    this.getUIContext().showAlertDialog({
+      title: 'T1.6 性能造数',
+      message: '将备份当前书源，再写入 filesDir/t1.6-sources.json 中的 3000 条临时书源。' +
+        '造数完成后请 force-stop 重启并重新进入本页，首帧后会测量并自动恢复备份。',
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        fontColor: $r('app.color.text_2'),
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '开始造数',
+        fontColor: $r('app.color.brand'),
+        action: () => {
+          this.runT16Seed();
+        }
+      }
+    });
+  }
+
+  private async runT16Seed(): Promise<void> {
+    if (this.busy) {
+      return;
+    }
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      return;
+    }
+    this.busy = true;
+    try {
+      const result: T16SeedResult = await seedT16Sources(ctx);
+      this.summary = `T1.6 已造数 ${result.stats.rows} 条（备份 ${result.backupRows} 条），` +
+        '请 force-stop 重启后进入本页继续测量';
+    } catch (err) {
+      this.summary = 'T1.6 造数失败，请查看 hilog';
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private async resetBundled(): Promise<void> {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      return;
+    }
+    let bundled: BookSource[] = [];
+    try {
+      bundled = loadBundled(ctx);
+      if (bundled.length === 0) {
+        this.summary = '读取内置书源失败';
+        return;
+      }
+      await ensureSourceStore(ctx);
+      await replaceAll(bundled, bundled.length);
+      await this.reload();
+    } catch (err) {
+      this.summary = '恢复内置书源失败';
+      return;
+    }
+    this.summary = `已恢复内置书源 ${bundled.length} 个`;
     this.excluded = [];
     this.detectResults = [];
     this.statusVisible = false;
@@ -294,7 +443,18 @@ export struct BookSourceManagePage {
     if (this.busy) {
       return;
     }
-    const enabled: BookSource[] = enabledSources(this.sources);
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      return;
+    }
+    let enabled: BookSource[] = [];
+    try {
+      await ensureSourceStore(ctx);
+      enabled = await allForEngine({ enabled: true });
+    } catch (err) {
+      this.summary = '检测失败';
+      return;
+    }
     if (enabled.length === 0) {
       this.summary = '没有启用的书源';
       return;
@@ -323,52 +483,103 @@ export struct BookSourceManagePage {
     return n;
   }
 
+  private enabledCount(): number {
+    let n: number = 0;
+    for (const row of this.sources) {
+      if (row.enabled) {
+        n += 1;
+      }
+    }
+    return n;
+  }
+
+  private sourceRowKey(source: SourceRow): string {
+    return source.id.toString() + '#' + (source.enabled ? '1' : '0');
+  }
+
   private detectSummary(): string {
     return `检测完成：可用 ${this.countState('ok')} / 无结果 ${this.countState('noResult')} / ` +
       `超时 ${this.countState('timeout')} / 不可用 ${this.countState('unavailable')}`;
   }
 
-  private unavailableUrls(): Set<string> {
+  /** 检测结果是自然键（URL + 名称）；同 URL 孪生源不能按 URL 批量误伤。 */
+  private unavailableKeys(): Set<string> {
     const set: Set<string> = new Set<string>();
     for (const r of this.detectResults) {
       if (detectStateOf(r) === 'unavailable') {
-        set.add(r.sourceUrl);
+        set.add(sourceNaturalKey(r.sourceUrl, r.sourceName));
       }
     }
     return set;
   }
 
+  private unavailableIds(): Set<number> {
+    const keys: Set<string> = this.unavailableKeys();
+    const ids: Set<number> = new Set<number>();
+    for (const row of this.sources) {
+      if (keys.has(sourceNaturalKey(row.url, row.name))) {
+        ids.add(row.id);
+      }
+    }
+    return ids;
+  }
+
   /** One-tap: turn off every source judged hard-unavailable. */
-  private disableUnavailable(): void {
-    const bad: Set<string> = this.unavailableUrls();
-    if (bad.size === 0) {
+  private async disableUnavailable(): Promise<void> {
+    const ids: Set<number> = this.unavailableIds();
+    if (ids.size === 0) {
+      return;
+    }
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
       return;
     }
     let changed: number = 0;
-    const next: BookSource[] = [];
-    for (const s of this.sources) {
-      if (bad.has(s.bookSourceUrl) && s.enabled !== false) {
-        s.enabled = false;
-        changed += 1;
+    try {
+      await ensureSourceStore(ctx);
+      for (const row of this.sources) {
+        if (ids.has(row.id) && row.enabled) {
+          await setEnabled(row.id, false);
+          changed += 1;
+        }
       }
-      next.push(s);
+      if (changed > 0) {
+        await this.reload();
+      }
+    } catch (err) {
+      this.summary = '关闭不可用源失败';
+      return;
     }
-    this.sources = next;
-    this.persist();
     this.summary = changed > 0 ? `已关闭 ${changed} 个不可用源` : '不可用源均已关闭';
   }
 
   /** One-tap: remove every source judged hard-unavailable. */
-  private deleteUnavailable(): void {
-    const bad: Set<string> = this.unavailableUrls();
-    if (bad.size === 0) {
+  private async deleteUnavailable(): Promise<void> {
+    const keys: Set<string> = this.unavailableKeys();
+    const ids: Set<number> = this.unavailableIds();
+    if (ids.size === 0) {
       return;
     }
-    const next: BookSource[] = this.sources.filter((s: BookSource) => !bad.has(s.bookSourceUrl));
-    const removed: number = this.sources.length - next.length;
-    this.sources = next;
-    this.persist();
-    this.detectResults = this.detectResults.filter((r: DetectResult) => !bad.has(r.sourceUrl));
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      return;
+    }
+    let removed: number = 0;
+    try {
+      await ensureSourceStore(ctx);
+      for (const row of this.sources) {
+        if (ids.has(row.id)) {
+          await remove(row.id);
+          removed += 1;
+        }
+      }
+      await this.reload();
+    } catch (err) {
+      this.summary = '删除不可用源失败';
+      return;
+    }
+    this.detectResults = this.detectResults.filter((r: DetectResult) =>
+      !keys.has(sourceNaturalKey(r.sourceUrl, r.sourceName)));
     this.summary = `已删除 ${removed} 个不可用源`;
     if (this.detectResults.length === 0) {
       this.statusVisible = false;
@@ -608,25 +819,33 @@ export struct BookSourceManagePage {
               showArrow: true,
               onTap: () => this.onOpenDebugger()
             })
+            if (BuildProfile.DEBUG) {
+              NavCell({
+                label: 'T1.6 性能造数（3000）',
+                value: '',
+                showArrow: true,
+                onTap: () => this.confirmT16Seed()
+              })
+            }
 
-            GroupTitle({ text: `书源（${enabledSources(this.sources).length}/${this.sources.length} 启用）` })
+            GroupTitle({ text: `书源（${this.enabledCount()}/${this.sources.length} 启用）` })
             Column() {
-              ForEach(this.sources, (source: BookSource, index: number) => {
+              ForEach(this.sources, (source: SourceRow, index: number) => {
                 Column() {
                   Row() {
                     Column({ space: 3 }) {
-                      Text(source.bookSourceName.length > 0 ? source.bookSourceName : source.bookSourceUrl)
+                      Text(source.name.length > 0 ? source.name : source.url)
                         .fontSize(16)
                         .fontColor($r('app.color.text_1'))
                         .maxLines(1)
                         .textOverflow({ overflow: TextOverflow.Ellipsis })
-                      Text(source.bookSourceUrl)
+                      Text(source.url)
                         .fontSize(12)
                         .fontColor($r('app.color.text_4'))
                         .maxLines(1)
                         .textOverflow({ overflow: TextOverflow.Ellipsis })
-                      if (source.bookSourceGroup !== undefined && source.bookSourceGroup.length > 0) {
-                        Text(source.bookSourceGroup)
+                      if (source.group.length > 0) {
+                        Text(source.group)
                           .fontSize(11)
                           .fontColor($r('app.color.text_3'))
                       }
@@ -634,17 +853,17 @@ export struct BookSourceManagePage {
                     .layoutWeight(1)
                     .alignItems(HorizontalAlign.Start)
 
-                    Toggle({ type: ToggleType.Switch, isOn: source.enabled !== false })
+                    Toggle({ type: ToggleType.Switch, isOn: source.enabled })
                       .selectedColor($r('app.color.brand'))
                       .onChange((on: boolean) => {
-                        this.toggleSource(index, on);
+                        this.toggleSource(source, on);
                       })
                     Text('删除')
                       .fontSize(13)
                       .fontColor($r('app.color.brand'))
                       .margin({ left: 12 })
                       .onClick(() => {
-                        this.removeSource(index);
+                        this.removeSource(source);
                       })
                   }
                   .width('100%')
@@ -654,11 +873,10 @@ export struct BookSourceManagePage {
                     InsetDivider()
                   }
                 }
-              }, (source: BookSource, index: number) =>
-              // key 必须同时满足两点：① 唯一——同一 `bookSourceUrl` 可以有多条（内置集就有
-              // bbiquge8 / 笔趣阁8 同指 m.bbiquge8.net），只用 URL 会被 ForEach 静默去重、列表少一行，
-              // 「删除」还会误伤另一条；② 含 `enabled`——否则启停后 key 不变，ForEach 不重建该行，开关显示旧值。
-              source.bookSourceUrl + '#' + index.toString() + '#' + (source.enabled !== false ? '1' : '0'))
+              }, (source: SourceRow, index: number) =>
+              // key 必须同时满足两点：① 唯一——同一 URL 可以有多条，`id` 是存储主键；
+              // ② 含 `enabled`——否则启停后 key 不变，ForEach 不重建该行，开关显示旧值。
+              this.sourceRowKey(source))
             }
             .width('100%')
 
@@ -706,6 +924,9 @@ export struct BookSourceManagePage {
       }
       .width('100%')
       .height('100%')
+      .onAppear(() => {
+        this.runT16Ready();
+      })
 
       BottomDrawer({
         visible: this.statusVisible,

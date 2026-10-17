@@ -1,10 +1,13 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import BuildProfile from 'BuildProfile';
 import { applyThemeMode, readThemeMode } from '../common/Theme';
 import { applyKeepScreenOn, readKeepScreenOn, setMainWindow } from '../common/Window';
 import { scheduleStartupTrim } from '../model/CacheTrim';
 import { initShelf } from '../model/ShelfRepository';
+import { ensureSourceStore, MigrateResult } from '../model/SourceStoreMigration';
+import { t16MarkerPhase } from '../model/SourceStoreBench';
 import { TtsController } from '../model/TtsController';
 
 const DOMAIN: number = 0x0000;
@@ -24,6 +27,24 @@ export default class EntryAbility extends UIAbility {
       .catch((err: Error): void => {
         hilog.warn(DOMAIN, TAG, 'shelf db init failed: %{public}s', err.message);
       });
+    if (BuildProfile.DEBUG && t16MarkerPhase(this.context) === 'seeded') {
+      hilog.info(DOMAIN, TAG, 'T1.6 cold source-store init deferred to source-page onAppear');
+    } else {
+      ensureSourceStore(this.context)
+        .then((result: MigrateResult): void => {
+          hilog.info(
+            DOMAIN,
+            TAG,
+            'source migration status=%{public}s count=%{public}d backup=%{public}s',
+            result.status,
+            result.count,
+            result.backupPath
+          );
+        })
+        .catch((err: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'source store migration failed: %{public}s', err.message);
+        });
+    }
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onCreate');
   }
 
