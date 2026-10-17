@@ -30,10 +30,7 @@ signature/
 # local tooling
 .opencode/
 /.pi/*
-# 例外：项目专属 skill 随仓库走（通用 harmony skill 在 ~/Documents/skills.harmony/，
-# 由 .pi/settings.json 按需声明——默认只常驻 harmonyos-build-doctor，
-# harmony-next / project-audit / release-* 用到时再临时加进该数组；
-# 该文件需随仓库走，否则新克隆不会加载项目 skill/声明）
+# 例外：.pi/settings.json 随仓库走（pi 的项目级声明入口）
 !/.pi/skills/
 !/.pi/skills/**
 !/.pi/settings.json

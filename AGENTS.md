@@ -65,6 +65,6 @@
   动 Rust 先 `make test`（不占真机）、改引擎规则优先 `make probe`（不上设备）。
 - **跨 NAPI / 落盘的 JSON 字段名必须进 `obfuscation-rules.txt`**：release 开了属性混淆，漏一个就是「debug 正常、release 读到 undefined」——
   三处同步（Rust struct / `engine/types.ets` / keep 列表），`make check` 会核对。详见 [`docs/engine.md`](./docs/engine.md) §JSON 契约。
-- **skill 声明**：`.pi/settings.json` 只常驻 `harmonyos-build-doctor`（`harmony-device-run` 随仓库自动发现）；
-  其余用到时再加——原因与完整清单见 [`docs/development.md`](./docs/development.md) §Skill 来源。
+- **skill 声明**：harmony skill 随仓库放在 `.agents/skills/`（Codex / pi 自动发现），`.pi/settings.json` 不再重复声明；
+  `harmony-device-run` 由根目录 `.harmony-skill.env` 渲染，改命令后跑 `~/Documents/skills.harmony/setup-codex.sh --force .`——详见 [`docs/development.md`](./docs/development.md) §Skill 来源。
 - 其余（ArkTS 严格模式、签名凭据、UDID、日志 tag、冲突处理）见 [`docs/development.md`](./docs/development.md)。

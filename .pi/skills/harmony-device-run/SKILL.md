@@ -35,7 +35,7 @@ description: 改完本仓库代码后在真机验证的完整闭环流程（判�
 | 只调引擎规则（不上设备） | `make probe ARGS='entry/src/main/resources/rawfile/bundled-sources.json detect 关键词'` |
 | 怀疑设备上是旧版 | `make doctor` |
 | 混淆相关 / 备份往返 | `make run-release`（release 包才现形的 bug 只在它上面能看到） |
-| 看日志 | `make log`（已带 `hilog -r` + `-T SourceReaderPoC`；可加 `Q=关键词`） |
+| 看日志 | `make log`（= `hilog -r` + 按 **bundle 名**筛的 dump；可加 `Q=关键词`；**别用 `-T` 猜 tag**，每文件 tag 不同） |
 | 看设备 | `make devices` |
 
 需要手工分步时，`make -n <target>` 可打印它到底执行了什么；原始命令与环境变量
@@ -49,7 +49,9 @@ description: 改完本仓库代码后在真机验证的完整闭环流程（判�
 
 - 构建：`make hap > /tmp/build.log 2>&1`，然后 `rg -n "ERROR|error\[|error:|FAILED" /tmp/build.log`。
   **不要**把完整构建日志贴回来。
-- 日志：先 `hdc shell hilog -r` 清，再 `hdc shell hilog -x -T SourceReaderPoC | tail -n 200`。
+- 日志：先 `hdc shell hilog -r` 清，再 `hdc shell hilog -x | grep com.lichtcui.sourcereader | tail -n 200`（= `make log`）。
+  项目内的 canonical 版本是 `.agents/skills/harmony-device-run/`（由 `.harmony-skill.env` 渲染），本文件仅给 pi 使用。
+  **不要用 `-T <tag>`**：应用日志的 tag 是每文件一个（`SourceReaderTts` / `SourceReaderReader` / …），猜错只会拿到空结果。
   不要裸 `hilog -x | grep`（会刷屏）。
 - 中间产物留在 `/tmp`，只把**结论**带回对话。
 

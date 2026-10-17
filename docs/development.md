@@ -25,11 +25,11 @@
 | `make rust` | 交叉编译 `.so` **并拷 `index.d.ts`** 进 `entry/` |
 | `make test` | 主机跑引擎单测（`cargo test`，不碰真机） |
 | `make probe` | 主机直跑引擎，不上设备：`make probe ARGS='源.json search 关键词'` |
-| `make log` | 清日志 + 实时过滤 `SourceReaderPoC` |
+| `make log` | 清日志 + 抓本应用日志（按 bundle 名筛，一次性 dump） |
 | `make log Q=关键词` | 同上，并在主机侧再筛一遍关键词 |
 | `make run-release` | 同 `make run` 但装 release 包（验证混淆 / 备份等只在 release 现形的问题） |
 | `make doctor` | 自检：`.so` / `index.d.ts` / HAP 是否落后于源码 + 设备是否连着 |
-| `make check` | 自检文档与契约：行号目录是否过期 / md 失效链接 / JSON 字段是否都进 keep 列表 |
+| `make check` | 自检文档与契约：行号目录是否过期 / md 失效链接 / JSON 字段是否都进 keep 列表 / hilog 格式串是否用了不支持的占位符 |
 | `make devices` | 列出设备 UDID |
 | `make docs-toc` | 重建大文档顶部的行号目录 |
 
@@ -85,14 +85,15 @@ $HDC install -r entry/build/default/outputs/default/entry-default-signed.hap
 $HDC shell aa force-stop com.lichtcui.sourcereader
 $HDC shell aa start -a EntryAbility -b com.lichtcui.sourcereader
 $HDC shell hilog -r                     # 清日志
-$HDC shell hilog -x -T SourceReaderPoC   # 按 tag 过滤；裸 hilog -x | grep 会刷屏（= make log）
+$HDC shell hilog -x | grep com.lichtcui.sourcereader   # 按 bundle 名筛（= make log）；裸 hilog -x | grep 会刷屏
 ```
 
 **坑**：仅 `aa start` 不会重跑 `aboutToAppear`；要重跑页面逻辑必须先 `aa force-stop`。
 
 ## 调试要点
 
-- 日志 tag：PoC 用 `SourceReaderPoC`（`hilog.info(DOMAIN, TAG, ...)`）。
+- 日志 tag：**每个文件自己一个**（`SourceReaderTts` / `SourceReaderReader` / `SourceReaderCache` / `SourceReaderCover` / `RuleDebugger` 用 `SourceReaderPoC`）⇒
+  **不要用 `-T` 猜 tag**（会拿到空结果、看着像「没触发」），按 bundle 名筛（`make log`）。
 - Rust 侧 `panic`/`unwrap` 会在设备上崩溃，尽量 `Result` 化。
 - ArkTS 严格模式：不用 `any`；`getHostContext()` 返回 `Context | undefined` 需判空。
 - release 已开混淆：新增 JSON 字段名等点语法属性名要加进 `entry/obfuscation-rules.txt` 的 `-keep-property-name`。
@@ -100,36 +101,39 @@ $HDC shell hilog -x -T SourceReaderPoC   # 按 tag 过滤；裸 hilog -x | grep 
 
 ## Skill 来源
 
-本仓库同时用两类 skill，来源不同：
+本仓库的 skill 全部随仓库走，放在 `.agents/skills/`（Codex 与 pi 都会自动发现）：
 
-| 类型 | 位置 | 加载方式 |
+| 类型 | 位置 | 维护方式 |
 |---|---|---|
-| **项目专属**（`harmony-device-run`：真机验证闭环） | 仓库内 `.pi/skills/harmony-device-run/` | `.pi/skills/` 自动发现；**随仓库 git 走**（`.gitignore` 里 `!/.pi/skills/**` 例外） |
-| **通用 harmony**（`~/Documents/skills.harmony/` 里的 `harmonyos-build-doctor`、`harmony-next`、`harmonyos-project-audit`、`harmonyos-release-*`） | `~/Documents/skills.harmony/`（中央库，唯一真源） | 本仓库 `.pi/settings.json` 的 `skills` 数组按项目声明 |
+| **项目专属**（`harmony-device-run`：真机验证闭环） | `.agents/skills/harmony-device-run/`；模板在 `~/Documents/skills.harmony/harmony-device-run/`，本仓库命令在 `.harmony-skill.env` | 脚本按 `bundleName` + `.harmony-skill.env` 渲染；已存在则 `KEEP`，`--force` 才覆盖（旧文件备份到 `$TMPDIR`） |
+| **通用 harmony**（`harmonyos-build-doctor`、`harmony-next`、`harmonyos-project-audit`、`harmonyos-release-*`） | `.agents/skills/<name>` → 软链到 `~/Documents/skills.harmony/<name>` | 中央库仍为唯一真源；更新后项目立即生效 |
 
-为什么不全放全局 `~/.pi/agent/skills/`：那是**全局**目录，非 harmony 项目也会加载，
-每个 skill 白付 name+description（约 50–100 tokens/会话）。
+```bash
+~/Documents/skills.harmony/setup-codex.sh .          # 注入 / 校验
+~/Documents/skills.harmony/setup-codex.sh --force .  # 重渲染 harmony-device-run
+~/Documents/skills.harmony/setup-codex.sh --remove . # 移除
+```
 
-**只常驻 `harmonyos-build-doctor`**（高频：构建报错必查）。其余四个（`harmony-next` API/文档查询、
-`harmonyos-project-audit`、`harmonyos-release-check`、`harmonyos-release-signing`）**用到时再临时加进
-`.pi/settings.json` 的 `skills` 数组**，用完可以删——skill 只广告 name+description 也要每轮付 token，
-而本项目实际把 6 个 skill 的 description（3.5KB/轮）当成常数成本。
+为什么不全放全局 `~/.codex/skills/` 或 `~/.pi/agent/skills/`：那两个是**全局**目录，非 harmony 项目也会加载，
+每个 skill 白付 name+description（约 50–100 tokens/会话）。入口是脚本参数 `SKILLS="..."`，
+例如只在构建排障时注入 `SKILLS=harmonyos-build-doctor setup-codex.sh .`。
 
-常用场景的完整数组（整段拷回 `skills` 即可）：构建/发布只加 `harmonyos-build-doctor`（已是默认）、
-`harmonyos-release-signing`；查 ArkTS/ArkUI/NDK 接口加 `harmony-next`；发布门禁加 `harmonyos-release-check`。
+`harmony-device-run` 属项目专属：bundle 名从 `AppScope/app.json5` 读取，
+构建 / 安装 / 启动 / 日志命令来自根目录 `.harmony-skill.env`（随仓库提交）。
+改命令后跑 `setup-codex.sh --force .` 重新渲染；`.agents/skills/` 本身也随仓库提交，
+新克隆无需注入即可被 Codex / pi 发现（软链目标需本机存在中央库）。
 
 **skill 没加载时的排查顺序**：
 
-1. `.pi/settings.json` 是否存在、路径是否写对（项目 settings 里的路径从 `.pi/` 解析，`~` 可用）；
-2. **项目信任**是否已给（`.pi/` 下的配置与资源在信任后才加载，`pi -a` 可为单次放行，`/trust` 保存决定）；
-3. 是否已 `/reload` 或新开会话；
-4. `~/Documents/skills.harmony/` 是否存在（换机后需重新 `git clone`）。
+1. `.agents/skills/` 是否存在、软链是否断（`ls -la .agents/skills/`）；
+2. 是否已 `/reload`（pi）或新开会话（Codex skill 列表是启动快照）；
+3. `~/Documents/skills.harmony/` 是否存在（换机后需重新 `git clone` 中央库）。
 
 ## 目录/产物速查
 
 | 项 | 路径 |
 |---|---|
-| 命令统一入口 | `Makefile`（`make help`）；`scripts/`：`docs-toc.sh`（行号目录，`--check` 只校验）· `doctor.sh`（产物/设备自检）· `check-keep-props.sh` · `check-docs-links.sh` |
+| 命令统一入口 | `Makefile`（`make help`）；`scripts/`：`docs-toc.sh`（行号目录，`--check` 只校验）· `doctor.sh`（产物/设备自检）· `check-keep-props.sh` · `check-docs-links.sh` · `check-hilog-format.sh`（拦 `%{public}f` 这类 hilog 不认的占位符） |
 | Rust 引擎核心（纯 Rust，可 `cargo test`） | `rust/legado-engine/` |
 | Rust NAPI 包装（cdylib） | `rust/legado-core/` |
 | 内置书源生成器 | `rust/legado-engine/examples/bundled_gen.rs` |
