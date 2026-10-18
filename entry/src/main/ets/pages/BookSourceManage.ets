@@ -26,6 +26,12 @@ import {
 import { T16ReadyResult, T16RestoreResult, T16SeedResult } from '../model/SourceStoreBenchTypes';
 import { ensureSourceStore } from '../model/SourceStoreMigration';
 import { InsetDivider, SegmentedCell } from '../components/ListCells';
+import {
+  SourceManageRow,
+  sourceRowMatchesQuery,
+  sourceRowStateLabel,
+  sortSourceRowsForManage
+} from '../components/SourceRows';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 import { DEFAULT_DETECT_KEYWORD } from '../common/Const';
@@ -37,6 +43,16 @@ import { DEFAULT_DETECT_KEYWORD } from '../common/Const';
  * excluded from the one-tap cleanup actions.
  */
 type DetectState = 'ok' | 'noResult' | 'timeout' | 'unavailable';
+
+const SEARCH_DEBOUNCE_MS: number = 150;
+const SOURCE_FILTER_ALL: number = 0;
+const SOURCE_FILTER_ENABLED: number = 1;
+const SOURCE_FILTER_DISABLED: number = 2;
+const SOURCE_FILTER_UNTESTED: number = 3;
+const SOURCE_FILTER_FAILED: number = 4;
+const DETECT_FILTER_ALL: number = 0;
+const DETECT_FILTER_UNTESTED: number = 1;
+const DETECT_FILTER_FAILED: number = 2;
 
 function detectStateOf(result: DetectResult): DetectState {
   if (result.ok) {
@@ -214,9 +230,25 @@ export struct BookSourceManagePage {
   @Local rows: SourceRow[] = [];
   @Local activeSegment: number = 0;
   @Local sourceQuery: string = '';
-  @Local sourceFilter: number = 0;
+  @Local sourceAppliedQuery: string = '';
+  @Local sourceFilter: number = SOURCE_FILTER_ENABLED;
+  @Local sourceGroup: string | undefined = undefined;
+  @Local sourceGroups: string[] = [];
+  @Local sourceChipTotal: number = 0;
+  @Local sourceChipEnabled: number = 0;
+  @Local sourceChipDisabled: number = 0;
+  @Local sourceChipUntested: number = 0;
+  @Local sourceChipFailed: number = 0;
+  @Local sourceListCount: number = 0;
   @Local detectQuery: string = '';
-  @Local detectFilter: number = 0;
+  @Local detectAppliedQuery: string = '';
+  @Local detectFilter: number = DETECT_FILTER_ALL;
+  @Local detectGroup: string | undefined = undefined;
+  @Local detectGroups: string[] = [];
+  @Local detectChipTotal: number = 0;
+  @Local detectChipUntested: number = 0;
+  @Local detectChipFailed: number = 0;
+  @Local detectListCount: number = 0;
   @Local enabledRows: number = 0;
   @Local totalRows: number = 0;
   @Local jobText: string = '检测书源…';
@@ -229,6 +261,7 @@ export struct BookSourceManagePage {
   @Local busy: boolean = false;
   @Local detectResults: DetectResult[] = [];
   @Local statusVisible: boolean = false;
+  @Local selectedSource: SourceRow | undefined = undefined;
   @Event onOpenDebugger: () => void = () => {};
   private pageStartedAt: number = 0;
   private t16Pending: boolean = false;
@@ -237,11 +270,24 @@ export struct BookSourceManagePage {
   private detectDs: SourceManageDataSource = new SourceManageDataSource();
   private sourceScroller: Scroller = new Scroller();
   private detectScroller: Scroller = new Scroller();
+  private sourceDebounceId: number = -1;
+  private detectDebounceId: number = -1;
 
   aboutToAppear(): void {
     this.activeSegment = 0;
     this.pageStartedAt = Date.now();
     this.preparePage();
+  }
+
+  aboutToDisappear(): void {
+    if (this.sourceDebounceId >= 0) {
+      clearTimeout(this.sourceDebounceId);
+      this.sourceDebounceId = -1;
+    }
+    if (this.detectDebounceId >= 0) {
+      clearTimeout(this.detectDebounceId);
+      this.detectDebounceId = -1;
+    }
   }
 
   private ctx(): common.UIAbilityContext | undefined {
@@ -257,18 +303,21 @@ export struct BookSourceManagePage {
       await ensureSourceStore(ctx);
       const next: SourceRow[] = await listRows();
       this.rows = next;
-      // Both segments view the same projection array; only their scroll and
-      // filter state are independent.
-      this.sourceDs.setItems(next);
-      this.detectDs.setItems(next);
       this.totalRows = next.length;
       this.enabledRows = this.countEnabled(next);
+      this.sourceGroups = this.collectGroups(next);
+      this.detectGroups = this.collectGroups(next);
+      this.resetStaleGroups();
+      this.refreshSourceProjection();
+      this.refreshDetectProjection();
     } catch (err) {
       this.rows = [];
-      this.sourceDs.setItems(this.rows);
-      this.detectDs.setItems(this.rows);
+      this.sourceGroups = [];
+      this.detectGroups = [];
       this.totalRows = 0;
       this.enabledRows = 0;
+      this.refreshSourceProjection();
+      this.refreshDetectProjection();
     }
   }
 
@@ -280,6 +329,231 @@ export struct BookSourceManagePage {
       }
     }
     return count;
+  }
+
+  private collectGroups(rows: SourceRow[]): string[] {
+    const seen: Set<string> = new Set<string>();
+    const groups: string[] = [];
+    for (const row of rows) {
+      const group: string = row.group.trim();
+      if (!seen.has(group)) {
+        seen.add(group);
+        groups.push(group);
+      }
+    }
+    groups.sort((a: string, b: string): number => {
+      const left: string = a.length > 0 ? a : '默认';
+      const right: string = b.length > 0 ? b : '默认';
+      return left < right ? -1 : (left > right ? 1 : 0);
+    });
+    return groups;
+  }
+
+  private resetStaleGroups(): void {
+    if (this.sourceGroup !== undefined && this.sourceGroups.indexOf(this.sourceGroup) < 0) {
+      this.sourceGroup = undefined;
+    }
+    if (this.detectGroup !== undefined && this.detectGroups.indexOf(this.detectGroup) < 0) {
+      this.detectGroup = undefined;
+    }
+  }
+
+  private contextRows(rows: SourceRow[], query: string, group: string | undefined): SourceRow[] {
+    const out: SourceRow[] = [];
+    for (const row of rows) {
+      if (!sourceRowMatchesQuery(row, query)) {
+        continue;
+      }
+      if (group !== undefined && row.group.trim() !== group) {
+        continue;
+      }
+      out.push(row);
+    }
+    return out;
+  }
+
+  private sourceFilterMatches(row: SourceRow): boolean {
+    if (this.sourceFilter === SOURCE_FILTER_ENABLED) {
+      return row.enabled;
+    }
+    if (this.sourceFilter === SOURCE_FILTER_DISABLED) {
+      return !row.enabled;
+    }
+    if (this.sourceFilter === SOURCE_FILTER_UNTESTED) {
+      return row.detectState.length === 0;
+    }
+    if (this.sourceFilter === SOURCE_FILTER_FAILED) {
+      return row.detectState === 'unavailable';
+    }
+    return true;
+  }
+
+  private detectFilterMatches(row: SourceRow): boolean {
+    if (this.detectFilter === DETECT_FILTER_UNTESTED) {
+      return row.detectState.length === 0;
+    }
+    if (this.detectFilter === DETECT_FILTER_FAILED) {
+      return row.detectState === 'unavailable';
+    }
+    return true;
+  }
+
+  private refreshSourceProjection(): void {
+    const context: SourceRow[] = this.contextRows(this.rows, this.sourceAppliedQuery, this.sourceGroup);
+    let enabled: number = 0;
+    let disabled: number = 0;
+    let untested: number = 0;
+    let failed: number = 0;
+    for (const row of context) {
+      if (row.enabled) {
+        enabled += 1;
+      } else {
+        disabled += 1;
+      }
+      if (row.detectState.length === 0) {
+        untested += 1;
+      } else if (row.detectState === 'unavailable') {
+        failed += 1;
+      }
+    }
+    this.sourceChipTotal = context.length;
+    this.sourceChipEnabled = enabled;
+    this.sourceChipDisabled = disabled;
+    this.sourceChipUntested = untested;
+    this.sourceChipFailed = failed;
+    if ((this.sourceFilter === SOURCE_FILTER_DISABLED && disabled === 0) ||
+      (this.sourceFilter === SOURCE_FILTER_UNTESTED && untested === 0) ||
+      (this.sourceFilter === SOURCE_FILTER_FAILED && failed === 0)) {
+      this.sourceFilter = SOURCE_FILTER_ALL;
+    }
+
+    const visible: SourceRow[] = [];
+    for (const row of context) {
+      if (this.sourceFilterMatches(row)) {
+        visible.push(row);
+      }
+    }
+    const next: SourceRow[] = sortSourceRowsForManage(visible);
+    this.sourceDs.setItems(next);
+    this.sourceListCount = next.length;
+  }
+
+  private refreshDetectProjection(): void {
+    const context: SourceRow[] = this.contextRows(this.rows, this.detectAppliedQuery, this.detectGroup);
+    let untested: number = 0;
+    let failed: number = 0;
+    for (const row of context) {
+      if (row.detectState.length === 0) {
+        untested += 1;
+      } else if (row.detectState === 'unavailable') {
+        failed += 1;
+      }
+    }
+    this.detectChipTotal = context.length;
+    this.detectChipUntested = untested;
+    this.detectChipFailed = failed;
+    if ((this.detectFilter === DETECT_FILTER_UNTESTED && untested === 0) ||
+      (this.detectFilter === DETECT_FILTER_FAILED && failed === 0)) {
+      this.detectFilter = DETECT_FILTER_ALL;
+    }
+
+    const visible: SourceRow[] = [];
+    for (const row of context) {
+      if (this.detectFilterMatches(row)) {
+        visible.push(row);
+      }
+    }
+    const next: SourceRow[] = sortSourceRowsForManage(visible);
+    this.detectDs.setItems(next);
+    this.detectListCount = next.length;
+  }
+
+  private scheduleSourceQuery(value: string): void {
+    this.sourceQuery = value;
+    if (this.sourceDebounceId >= 0) {
+      clearTimeout(this.sourceDebounceId);
+    }
+    this.sourceDebounceId = setTimeout((): void => {
+      this.sourceDebounceId = -1;
+      this.sourceAppliedQuery = value;
+      this.refreshSourceProjection();
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  private scheduleDetectQuery(value: string): void {
+    this.detectQuery = value;
+    if (this.detectDebounceId >= 0) {
+      clearTimeout(this.detectDebounceId);
+    }
+    this.detectDebounceId = setTimeout((): void => {
+      this.detectDebounceId = -1;
+      this.detectAppliedQuery = value;
+      this.refreshDetectProjection();
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  private clearSourceQuery(): void {
+    if (this.sourceDebounceId >= 0) {
+      clearTimeout(this.sourceDebounceId);
+      this.sourceDebounceId = -1;
+    }
+    this.sourceQuery = '';
+    this.sourceAppliedQuery = '';
+    this.refreshSourceProjection();
+  }
+
+  private clearDetectQuery(): void {
+    if (this.detectDebounceId >= 0) {
+      clearTimeout(this.detectDebounceId);
+      this.detectDebounceId = -1;
+    }
+    this.detectQuery = '';
+    this.detectAppliedQuery = '';
+    this.refreshDetectProjection();
+  }
+
+  private selectSourceFilter(index: number): void {
+    this.sourceFilter = index;
+    this.refreshSourceProjection();
+  }
+
+  private selectDetectFilter(index: number): void {
+    this.detectFilter = index;
+    this.refreshDetectProjection();
+  }
+
+  private selectSourceGroup(group: string | undefined): void {
+    this.sourceGroup = group;
+    this.refreshSourceProjection();
+  }
+
+  private selectDetectGroup(group: string | undefined): void {
+    this.detectGroup = group;
+    this.refreshDetectProjection();
+  }
+
+  private clearSourceCriteria(): void {
+    if (this.sourceDebounceId >= 0) {
+      clearTimeout(this.sourceDebounceId);
+      this.sourceDebounceId = -1;
+    }
+    this.sourceQuery = '';
+    this.sourceAppliedQuery = '';
+    this.sourceFilter = SOURCE_FILTER_ALL;
+    this.sourceGroup = undefined;
+    this.refreshSourceProjection();
+  }
+
+  private clearDetectCriteria(): void {
+    if (this.detectDebounceId >= 0) {
+      clearTimeout(this.detectDebounceId);
+      this.detectDebounceId = -1;
+    }
+    this.detectQuery = '';
+    this.detectAppliedQuery = '';
+    this.detectFilter = DETECT_FILTER_ALL;
+    this.detectGroup = undefined;
+    this.refreshDetectProjection();
   }
 
   private async preparePage(): Promise<void> {
@@ -489,13 +763,42 @@ export struct BookSourceManagePage {
       await remove(row.id);
       const next: SourceRow[] = this.rows.filter((source: SourceRow) => source.id !== row.id);
       this.rows = next;
-      this.sourceDs.setItems(next);
-      this.detectDs.setItems(next);
       this.totalRows = next.length;
       this.enabledRows = this.countEnabled(next);
+      this.sourceGroups = this.collectGroups(next);
+      this.detectGroups = this.collectGroups(next);
+      this.resetStaleGroups();
+      this.refreshSourceProjection();
+      this.refreshDetectProjection();
+      if (this.selectedSource !== undefined && this.selectedSource.id === row.id) {
+        this.statusVisible = false;
+        this.selectedSource = undefined;
+      }
     } catch (err) {
       this.summary = '删除失败';
     }
+  }
+
+  private confirmRemoveSource(row: SourceRow): void {
+    const name: string = row.name.length > 0 ? row.name : row.url;
+    this.getUIContext().showAlertDialog({
+      title: '删除书源',
+      message: '确定删除「' + name + '」吗？删除后不可恢复。',
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        fontColor: $r('app.color.text_2'),
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '删除',
+        fontColor: $r('app.color.brand'),
+        action: () => {
+          this.removeSource(row);
+        }
+      }
+    });
   }
 
   private async toggleSource(row: SourceRow, on: boolean): Promise<void> {
@@ -513,8 +816,8 @@ export struct BookSourceManagePage {
         }
       }
       this.enabledRows = this.countEnabled(this.rows);
-      this.sourceDs.setItems(this.rows);
-      this.detectDs.setItems(this.rows);
+      this.refreshSourceProjection();
+      this.refreshDetectProjection();
     } catch (err) {
       this.summary = '保存启用状态失败';
     }
@@ -586,6 +889,39 @@ export struct BookSourceManagePage {
     this.excludedSummary = '';
     this.detectResults = [];
     this.statusVisible = false;
+    this.selectedSource = undefined;
+  }
+
+  private confirmResetBundled(): void {
+    this.getUIContext().showAlertDialog({
+      title: '替换全部书源',
+      message: '将删除当前 ' + this.totalRows.toString() +
+        ' 条书源，并用内置书源替换。此操作不可撤销。',
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        fontColor: $r('app.color.text_2'),
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '替换',
+        fontColor: $r('app.color.brand'),
+        action: () => {
+          this.resetBundled();
+        }
+      }
+    });
+  }
+
+  private openSourceDetail(row: SourceRow): void {
+    this.selectedSource = row;
+    this.statusVisible = true;
+  }
+
+  private openDetectStatus(): void {
+    this.selectedSource = undefined;
+    this.statusVisible = true;
   }
 
   private async runDetect(): Promise<void> {
@@ -637,6 +973,39 @@ export struct BookSourceManagePage {
     return source.id.toString() + '#' + (source.enabled ? '1' : '0');
   }
 
+  private groupLabel(group: string | undefined): string {
+    if (group === undefined) {
+      return '分组';
+    }
+    return '分组 · ' + (group.length > 0 ? group : '默认');
+  }
+
+  private groupMenuItems(groups: string[], onSelect: (next: string | undefined) => void): MenuElement[] {
+    const items: MenuElement[] = [
+      {
+        value: '全部分组',
+        action: () => onSelect(undefined)
+      }
+    ];
+    for (const item of groups) {
+      items.push({
+        value: item.length > 0 ? item : '默认',
+        action: () => onSelect(item)
+      });
+    }
+    return items;
+  }
+
+  private sourceGroupMenuItems(): MenuElement[] {
+    return this.groupMenuItems(this.sourceGroups,
+      (next: string | undefined) => this.selectSourceGroup(next));
+  }
+
+  private detectGroupMenuItems(): MenuElement[] {
+    return this.groupMenuItems(this.detectGroups,
+      (next: string | undefined) => this.selectDetectGroup(next));
+  }
+
   private addMenuItems(): MenuElement[] {
     return [
       {
@@ -669,7 +1038,7 @@ export struct BookSourceManagePage {
       {
         value: '恢复内置',
         action: () => {
-          this.resetBundled();
+          this.confirmResetBundled();
         }
       }
     ];
@@ -804,6 +1173,75 @@ export struct BookSourceManagePage {
       parts.push(`${label} ${count}`);
     });
     return parts.join('、');
+  }
+
+  @Builder
+  sourceDetailContent() {
+    Column() {
+      if (this.selectedSource !== undefined) {
+        Text(this.selectedSource.name.length > 0 ? this.selectedSource.name : this.selectedSource.url)
+          .fontSize(20)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_1'))
+          .width('100%')
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(this.selectedSource.url)
+          .fontSize(12)
+          .fontColor($r('app.color.text_4'))
+          .width('100%')
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .margin({ top: 6, bottom: 16 })
+
+        Row() {
+          Text('分组')
+            .fontSize(14)
+            .fontColor($r('app.color.text_3'))
+          Blank()
+          Text(this.selectedSource.group.length > 0 ? this.selectedSource.group : '默认')
+            .fontSize(14)
+            .fontColor($r('app.color.text_1'))
+        }
+        .width('100%')
+        .padding({ top: 12, bottom: 12 })
+
+        Divider()
+          .color($r('app.color.divider'))
+          .strokeWidth(1)
+
+        Row() {
+          Text('检测状态')
+            .fontSize(14)
+            .fontColor($r('app.color.text_3'))
+          Blank()
+          Text(sourceRowStateLabel(this.selectedSource.detectState))
+            .fontSize(14)
+            .fontColor($r('app.color.text_1'))
+        }
+        .width('100%')
+        .padding({ top: 12, bottom: 12 })
+
+        Divider()
+          .color($r('app.color.divider'))
+          .strokeWidth(1)
+
+        Row() {
+          Text('耗时')
+            .fontSize(14)
+            .fontColor($r('app.color.text_3'))
+          Blank()
+          Text(this.selectedSource.detectState.length > 0 ?
+            this.selectedSource.respondMs.toString() + 'ms' : '—')
+            .fontSize(14)
+            .fontColor($r('app.color.text_1'))
+        }
+        .width('100%')
+        .padding({ top: 12, bottom: 12 })
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
   }
 
   @Builder
@@ -1029,7 +1467,7 @@ export struct BookSourceManagePage {
         .backgroundColor(Color.Transparent)
         .padding({ left: 8, right: 0 })
         .onChange((value: string) => {
-          this.sourceQuery = value;
+          this.scheduleSourceQuery(value);
         })
       if (this.sourceQuery.length > 0) {
         Text('✕')
@@ -1037,7 +1475,7 @@ export struct BookSourceManagePage {
           .fontColor($r('app.color.text_4'))
           .padding({ left: 6, right: 4, top: 8, bottom: 8 })
           .onClick(() => {
-            this.sourceQuery = '';
+            this.clearSourceQuery();
           })
       }
     }
@@ -1063,7 +1501,7 @@ export struct BookSourceManagePage {
         .backgroundColor(Color.Transparent)
         .padding({ left: 8, right: 0 })
         .onChange((value: string) => {
-          this.detectQuery = value;
+          this.scheduleDetectQuery(value);
         })
       if (this.detectQuery.length > 0) {
         Text('✕')
@@ -1071,7 +1509,7 @@ export struct BookSourceManagePage {
           .fontColor($r('app.color.text_4'))
           .padding({ left: 6, right: 4, top: 8, bottom: 8 })
           .onClick(() => {
-            this.detectQuery = '';
+            this.clearDetectQuery();
           })
       }
     }
@@ -1083,44 +1521,36 @@ export struct BookSourceManagePage {
   }
 
   @Builder
-  sourceRowCell(source: SourceRow) {
-    Row() {
-      Column({ space: 3 }) {
-        Text(source.name.length > 0 ? source.name : source.url)
-          .fontSize(16)
-          .fontColor($r('app.color.text_1'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(source.url)
-          .fontSize(12)
-          .fontColor($r('app.color.text_4'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(source.group.length > 0 ? source.group : '默认')
-          .fontSize(11)
-          .fontColor($r('app.color.text_3'))
-          .maxLines(1)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-
-      Toggle({ type: ToggleType.Switch, isOn: source.enabled })
-        .selectedColor($r('app.color.brand'))
-        .onChange((on: boolean) => {
-          this.toggleSource(source, on);
-        })
-      Text('删除')
+  emptyState(sourceScope: boolean) {
+    Column({ space: 10 }) {
+      Text(this.totalRows === 0 ? '还没有书源' : '没有匹配的书源')
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_1'))
+      Text(this.totalRows === 0 ? '导入书源，或恢复内置书源。' : '换个关键词、筛选或分组试试。')
         .fontSize(13)
-        .fontColor($r('app.color.brand'))
-        .margin({ left: 12 })
+        .fontColor($r('app.color.text_4'))
+      Button(this.totalRows === 0 ? '恢复内置' : '清除搜索和筛选')
+        .height(36)
+        .fontSize(14)
+        .fontColor(this.totalRows === 0 ? $r('app.color.on_brand') : $r('app.color.brand'))
+        .backgroundColor(this.totalRows === 0 ? $r('app.color.brand') : $r('app.color.bg_pill'))
+        .borderRadius(18)
+        .margin({ top: 4 })
         .onClick(() => {
-          this.removeSource(source);
+          if (this.totalRows === 0) {
+            this.confirmResetBundled();
+          } else if (sourceScope) {
+            this.clearSourceCriteria();
+          } else {
+            this.clearDetectCriteria();
+          }
         })
     }
     .width('100%')
-    .height(84)
-    .padding({ left: 16, right: 16 })
-    .alignItems(VerticalAlign.Center)
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.bg_page'))
   }
 
   @Builder
@@ -1128,50 +1558,62 @@ export struct BookSourceManagePage {
     Column() {
       Column({ space: 8 }) {
         this.sourceSearchBar()
-        Row({ space: 8 }) {
-          ManageFilterChip({
-            label: '全部',
-            selected: this.sourceFilter === 0,
-            onSelect: () => {
-              this.sourceFilter = 0;
+        Scroll() {
+          Row({ space: 8 }) {
+            ManageFilterChip({
+              label: '全部 ' + this.sourceChipTotal.toString(),
+              selected: this.sourceFilter === SOURCE_FILTER_ALL,
+              onSelect: () => this.selectSourceFilter(SOURCE_FILTER_ALL)
+            })
+            ManageFilterChip({
+              label: '启用 ' + this.sourceChipEnabled.toString(),
+              selected: this.sourceFilter === SOURCE_FILTER_ENABLED,
+              onSelect: () => this.selectSourceFilter(SOURCE_FILTER_ENABLED)
+            })
+            if (this.sourceChipDisabled > 0) {
+              ManageFilterChip({
+                label: '停用 ' + this.sourceChipDisabled.toString(),
+                selected: this.sourceFilter === SOURCE_FILTER_DISABLED,
+                onSelect: () => this.selectSourceFilter(SOURCE_FILTER_DISABLED)
+              })
             }
-          })
-          ManageFilterChip({
-            label: '启用',
-            selected: this.sourceFilter === 1,
-            onSelect: () => {
-              this.sourceFilter = 1;
+            if (this.sourceChipUntested > 0) {
+              ManageFilterChip({
+                label: '未测 ' + this.sourceChipUntested.toString(),
+                selected: this.sourceFilter === SOURCE_FILTER_UNTESTED,
+                onSelect: () => this.selectSourceFilter(SOURCE_FILTER_UNTESTED)
+              })
             }
-          })
-          ManageFilterChip({
-            label: '停用',
-            selected: this.sourceFilter === 2,
-            onSelect: () => {
-              this.sourceFilter = 2;
+            if (this.sourceChipFailed > 0) {
+              ManageFilterChip({
+                label: '失败 ' + this.sourceChipFailed.toString(),
+                selected: this.sourceFilter === SOURCE_FILTER_FAILED,
+                onSelect: () => this.selectSourceFilter(SOURCE_FILTER_FAILED)
+              })
             }
-          })
-          ManageFilterChip({
-            label: '未测',
-            selected: this.sourceFilter === 3,
-            onSelect: () => {
-              this.sourceFilter = 3;
-            }
-          })
-          ManageFilterChip({
-            label: '失败',
-            selected: this.sourceFilter === 4,
-            onSelect: () => {
-              this.sourceFilter = 4;
-            }
-          })
+            Text(this.groupLabel(this.sourceGroup))
+              .fontSize(13)
+              .fontColor(this.sourceGroup === undefined ? $r('app.color.text_2') : $r('app.color.brand'))
+              .backgroundColor($r('app.color.bg_pill'))
+              .height(32)
+              .padding({ left: 14, right: 14 })
+              .borderRadius(16)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .bindMenu(this.sourceGroupMenuItems())
+          }
+          .padding({ right: 16 })
         }
         .width('100%')
+        .height(32)
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 4, bottom: 8 })
 
       Row() {
-        Text(`书源 ${this.enabledRows}/${this.totalRows} 启用`)
+        Text(`显示 ${this.sourceListCount} / ${this.totalRows} 条 · ${this.enabledRows} 启用`)
           .fontSize(12)
           .fontColor($r('app.color.text_4'))
       }
@@ -1179,22 +1621,42 @@ export struct BookSourceManagePage {
       .height(32)
       .padding({ left: 16, right: 16 })
 
-      List({ scroller: this.sourceScroller }) {
-        LazyForEach(this.sourceDs, (source: SourceRow) => {
-          ListItem() {
-            this.sourceRowCell(source)
-          }
-        }, (source: SourceRow) => this.sourceRowKey(source))
+      Stack() {
+        List({ scroller: this.sourceScroller }) {
+          LazyForEach(this.sourceDs, (source: SourceRow) => {
+            ListItem() {
+              SourceManageRow({
+                source: source,
+                onDetail: () => {
+                  this.openSourceDetail(source);
+                },
+                onToggle: (on: boolean) => {
+                  this.toggleSource(source, on);
+                },
+                onDelete: () => {
+                  this.confirmRemoveSource(source);
+                }
+              })
+            }
+          }, (source: SourceRow) => this.sourceRowKey(source))
+        }
+        .width('100%')
+        .height('100%')
+        .divider({
+          strokeWidth: 1,
+          color: $r('app.color.divider'),
+          startMargin: 16
+        })
+        .cachedCount(8)
+        .scrollBar(BarState.Off)
+        .visibility(this.sourceListCount === 0 ? Visibility.Hidden : Visibility.Visible)
+
+        if (this.sourceListCount === 0) {
+          this.emptyState(true)
+        }
       }
       .layoutWeight(1)
       .width('100%')
-      .divider({
-        strokeWidth: 1,
-        color: $r('app.color.divider'),
-        startMargin: 16
-      })
-      .cachedCount(8)
-      .scrollBar(BarState.Off)
     }
     .width('100%')
     .height('100%')
@@ -1206,30 +1668,44 @@ export struct BookSourceManagePage {
     Column() {
       Column({ space: 8 }) {
         this.detectSearchBar()
-        Row({ space: 8 }) {
-          ManageFilterChip({
-            label: '全部',
-            selected: this.detectFilter === 0,
-            onSelect: () => {
-              this.detectFilter = 0;
+        Scroll() {
+          Row({ space: 8 }) {
+            ManageFilterChip({
+              label: '全部 ' + this.detectChipTotal.toString(),
+              selected: this.detectFilter === DETECT_FILTER_ALL,
+              onSelect: () => this.selectDetectFilter(DETECT_FILTER_ALL)
+            })
+            if (this.detectChipUntested > 0) {
+              ManageFilterChip({
+                label: '未测 ' + this.detectChipUntested.toString(),
+                selected: this.detectFilter === DETECT_FILTER_UNTESTED,
+                onSelect: () => this.selectDetectFilter(DETECT_FILTER_UNTESTED)
+              })
             }
-          })
-          ManageFilterChip({
-            label: '未测',
-            selected: this.detectFilter === 1,
-            onSelect: () => {
-              this.detectFilter = 1;
+            if (this.detectChipFailed > 0) {
+              ManageFilterChip({
+                label: '失败 ' + this.detectChipFailed.toString(),
+                selected: this.detectFilter === DETECT_FILTER_FAILED,
+                onSelect: () => this.selectDetectFilter(DETECT_FILTER_FAILED)
+              })
             }
-          })
-          ManageFilterChip({
-            label: '失败',
-            selected: this.detectFilter === 2,
-            onSelect: () => {
-              this.detectFilter = 2;
-            }
-          })
+            Text(this.groupLabel(this.detectGroup))
+              .fontSize(13)
+              .fontColor(this.detectGroup === undefined ? $r('app.color.text_2') : $r('app.color.brand'))
+              .backgroundColor($r('app.color.bg_pill'))
+              .height(32)
+              .padding({ left: 14, right: 14 })
+              .borderRadius(16)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .bindMenu(this.detectGroupMenuItems())
+          }
+          .padding({ right: 16 })
         }
         .width('100%')
+        .height(32)
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 4, bottom: 8 })
@@ -1240,7 +1716,7 @@ export struct BookSourceManagePage {
             .fontSize(13)
             .fontColor($r('app.color.brand'))
             .onClick(() => {
-              this.statusVisible = true;
+              this.openDetectStatus();
             })
         }
         Blank()
@@ -1260,22 +1736,42 @@ export struct BookSourceManagePage {
       .padding({ left: 16, right: 16 })
       .alignItems(VerticalAlign.Center)
 
-      List({ scroller: this.detectScroller }) {
-        LazyForEach(this.detectDs, (source: SourceRow) => {
-          ListItem() {
-            this.sourceRowCell(source)
-          }
-        }, (source: SourceRow) => 'detect_' + this.sourceRowKey(source))
+      Stack() {
+        List({ scroller: this.detectScroller }) {
+          LazyForEach(this.detectDs, (source: SourceRow) => {
+            ListItem() {
+              SourceManageRow({
+                source: source,
+                onDetail: () => {
+                  this.openSourceDetail(source);
+                },
+                onToggle: (on: boolean) => {
+                  this.toggleSource(source, on);
+                },
+                onDelete: () => {
+                  this.confirmRemoveSource(source);
+                }
+              })
+            }
+          }, (source: SourceRow) => 'detect_' + this.sourceRowKey(source))
+        }
+        .width('100%')
+        .height('100%')
+        .divider({
+          strokeWidth: 1,
+          color: $r('app.color.divider'),
+          startMargin: 16
+        })
+        .cachedCount(8)
+        .scrollBar(BarState.Off)
+        .visibility(this.detectListCount === 0 ? Visibility.Hidden : Visibility.Visible)
+
+        if (this.detectListCount === 0) {
+          this.emptyState(false)
+        }
       }
       .layoutWeight(1)
       .width('100%')
-      .divider({
-        strokeWidth: 1,
-        color: $r('app.color.divider'),
-        startMargin: 16
-      })
-      .cachedCount(8)
-      .scrollBar(BarState.Off)
     }
     .width('100%')
     .height('100%')
@@ -1340,14 +1836,18 @@ export struct BookSourceManagePage {
 
       BottomDrawer({
         visible: this.statusVisible,
-        title: '书源状态',
+        title: this.selectedSource !== undefined ? '书源详情' : '书源状态',
         sheetSize: 'large',
         mode: 'overlay',
         onClose: () => {
           this.statusVisible = false;
         }
       }) {
-        this.statusContent()
+        if (this.selectedSource !== undefined) {
+          this.sourceDetailContent()
+        } else {
+          this.statusContent()
+        }
       }
     }
     .width('100%')

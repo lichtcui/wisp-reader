@@ -392,37 +392,93 @@
 **Description:** 两行式行（名称 / 分组·检测态·耗时）+ 开关 + 行尾 `⋯`（详情 / 启停 / 删除）。
 
 **Acceptance criteria:**
-- [ ] 行尾 `⋯` 菜单含 详情 / 停用（或启用）/ 删除；删除走 `AlertDialog` 二次确认且文案含源名
-- [ ] 「恢复内置」二次确认，文案点明**会替换当前全部书源**
-- [ ] 行内无裸文本「删除」；点行 = 打开详情抽屉
-- [ ] 取消确认后数据与落盘都不变（`remove` 未调用）
+- [x] 行尾 `⋯` 菜单含 详情 / 停用（或启用）/ 删除；删除走 `AlertDialog` 二次确认且文案含源名
+- [x] 「恢复内置」二次确认，文案点明**会替换当前全部书源**
+- [x] 行内无裸文本「删除」；点行 = 打开详情抽屉
+- [x] 取消确认后数据与落盘都不变（`remove` 未调用）
 
 **Verification:**
-- [ ] 真机：删除/恢复内置各走一次确认与取消，核对数据未变
-- [ ] `rg -n "removeSource|resetBundled"` 确认无绕过确认的调用路径
-- [ ] `make check` 通过
+- [x] 真机：删除/恢复内置各走一次确认与取消，核对数据未变
+- [x] 真机：行尾菜单、整行详情入口、启停隔离与重启后状态保持
+- [x] `rg -n "removeSource|resetBundled"` 确认无绕过确认的调用路径
+- [x] `make check` 通过
 
 **Dependencies:** T3.1
-**Files likely touched:** `components/SourceRows.ets`（新）、`pages/BookSourceManage.ets`
+**Files touched:** `entry/src/main/ets/components/SourceRows.ets`（新）、
+`entry/src/main/ets/pages/BookSourceManage.ets`、`docs/research/BOOKSOURCE-REVAMP-TODO.md`、
+`docs/progress.md`
+**Evidence（2026-10-18，debug 真机 `33Z0224424136564`）：** `uitest dumpLayout` 看到两行式行
+`👍玄幻阁` / `校验可用 · 未测`，同行有 Switch 和行尾 `⋯`；启用源菜单为「详情 / 停用 / 删除」，
+停用后菜单切换为「详情 / 启用 / 删除」。
+点整行和菜单「详情」均打开常驻 `BottomDrawer` 的「书源详情」，显示名称、URL、分组、检测状态和耗时；
+菜单操作没有误开详情。完整规则字段详情仍留给 T3.4。
+删除确认文案为 `确定删除「👍玄幻阁」吗？删除后不可恢复。`；取消后主库 SHA256 仍为
+`cb660136875f0f1ae20b8bdbd561da27f476223dcaf36aa4091777b0770a5118`，WAL 仍为 0 字节，
+全表 13 行逐列对比无差异。恢复内置确认文案为
+`将删除当前 13 条书源，并用内置书源替换。此操作不可撤销。`；取消后主库哈希、13 条数据和 13 条启用
+状态均未变。`resetBundled()` 仍只由「替换」确认回调调用，实际动作是 `replaceAll()`，与用户选定的
+**替换**语义一致。
+开关实测 `👍玄幻阁` 关闭后汇总为 `12/13`，数据库仅 id `12119` 的 `enabled` 从 1 变为 0，其余行及
+JSON 无差异，也未误开详情；force-stop 后重启仍为 `12/13`，再开启恢复 `13/13` 且全表与基线一致。
+随后再次停用并从行尾菜单点「启用」也恢复 `13/13`，菜单关闭且未误开详情。
+`removeSource()` / `resetBundled()` 各只有一个确认回调调用点；`BottomDrawer` 调用点仍为 8。
+`make test` 为 65 passed，`make check`、`make hap`、`make docs-toc` 与 `git diff --check` 通过。
+未验证：3000 条真机滚动首帧（不属于 T3.2），以及 T3.3/T3.4 的搜索、排序、空态和完整详情字段。
 **Estimated scope:** Medium
 
-### Task T3.3 搜索 / 筛选 / 排序（默认视图）
+### Task T3.3 搜索 / 筛选 / 排序（默认视图）（真机完成）
 
 **Description:** 搜索防抖 + 筛选 chips + 三档排序 + 分组筛选 + 空态。
 
 **Acceptance criteria:**
-- [ ] 搜索防抖 150 ms，匹配 `name` / `url` / `group`，大小写不敏感
-- [ ] 默认视图 = 「启用」+ 三档排序（需处理 `不可用` / 待复查 `未测`·`超时`·`无结果` / 正常 `可用`）
-- [ ] chips「全部」「启用」常显，其余计数为 0 时隐藏
-- [ ] 空态两种：搜索/筛选无结果有文案；0 条书源带「恢复内置」出口
+- [x] 搜索防抖 150 ms，匹配 `name` / `url` / `group`，大小写不敏感
+- [x] 默认视图 = 「启用」+ 三档排序（需处理 `不可用` / 待复查 `未测`·`超时`·`无结果` / 正常 `可用`）
+- [x] chips「全部」「启用」常显，其余计数为 0 时隐藏
+- [x] 空态两种：搜索/筛选无结果有文案；0 条书源带「恢复内置」出口
 
 **Verification:**
-- [ ] 真机：输入到列表更新 ≤ 100 ms；切换筛选/分组 ≤ 100 ms
-- [ ] 真机：核对排序分档（构造一条 `unavailable`、一条 `timeout`、一条未测、一条可用）
-- [ ] `make check` 通过
+- [x] 真机：输入到列表更新 ≤ 100 ms；切换筛选/分组 ≤ 100 ms
+- [x] 真机：核对排序分档（构造一条 `unavailable`、一条 `timeout`、一条未测、一条可用）
+- [x] `make check` 通过
 
 **Dependencies:** T3.2
-**Files likely touched:** `components/SourceRows.ets`、`pages/BookSourceManage.ets`、`common/Const.ets`
+**Files touched:** `entry/src/main/ets/components/SourceRows.ets`、
+`entry/src/main/ets/pages/BookSourceManage.ets`、`docs/research/BOOKSOURCE-REVAMP-TODO.md`、
+`docs/progress.md`
+
+**Evidence（2026-10-18，debug 真机 `33Z0224424136564`）：**`SEARCH_DEBOUNCE_MS=150`；书源段与检测段分别持有
+query / appliedQuery / filter / group / counts / `DataSource` / `Scroller`。`sourceRowMatchesQuery()`
+对名称、URL 与有效分组（空组显示为「默认」）做去首尾空白、转小写后的子串匹配。投影刷新先完成
+query + group 过滤、chip 计数和三档稳定排序，再一次性 `setItems()`；`LazyForEach` 的 build 内不再
+做随行数增长的 filter / sort / map。默认书源视图为「启用」，「全部」「启用」chip 常显，
+`停用/未测/失败` 与检测段的 `未测/失败` 仅在计数非零时出现。分组菜单支持「全部分组」及空组「默认」。
+两类空态分别提供「清除搜索和筛选」与「恢复内置」，后者只打开已有替换确认，不执行替换。
+
+- 搜索：`t33-ok` 命中名称，`t33.example` 命中 URL（5 条），`t33group` 命中分组（5 条），均为大小写
+  不敏感子串匹配。3000 条合成数据上输入 `PERF-2999` 后 `debounce_ms=150`、防抖结束到投影完成
+  `project_ms=8`、端到端 `total_ms=158`，最终列表 1 条且为 `PerfGroupC · 可用 · 303ms`。
+- 筛选 / 分组：3000 条数据上三次 chip 切换分别 `filter ms=11/6/12`；选择 `PerfGroupC` 为
+  `group ms=8 rows=1000`，均低于 100 ms。
+- 排序：构造 `T33-UNAVAILABLE` / `T33-TIMEOUT` / `T33-UNTESTED` / `T33-NORESULT` / `T33-OK` 后，
+  `dumpLayout` 依次看到前四行，`T33-OK` 位于最后一档；即不可用 → 待复查 → 可用。
+- chips / 空态：计数为 0 的 chip 隐藏，但「全部 0」「启用 0」常显。筛选无结果时看到
+  「没有匹配的书源」「换个关键词、筛选或分组试试。」和「清除搜索和筛选」；0 条书源时看到
+  「还没有书源」「导入书源，或恢复内置书源。」和「恢复内置」。
+- 状态隔离：书源段保留 `校验` 查询、启用筛选与滚动位置；检测段独立保留 `t33` 查询、失败筛选和
+  `T33Group` 分组，往返切换后两边均未被对方覆盖。
+- 恢复内置出口只打开「替换全部书源」确认，文案为「将删除当前 0 条书源，并用内置书源替换。
+  此操作不可撤销。」；取消后仍为 0 条，未触发实际替换。
+- 测试结束后已恢复设备基线库：SHA-256 为
+  `cb660136875f0f1ae20b8bdbd561da27f476223dcaf36aa4091777b0770a5118`，`sources` 全表 dump
+  一致，重启后书源页显示 13 / 13 条、13 启用。最终无埋点 HAP 安装启动后无 ArkTS/JS 异常。
+
+`make test` 为 65 passed；`make check` 全通过（185 个 keep 名、书源读路径与 T1.6 守卫）；
+`make hap` 成功。`BottomDrawer({...})` 调用点仍为 8，未新增裸 `bindSheet`。计时埋点仅用于本轮
+取证，已从最终代码移除。
+
+**计时口径冲突：**规范同时写「输入防抖 150 ms」与「输入到列表更新 ≤100 ms」。实现保留 150 ms 防抖；
+验收拆为防抖结束后的投影/列表更新 ≤100 ms、输入到更新端到端 ≤250 ms（后者是
+`SPEC-SOURCE-LIST.md` 的 Success Criteria 原文）。
 **Estimated scope:** Medium
 
 ### Task T3.4 详情抽屉 + UI-SPEC 同步
@@ -449,10 +505,10 @@
 ### Checkpoint 3 — 列表
 
 - [ ] map §9-3（滚动 / 搜索 ≤100 ms）与 §9-10（默认视图 + 首屏）有实测
-- [ ] 删除 / 恢复内置 100% 走确认
-- [ ] 空态齐全
+- [x] 删除 / 恢复内置 100% 走确认（T3.2 真机证据）
+- [x] 空态齐全（T3.3 真机布局验证）
 - [ ] `UI-SPEC.md` 与实现一致（调用点 8 处）
-- [ ] `make check` 通过
+- [x] `make check` 通过
 - [ ] **与人对齐后再进 Phase 5**
 
 ---
