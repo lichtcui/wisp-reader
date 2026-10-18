@@ -15,7 +15,7 @@
  * 成员索引：
  *   建表 / `initSourceStore` / `db()`
  *   投影与筛选：`SourceRow`（**冻结形状**）、`SourceFilter`、`listRows`、`countRows`
- *   完整读：`getSource`、`allForEngine`、`exportAll`
+ *   完整读：`getSource`、`sourcesForEngine`、`allForEngine`、`exportAll`
  *   写：`setEnabled`、`remove`、`patchDetect`、`patchConfidence`、`patchConfidences`、
  *      `upsertMany`、`replaceAll`
  */
@@ -142,6 +142,17 @@ export interface ConfidenceUpdate {
   url: string;
   name: string;
   confidence: number;
+}
+
+/** One detect batch entry: stable DB id paired with the complete source JSON. */
+export class EngineSource {
+  id: number;
+  source: BookSource;
+
+  constructor(id: number, source: BookSource) {
+    this.id = id;
+    this.source = source;
+  }
 }
 
 /** 把筛选条件拼成 WHERE 子句，同时按相同顺序把绑定参数 push 进 `args`。 */
@@ -361,6 +372,55 @@ function parseSource(rs: relationalStore.ResultSet, cJson: number, cConf: number
  */
 export function allForEngine(filter?: SourceFilter): Promise<BookSource[]> {
   return readSources(filter);
+}
+
+/**
+ * Read one detect batch by stable id. The result is returned in the input id
+ * order (the job cursor order), not import order. Missing or unparsable rows
+ * are omitted so the runner can fail the batch instead of silently advancing.
+ */
+export async function sourcesForEngine(ids: number[]): Promise<EngineSource[]> {
+  const unique: number[] = [];
+  const seen: Set<number> = new Set<number>();
+  for (const id of ids) {
+    if (Number.isInteger(id) && id > 0 && !seen.has(id)) {
+      seen.add(id);
+      unique.push(id);
+    }
+  }
+  const s: relationalStore.RdbStore | undefined = db();
+  if (s === undefined || unique.length === 0) {
+    return [];
+  }
+  const args: relationalStore.ValueType[] = [];
+  const holes: string[] = [];
+  for (const id of unique) {
+    holes.push('?');
+    args.push(id);
+  }
+  const found: Map<number, BookSource> = new Map<number, BookSource>();
+  const rs: relationalStore.ResultSet = await s.querySql(
+    'SELECT id, ' + FULL_COLS + ' FROM sources WHERE id IN (' + holes.join(', ') + ')',
+    args
+  );
+  const cId: number = rs.getColumnIndex('id');
+  const cJson: number = rs.getColumnIndex('json');
+  const cConf: number = rs.getColumnIndex('confidence');
+  while (rs.goToNextRow()) {
+    const source: BookSource | undefined = parseSource(rs, cJson, cConf);
+    if (source !== undefined) {
+      found.set(rs.getLong(cId), source);
+    }
+  }
+  rs.close();
+  const out: EngineSource[] = [];
+  for (const id of unique) {
+    const source: BookSource | undefined = found.get(id);
+    if (source !== undefined) {
+      out.push(new EngineSource(id, source));
+    }
+  }
+  return out;
 }
 
 /** 备份导出：全部书源，保持既有备份文件格式（字段逐一对应，`confidence` 来自列）。 */

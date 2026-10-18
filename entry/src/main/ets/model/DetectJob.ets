@@ -166,6 +166,207 @@ export class DetectStoredResult {
   }
 }
 
+/** Runtime bridge from canonical DB ids to the exact source sent to the engine. */
+export class DetectSourceIdentity {
+  id: number;
+  url: string;
+  name: string;
+
+  constructor(id: number, url: string, name: string) {
+    this.id = id;
+    this.url = url;
+    this.name = name;
+  }
+}
+
+/** Engine verdict before it is pinned back to a canonical source id. */
+export class DetectEngineVerdict {
+  sourceUrl: string;
+  sourceName: string;
+  ok: boolean;
+  stage: string;
+  detail: string;
+  contentLen: number;
+  elapsedMs: number;
+
+  constructor(
+    sourceUrl: string = '',
+    sourceName: string = '',
+    ok: boolean = false,
+    stage: string = '',
+    detail: string = '',
+    contentLen: number = 0,
+    elapsedMs: number = 0
+  ) {
+    this.sourceUrl = sourceUrl;
+    this.sourceName = sourceName;
+    this.ok = ok;
+    this.stage = stage;
+    this.detail = detail;
+    this.contentLen = contentLen;
+    this.elapsedMs = elapsedMs;
+  }
+}
+
+export class DetectBatchMap {
+  results: DetectStoredResult[];
+  error: string;
+
+  constructor(results: DetectStoredResult[] = [], error: string = '') {
+    this.results = results;
+    this.error = error;
+  }
+}
+
+/**
+ * Pin every engine verdict back to the canonical batch id. Engine order is not
+ * trusted: results are rebuilt in cursor order and any missing, duplicate or
+ * unknown natural key rejects the whole batch.
+ */
+export function mapDetectBatchResults(
+  expected: DetectSourceIdentity[],
+  verdicts: DetectEngineVerdict[]
+): DetectBatchMap {
+  if (verdicts.length !== expected.length) {
+    return new DetectBatchMap([], 'detect result count mismatch: expected ' + expected.length.toString() +
+      ', got ' + verdicts.length.toString());
+  }
+  const byNaturalKey: Map<string, number> = new Map<string, number>();
+  for (let i = 0; i < expected.length; i++) {
+    const key: string = detectNaturalKey(expected[i].url, expected[i].name);
+    if (byNaturalKey.has(key)) {
+      return new DetectBatchMap([], 'duplicate source natural key in batch: ' + expected[i].url);
+    }
+    byNaturalKey.set(key, i);
+  }
+  const results: DetectStoredResult[] = new Array<DetectStoredResult>(expected.length);
+  const seen: Set<number> = new Set<number>();
+  for (let i = 0; i < verdicts.length; i++) {
+    const verdict: DetectEngineVerdict = verdicts[i];
+    if (verdict === undefined || verdict === null ||
+      typeof verdict.sourceUrl !== 'string' || typeof verdict.sourceName !== 'string' ||
+      typeof verdict.ok !== 'boolean' || typeof verdict.stage !== 'string' || typeof verdict.detail !== 'string' ||
+      !Number.isInteger(verdict.contentLen) || verdict.contentLen < 0 ||
+      !Number.isInteger(verdict.elapsedMs) || verdict.elapsedMs < 0) {
+      return new DetectBatchMap([], 'invalid detect verdict at index ' + i.toString());
+    }
+    const index: number | undefined = byNaturalKey.get(detectNaturalKey(verdict.sourceUrl, verdict.sourceName));
+    if (index === undefined) {
+      return new DetectBatchMap([], 'detect verdict has unknown source: ' + verdict.sourceUrl);
+    }
+    if (seen.has(index)) {
+      return new DetectBatchMap([], 'duplicate detect verdict for source: ' + verdict.sourceUrl);
+    }
+    seen.add(index);
+    const identity: DetectSourceIdentity = expected[index];
+    results[index] = new DetectStoredResult(
+      identity.id,
+      verdict.sourceUrl,
+      verdict.sourceName,
+      verdict.ok,
+      verdict.stage,
+      verdict.detail,
+      verdict.contentLen,
+      verdict.elapsedMs
+    );
+  }
+  if (seen.size !== expected.length) {
+    return new DetectBatchMap([], 'detect did not return every source in the batch');
+  }
+  return new DetectBatchMap(results, '');
+}
+
+/**
+ * Flatten complete JSONL records in the half-open cursor range for replay
+ * after a crash between result append and database/job writes.
+ */
+export function replayDetectResults(
+  lines: DetectBatchLine[],
+  afterCursor: number,
+  throughCursor: number
+): DetectStoredResult[] | undefined {
+  if (!Number.isInteger(afterCursor) || !Number.isInteger(throughCursor) ||
+    afterCursor < 0 || throughCursor < afterCursor) {
+    return undefined;
+  }
+  const out: DetectStoredResult[] = [];
+  let cursor: number = afterCursor;
+  for (let i = 0; i < lines.length; i++) {
+    const line: DetectBatchLine = lines[i];
+    if (line.nextCursor <= cursor) {
+      continue;
+    }
+    if (line.cursor !== cursor || line.nextCursor > throughCursor) {
+      return undefined;
+    }
+    for (let j = 0; j < line.results.length; j++) {
+      out.push(line.results[j]);
+    }
+    cursor = line.nextCursor;
+  }
+  return cursor === throughCursor ? out : undefined;
+}
+
+/**
+ * Replay results only when every stored id matches the frozen canonical id at
+ * that cursor. A matching fingerprint proves the id set, but this second check
+ * prevents a damaged/foreign JSONL line from patching the wrong source row.
+ */
+export function replayDetectResultsForJob(
+  lines: DetectBatchLine[],
+  afterCursor: number,
+  throughCursor: number,
+  sourceIds: string[]
+): DetectStoredResult[] | undefined {
+  if (!Number.isInteger(afterCursor) || !Number.isInteger(throughCursor) ||
+    afterCursor < 0 || throughCursor < afterCursor || throughCursor > sourceIds.length) {
+    return undefined;
+  }
+  const results: DetectStoredResult[] | undefined =
+    replayDetectResults(lines, afterCursor, throughCursor);
+  if (results === undefined) {
+    return undefined;
+  }
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].sourceId.toString() !== sourceIds[afterCursor + i]) {
+      return undefined;
+    }
+  }
+  return results;
+}
+
+/**
+ * Replay complete batches with their original append timestamps. Recovery uses
+ * this shape so `patchDetect` belongs to the same moment as the JSONL record,
+ * instead of moving `last_detect_at` to the restart time.
+ */
+export function replayDetectBatchLinesForJob(
+  lines: DetectBatchLine[],
+  afterCursor: number,
+  throughCursor: number,
+  sourceIds: string[]
+): DetectBatchLine[] | undefined {
+  const results: DetectStoredResult[] | undefined =
+    replayDetectResultsForJob(lines, afterCursor, throughCursor, sourceIds);
+  if (results === undefined) {
+    return undefined;
+  }
+  const out: DetectBatchLine[] = [];
+  let cursor: number = afterCursor;
+  for (let i = 0; i < lines.length; i++) {
+    const line: DetectBatchLine = lines[i];
+    if (line.nextCursor <= cursor) {
+      continue;
+    }
+    if (line.cursor !== cursor || line.nextCursor > throughCursor) {
+      return undefined;
+    }
+    out.push(line);
+    cursor = line.nextCursor;
+  }
+  return cursor === throughCursor ? out : undefined;
+}
+
 /** One append-only line in `results-<round>.jsonl`. */
 export class DetectBatchLine {
   cursor: number;
@@ -441,6 +642,12 @@ export function decodeDetectJobState(raw: string): DetectJobState | undefined {
     !Number.isInteger(disk.updatedAt) || disk.updatedAt < 0) {
     return undefined;
   }
+  if (disk.status === DETECT_STATUS_RUNNING && (disk.total <= 0 || disk.cursor >= disk.total)) {
+    return undefined;
+  }
+  if (disk.status === DETECT_STATUS_DONE && (disk.total <= 0 || disk.cursor !== disk.total)) {
+    return undefined;
+  }
   return new DetectJobState(
     disk.status,
     disk.mode,
@@ -523,6 +730,15 @@ export function recoverDetectJsonl(raw: string): DetectJsonlRecovery {
   return new DetectJsonlRecovery(lines, invalidLines, raw.length > 0 && !raw.endsWith('\n'), cursor, discontinuity);
 }
 
+/**
+ * Invalid lines are safe to skip when the remaining valid records still form a
+ * contiguous cursor chain. This covers a crash-truncated tail that was later
+ * followed by a new append, while a real middle-record gap still blocks replay.
+ */
+export function detectJsonlCanContinue(recovery: DetectJsonlRecovery): boolean {
+  return !recovery.discontinuity;
+}
+
 export function encodeDetectBatchLine(line: DetectBatchLine): string {
   return JSON.stringify(line) + '\n';
 }
@@ -530,6 +746,40 @@ export function encodeDetectBatchLine(line: DetectBatchLine): string {
 /** Returns the delimiter needed before appending after a crash-truncated tail. */
 export function detectJsonlSeparator(raw: string): string {
   return raw.length > 0 && !raw.endsWith('\n') ? '\n' : '';
+}
+
+export function detectResultFileName(roundStamp: number): string {
+  return 'results-' + roundStamp.toString() + '.jsonl';
+}
+
+/** Keep the current round plus the newest previous round; return stale file names. */
+export function detectResultFilesToDelete(
+  names: string[],
+  currentRound: number,
+  keep: number = 2
+): string[] {
+  const limit: number = keep > 0 ? Math.floor(keep) : 2;
+  const currentName: string = detectResultFileName(currentRound);
+  const rounds: number[] = [];
+  for (let i = 0; i < names.length; i++) {
+    const match: RegExpMatchArray | null = names[i].match(/^results-([0-9]+)\.jsonl$/);
+    if (match !== null) {
+      rounds.push(Number.parseInt(match[1], 10));
+    }
+  }
+  rounds.sort((left: number, right: number): number => right - left);
+  const kept: Set<string> = new Set<string>();
+  kept.add(currentName);
+  for (let i = 0; i < rounds.length && kept.size < limit; i++) {
+    kept.add(detectResultFileName(rounds[i]));
+  }
+  const stale: string[] = [];
+  for (let i = 0; i < names.length; i++) {
+    if (names[i].match(/^results-[0-9]+\.jsonl$/) !== null && !kept.has(names[i])) {
+      stale.push(names[i]);
+    }
+  }
+  return stale;
 }
 
 function compareText(left: string, right: string): number {
@@ -540,6 +790,10 @@ function compareText(left: string, right: string): number {
     return 1;
   }
   return 0;
+}
+
+function detectNaturalKey(url: string, name: string): string {
+  return url + '\u0000' + name;
 }
 
 function parseDetectBatchLine(text: string): DetectBatchLine | undefined {
@@ -558,11 +812,13 @@ function parseDetectBatchLine(text: string): DetectBatchLine | undefined {
     return undefined;
   }
   const results: DetectStoredResult[] = [];
+  const seenIds: Set<number> = new Set<number>();
   for (let i = 0; i < parsed.results.length; i++) {
     const result: DetectStoredResult = parsed.results[i];
-    if (!validDetectStoredResult(result)) {
+    if (!validDetectStoredResult(result) || seenIds.has(result.sourceId)) {
       return undefined;
     }
+    seenIds.add(result.sourceId);
     results.push(new DetectStoredResult(
       result.sourceId,
       result.sourceUrl,

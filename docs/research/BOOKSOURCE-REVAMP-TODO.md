@@ -583,25 +583,36 @@ debug 真机 `33Z0224424136564` 的 `dumpLayout` 证据：整行打开 `👍玄�
 **Files likely touched:** `scripts/detect-job-sim.py`（新）、`Makefile`
 **Estimated scope:** Medium
 
-### Task T4.3 `DetectJobRunner.ets`：分批派发 + 落盘 + 回写
+### Task T4.3 `DetectJobRunner.ets`：分批派发 + 落盘 + 回写 — 已完成（2026-10-18，主机 + debug 真机）
 
 **Description:** 进程级单例（仿 `TtsPregenRunner`）：取批 → `detect(batch, {mode})` →
 追加 `results-<轮次戳>.jsonl` → `patchDetect` 单行回写 → 更新 `job.json` → 每批一次 `@Trace`。
 
 **Acceptance criteria:**
-- [ ] 批大小 32；每批只刷一次 `@Trace`（3000 源 ≈ 94 次，而非 3000 次）
-- [ ] 结果按轮次落 `results-<轮次戳>.jsonl` 追加写，保留最近 2 轮，更早淘汰
-- [ ] 重启后读 `job.json`：`fingerprint` 匹配则从 `cursor` 续跑，不匹配则作废
-- [ ] 单例**不长期持有 `ctx`**（每次短取 `getContext`）
+- [x] 批大小 32；每批只刷一次 `@Trace`（3000 源 ≈ 94 次，而非 3000 次）
+- [x] 结果按轮次落 `results-<轮次戳>.jsonl` 追加写，保留最近 2 轮，更早淘汰
+- [x] 重启后读 `job.json`：`fingerprint` 匹配则从 `cursor` 续跑，不匹配则作废
+- [x] 单例**不长期持有 `ctx`**（每次短取 `getContext`）
 
 **Verification:**
-- [ ] 真机：跑到中途强杀 → 重启 → 核对续跑起点与已测条数
-- [ ] 真机：核对 `results-*.jsonl` 与 `job.json` 内容；确认无整文件重写
-- [ ] `make check` 通过
+- [x] 真机：跑到中途强杀 → 重启 → 核对续跑起点与已测条数
+- [x] 真机：核对 `results-*.jsonl` 与 `job.json` 内容；确认无整文件重写
+- [x] `make check` 通过
+
+**Evidence（2026-10-18，主机）：** `make test-detect` 135 条断言通过，覆盖乱序结果按 canonical id
+回映、fingerprint/source count 不匹配作废、stale cursor 重放、JSONL 半行后继续追加、真实 gap 拒绝、
+同批重复 source id、两轮结果保留与非法 running/done 状态。`make test` 65 passed、`make hap` 与
+`make check`（200 个 keep 名字）通过。
+
+**Evidence（2026-10-18，debug 真机 `33Z0224424136564`）：** 64 条隔离探针源按 32 条分批；首批后
+force-stop，`job.json` 为 `running` / `cursor=32`，JSONL 仅 `0 -> 32`。原包重启后记录
+`detect cursor reconciled jsonl=32 cursor=32` 并从 32 续跑，最终为 `done` / `cursor=64`，JSONL 追加为
+`0 -> 32`、`32 -> 64`，首批行 SHA-256 前后不变。保留测试只留下当前轮与最近一轮；探针清理后
+设备恢复 13 条真实源，全表行内容与基线一致，`t1.6-sources.json` 哈希不变。runner 尚未接入生产启动/UI。
 
 **Dependencies:** T1.1、T2.2、T4.1
-**Files likely touched:** `model/DetectJobRunner.ets`（新）、`model/DetectJob.ets`、
-`model/SourceStore.ets`
+**Files touched:** `model/DetectJobRunner.ets`（新）、`model/DetectJob.ets`、
+`model/SourceStore.ets`、`scripts/detect-job-sim.py`、`entry/obfuscation-rules.txt`
 **Estimated scope:** Large → 若动手超过一个会话，拆成「分批派发」与「落盘/续跑」两个任务
 
 ### Task T4.4 长时任务 + 取消 + 进度节流

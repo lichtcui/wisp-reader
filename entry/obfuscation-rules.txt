@@ -205,6 +205,22 @@ respondMs
 states
 added
 updated
+# Detect job disk/recovery contract (job.json + results-<round>.jsonl)
+# Round fields are also the frozen @Trace names; recovery fields are parsed from JSONL.
+keyword
+cursor
+batchSize
+startedAt
+fingerprint
+sourceId
+nextCursor
+at
+results
+lines
+invalidLines
+unterminated
+contiguousCursor
+discontinuity
 # BookSource T1.2 migration result (logged after startup; keep for release diagnostics)
 backupPath
 # Native NAPI import names (liblegado_core.so) — must match the .so exports
@@ -212,6 +228,7 @@ backupPath
 bookInfo
 content
 detect
+mode
 downloadCover
 fetchText
 gateSources
