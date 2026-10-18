@@ -117,12 +117,15 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 **状态：specs + plan + 任务清单已批准；`T0.2` / `T0.1` 门禁已完成；`T1.1`–`T1.6`
 均已真机通过（2026-10-17）。Phase 1 存储地基的技术验收已完成。Phase 3 的 `T3.1`–`T3.4`
 已完成（2026-10-18，debug 真机）：两段共用一份 `SourceRow` 投影，列表改用 `LazyForEach`，
-导入/调试/导出/恢复内置收进页内 `＋` / `⋯`；两段查询、筛选与滚动状态均保留，3000 条滚动首帧未验证。
-`T3.4` 详情抽屉已完成并真机验证：新增单源 `SourceDetailPanel`，整行 / 菜单「详情」共用常驻抽屉，
-按需 `getSource(id)` 读取完整规则字段并防快速切换串数据。布局取证覆盖首源 `👍玄幻阁` → 关闭 →
-第三源 `黑炎小说`、菜单「详情」打开 `小说`；名称、地址、分组、启停、检测态 / 耗时 / 时间、四类规则
-及删除二次确认均与选中源一致，取消删除未写入。`make test` 65 passed、`make check` 与 `make run`
-通过，`BottomDrawer` 仍 8 处且无新增裸 `bindSheet`。**
+导入/调试/导出/恢复内置收进页内 `＋` / `⋯`；两段查询、筛选与滚动状态均保留。
+3000 条首帧/滚动已完成真机验收（2026-10-18）：冷启动 `init=9 ms`、`list=33 ms`、`total=42 ms`、
+`first_frame=27 ms`、`page_to_ready=69 ms`；默认书源、搜索后 198 行、检测段 3000 行三组实际滑动
+均为滚动回调帧距 p50 `8 ms` / p95 `9 ms`，max `25` / `23` / `24 ms`，`>=34 ms` 为 0。
+`T3.2` 已完成并真机验证：两行式行 + 开关 + 行尾 `⋯`，删除与「恢复内置」均走二次确认；
+「恢复内置」采用用户确认的**替换全部现有书源**语义。`T3.3` 已完成并真机验证：150 ms 防抖、
+计数 chips、分组筛选、两类空态及书源/检测两段独立状态。`T3.4` 详情抽屉已完成并真机验证：
+单源 `SourceDetailPanel` 按需读取完整规则字段，整行 / 菜单「详情」共用常驻抽屉并防快速切换串数据。
+`make test` 65 passed、`make check` 与 `make run` 通过，`BottomDrawer` 仍 8 处且无新增裸 `bindSheet`。**
 
 - 设计（索引）：[`specs/SPEC-BOOKSOURCE-REVAMP.md`](./specs/SPEC-BOOKSOURCE-REVAMP.md)（capability map + 共享契约）
   + 五份模块 spec（`source-store` / `source-list` / `detect-engine` / `detect-job` / `detect-ui`）
@@ -168,8 +171,12 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   `20 ms` 作为调度抖动风险保留。路径、哈希、hilog 与复跑说明 →
   [`research/T1.6-SOURCE-STORE-BENCH.md`](./research/T1.6-SOURCE-STORE-BENCH.md)。
   新增 `scripts/check-t16-bench.sh`，随 `make check` 执行；`make check` 通过。
-- **下一步**：T3.4 详情抽屉与 UI-SPEC 已完成真机布局验证：整行 / 菜单「详情」共用常驻抽屉，
-  字段与选中源一致，关闭后切换不串数据。手机端 3000 源列表滚动首帧与交互滚动性能仍待后续真机验证。
+- **T2.1 / T2.2 / T2.3 已完成（2026-10-17–18，release 真机 + 主机 probe）**：时间字段契约、
+  probe/full 两档检测和 L1/L2 真值表均已验证；T2.3 真源对照为 L1 237 s / L2 283 s，
+  L1 通过集合包含 L2，详见 `T2.3-DETECT-TRUTH-TABLE.md`。Checkpoint 2 仅余人工门禁。
+- **下一步**：Checkpoint 3 的技术项已收口。T3.1 的 3000 条首帧、默认/搜索/检测列表实际滚动、
+  两段状态保留均已真机验证；T3.3 计时按「防抖后投影/列表更新 ≤100 ms、输入到更新端到端 ≤250 ms」
+  和「筛选/分组切换 ≤100 ms」验收通过。下一道门是与人对齐后是否进入 Phase 5（检测作业）。
   T1.6 残留风险是 16 ms 阈值对首次写调度较敏感（前一轮首样本 `20 ms`，稳态中位 `1–2 ms`）。
 - 动手前待答：预检/完整结果的展示粒度（`T5.1`）；恢复内置已定为**替换**。
 
