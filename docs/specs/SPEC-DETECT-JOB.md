@@ -54,10 +54,32 @@ filesDir/detect/results-<轮次戳>.jsonl // 每轮一个文件，每批 append 
 
 ```
 idle ──start──> running ──批循环耗尽──> done
-                   │  └──cancel──> cancelled ──resume──> running
-                   └──连续失败/不可恢复──> failed
+                   ├──cancel──> cancelled ──resume──> running
+                   └──连续失败/不可恢复──> failed ──resume──> running
    （进程重启：running → 读 job.json，fingerprint 匹配则续跑，否则 idle）
 ```
+
+**T4.1 冻结的状态语义（2026-10-18）：** `start` 在 running 时拒绝；`failed` / `cancelled` 仅在
+fingerprint 相同时从原 `cursor` 继续；`done` 或 fingerprint 变化时建立新一轮并从 0 开始。
+`cursor` 按去空、去重、字典序排序后的源 ID 顺序推进，避免同 fingerprint 因集合顺序变化导致续跑漏源或重测。
+
+**T4.1 冻结的 `@Trace` 字段：**
+
+| 字段 | 语义 |
+|---|---|
+| `status` | `idle` / `running` / `done` / `cancelled` / `failed` |
+| `mode` | `probe` / `full` |
+| `keyword` | 本轮检测关键词 |
+| `total` | 本轮源总数 |
+| `done` | 已处理源数 |
+| `cursor` | 下一个待处理源在规范化 ID 顺序中的位置 |
+| `batchSize` | 每批源数，默认 32 |
+| `startedAt` | 本轮开始时间（epoch ms） |
+| `updatedAt` | 最近一次状态更新时间（epoch ms） |
+| `fingerprint` | 源 ID 集合 + mode + keyword 的确定性摘要 |
+| `message` | 失败详情；非 failed 状态为空 |
+
+`sourceIds` 是 runner 的运行时字段，不进入上述 `@Trace` 契约，也不写入 `job.json`。
 
 **5. 进度节流。** 每批（32 源）刷一次 `@Trace`，**不是每源**。3000 源 = 约 94 次状态更新，
 而不是 3000 次重渲染。

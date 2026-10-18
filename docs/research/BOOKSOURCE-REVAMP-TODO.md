@@ -544,40 +544,40 @@ debug 真机 `33Z0224424136564` 的 `dumpLayout` 证据：整行打开 `👍玄�
 
 ## 6. Phase 4 — `detect-job`（会话 B）
 
-### Task T4.1 `model/DetectJob.ets` 纯状态机（冻结 `@Trace` 字段名）
+### Task T4.1 `model/DetectJob.ets` 纯状态机（冻结 `@Trace` 字段名）— 已完成（2026-10-18）
 
 **Description:** 把作业状态机写成不依赖任何 `@kit.*` 的纯模块，以便主机仿真覆盖。
 **本任务冻结 `@Trace` 字段名**（`T4.3` / `T5.2` 照用）。
 
 **Acceptance criteria:**
-- [ ] 状态机：`idle → running → done | cancelled → running`，非法迁移被拒绝
-- [ ] `fingerprint`（源 id 集合 + `mode` + `keyword`）计算与比较为纯函数
-- [ ] `@Trace` 字段名与语义写明在文件顶部成员索引，并进
+- [x] 状态机：`idle → running → done | cancelled → running`，非法迁移被拒绝
+- [x] `fingerprint`（源 id 集合 + `mode` + `keyword`）计算与比较为纯函数
+- [x] `@Trace` 字段名与语义写明在文件顶部成员索引，并进
       [`../specs/SPEC-DETECT-JOB.md`](../specs/SPEC-DETECT-JOB.md)
-- [ ] 模块内无 `@kit.*` / `@ohos.*` import
+- [x] 模块内无 `@kit.*` / `@ohos.*` import
 
 **Verification:**
-- [ ] `rg -n "@kit\.|@ohos\." model/DetectJob.ets` 无结果
-- [ ] `make check` 通过
+- [x] `rg -n "@kit\.|@ohos\." model/DetectJob.ets` 无结果
+- [x] `make check` 通过
 
 **Dependencies:** None（可最早开工）
 **Files likely touched:** `model/DetectJob.ets`（新）、`common/Const.ets`、
 `docs/specs/SPEC-DETECT-JOB.md`
 **Estimated scope:** Medium
 
-### Task T4.2 主机仿真 + `make test-detect`
+### Task T4.2 主机仿真 + `make test-detect` — 已完成（2026-10-18）
 
 **Description:** 仿 `scripts/tts-pregen-sim.py` 的机械切片 + `tsc` + `node`，把状态机拿到主机上跑。
 
 **Acceptance criteria:**
-- [ ] `make test-detect` 可运行并覆盖：正常完成 / 取消 / 中断续跑 / fingerprint 不匹配作废 /
+- [x] `make test-detect` 可运行并覆盖：正常完成 / 取消 / 中断续跑 / fingerprint 不匹配作废 /
       `results.jsonl` 半行损坏的读回
-- [ ] 仿真用真源码切片（不是副本），切片失败的断言明确报错
-- [ ] 失败用例能给出可读的期望-实际差异
+- [x] 仿真用真源码切片（不是副本），切片失败的断言明确报错
+- [x] 失败用例能给出可读的期望-实际差异
 
 **Verification:**
-- [ ] `make test-detect` 通过；故意改坏一个分支确认测试会红
-- [ ] `make check` 通过
+- [x] `make test-detect` 通过；故意改坏一个分支确认测试会红
+- [x] `make check` 通过
 
 **Dependencies:** T4.1
 **Files likely touched:** `scripts/detect-job-sim.py`（新）、`Makefile`

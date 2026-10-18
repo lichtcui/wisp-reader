@@ -182,6 +182,8 @@ export const TOC_REFRESH_AFTER_MS: number = 6 * 60 * 60 * 1000;
 
 /** Keyword used by the book-source availability detector. */
 export const DEFAULT_DETECT_KEYWORD: string = '重生';
+/** Number of sources dispatched by one detect-job batch. */
+export const DETECT_BATCH_SIZE: number = 32;
 
 export const CONTENT_MAX_WIDTH: number = 600;
 export const PAGE_H_PADDING: number = 16;

@@ -30,7 +30,7 @@ export PATH := $(DEVECO)/Contents/tools/node/bin:$(DEVECO)/Contents/tools/ohpm/b
 DAEMON_FLAG := $(if $(NO_DAEMON),--no-daemon,)
 
 .DEFAULT_GOAL := help
-.PHONY: help rust test test-pregen probe hap hap-release daemon-status daemon-stop install restart run run-release log devices doctor check docs-toc
+.PHONY: help rust test test-pregen test-detect probe hap hap-release daemon-status daemon-stop install restart run run-release log devices doctor check docs-toc
 
 help: ## 显示所有可用命令
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -52,6 +52,9 @@ probe: ## 主机上直接跑引擎，不上设备（例：make probe ARGS='源.j
 
 test-pregen: ## 主机上跑 TTS 预生成「客户端纯逻辑」仿真（路由/时间轴/倍速/文案，秒级）
 	python3 scripts/tts-pregen-sim.py
+
+test-detect: ## 主机上跑检测作业状态机与 fingerprint 契约测试（秒级）
+	python3 scripts/detect-job-sim.py
 
 ## ── HAP ─────────────────────────────────────────────────────────────────────
 

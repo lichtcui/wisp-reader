@@ -78,6 +78,7 @@ eligible
 excluded
 reason
 detail
+semantics
 recoverable
 sourceUrl
 sourceName
