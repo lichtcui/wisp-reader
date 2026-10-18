@@ -8,6 +8,7 @@ import { loadBundled } from '../model/SourceRepository';
 import {
   allForEngine,
   exportAll,
+  getSource,
   listRows,
   remove,
   replaceAll,
@@ -32,6 +33,10 @@ import {
   sourceRowStateLabel,
   sortSourceRowsForManage
 } from '../components/SourceRows';
+import {
+  SourceDetailData,
+  SourceDetailPanel
+} from '../components/SourceDetailPanel';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 import { DEFAULT_DETECT_KEYWORD } from '../common/Const';
@@ -140,6 +145,49 @@ function detectStageLabel(stage: string): string {
     return 'HTTP 错误';
   }
   return stage.length > 0 ? stage : '未知错误';
+}
+
+function detailPad2(value: number): string {
+  return value < 10 ? '0' + value.toString() : value.toString();
+}
+
+function formatSourceDetectAt(value: number): string {
+  if (value <= 0) {
+    return '—';
+  }
+  const date: Date = new Date(value);
+  return date.getFullYear().toString() + '-' + detailPad2(date.getMonth() + 1) + '-' +
+    detailPad2(date.getDate()) + ' ' + detailPad2(date.getHours()) + ':' +
+    detailPad2(date.getMinutes()) + ':' + detailPad2(date.getSeconds());
+}
+
+function formatSourceRule(rule: object | undefined): string {
+  if (rule === undefined) {
+    return '未配置';
+  }
+  const value: string | undefined = JSON.stringify(rule, null, 2);
+  return value === undefined ? '未配置' : value;
+}
+
+/** Build the immutable presentation snapshot outside ArkUI's build path. */
+function buildSourceDetail(row: SourceRow, source: BookSource): SourceDetailData {
+  const name: string = row.name.length > 0 ? row.name : source.bookSourceName;
+  return {
+    id: row.id,
+    name: name.length > 0 ? name : row.url,
+    url: row.url,
+    group: row.group.length > 0 ? row.group : '默认',
+    enabled: row.enabled,
+    detectState: row.detectState,
+    respondMs: row.respondMs,
+    detectAt: formatSourceDetectAt(row.detectAt),
+    rules: [
+      { label: '搜索规则', value: formatSourceRule(source.ruleSearch) },
+      { label: '详情规则', value: formatSourceRule(source.ruleBookInfo) },
+      { label: '目录规则', value: formatSourceRule(source.ruleToc) },
+      { label: '正文规则', value: formatSourceRule(source.ruleContent) }
+    ]
+  };
 }
 
 function reasonLabel(reason: string): string {
@@ -262,6 +310,9 @@ export struct BookSourceManagePage {
   @Local detectResults: DetectResult[] = [];
   @Local statusVisible: boolean = false;
   @Local selectedSource: SourceRow | undefined = undefined;
+  @Local sourceDetail: SourceDetailData | undefined = undefined;
+  @Local sourceDetailLoading: boolean = false;
+  @Local sourceDetailFailed: boolean = false;
   @Event onOpenDebugger: () => void = () => {};
   private pageStartedAt: number = 0;
   private t16Pending: boolean = false;
@@ -272,6 +323,7 @@ export struct BookSourceManagePage {
   private detectScroller: Scroller = new Scroller();
   private sourceDebounceId: number = -1;
   private detectDebounceId: number = -1;
+  private sourceDetailRequest: number = 0;
 
   aboutToAppear(): void {
     this.activeSegment = 0;
@@ -773,6 +825,10 @@ export struct BookSourceManagePage {
       if (this.selectedSource !== undefined && this.selectedSource.id === row.id) {
         this.statusVisible = false;
         this.selectedSource = undefined;
+        this.sourceDetail = undefined;
+        this.sourceDetailLoading = false;
+        this.sourceDetailFailed = false;
+        this.sourceDetailRequest += 1;
       }
     } catch (err) {
       this.summary = '删除失败';
@@ -890,6 +946,10 @@ export struct BookSourceManagePage {
     this.detectResults = [];
     this.statusVisible = false;
     this.selectedSource = undefined;
+    this.sourceDetail = undefined;
+    this.sourceDetailLoading = false;
+    this.sourceDetailFailed = false;
+    this.sourceDetailRequest += 1;
   }
 
   private confirmResetBundled(): void {
@@ -915,13 +975,60 @@ export struct BookSourceManagePage {
   }
 
   private openSourceDetail(row: SourceRow): void {
+    const request: number = this.sourceDetailRequest + 1;
+    this.sourceDetailRequest = request;
     this.selectedSource = row;
+    this.sourceDetail = undefined;
+    this.sourceDetailLoading = true;
+    this.sourceDetailFailed = false;
     this.statusVisible = true;
+    this.loadSourceDetail(row, request);
   }
 
   private openDetectStatus(): void {
+    this.sourceDetailRequest += 1;
     this.selectedSource = undefined;
+    this.sourceDetail = undefined;
+    this.sourceDetailLoading = false;
+    this.sourceDetailFailed = false;
     this.statusVisible = true;
+  }
+
+  private detailRequestCurrent(row: SourceRow, request: number): boolean {
+    return this.sourceDetailRequest === request &&
+      this.selectedSource !== undefined &&
+      this.selectedSource.id === row.id;
+  }
+
+  private async loadSourceDetail(row: SourceRow, request: number): Promise<void> {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      if (this.detailRequestCurrent(row, request)) {
+        this.sourceDetailLoading = false;
+        this.sourceDetailFailed = true;
+      }
+      return;
+    }
+    try {
+      await ensureSourceStore(ctx);
+      const source: BookSource | undefined = await getSource(row.id);
+      if (!this.detailRequestCurrent(row, request)) {
+        return;
+      }
+      if (source === undefined) {
+        this.sourceDetailFailed = true;
+      } else {
+        this.sourceDetail = buildSourceDetail(row, source);
+      }
+    } catch (err) {
+      if (this.detailRequestCurrent(row, request)) {
+        this.sourceDetailFailed = true;
+      }
+    } finally {
+      if (this.detailRequestCurrent(row, request)) {
+        this.sourceDetailLoading = false;
+      }
+    }
   }
 
   private async runDetect(): Promise<void> {
@@ -1173,75 +1280,6 @@ export struct BookSourceManagePage {
       parts.push(`${label} ${count}`);
     });
     return parts.join('、');
-  }
-
-  @Builder
-  sourceDetailContent() {
-    Column() {
-      if (this.selectedSource !== undefined) {
-        Text(this.selectedSource.name.length > 0 ? this.selectedSource.name : this.selectedSource.url)
-          .fontSize(20)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_1'))
-          .width('100%')
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.selectedSource.url)
-          .fontSize(12)
-          .fontColor($r('app.color.text_4'))
-          .width('100%')
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .margin({ top: 6, bottom: 16 })
-
-        Row() {
-          Text('分组')
-            .fontSize(14)
-            .fontColor($r('app.color.text_3'))
-          Blank()
-          Text(this.selectedSource.group.length > 0 ? this.selectedSource.group : '默认')
-            .fontSize(14)
-            .fontColor($r('app.color.text_1'))
-        }
-        .width('100%')
-        .padding({ top: 12, bottom: 12 })
-
-        Divider()
-          .color($r('app.color.divider'))
-          .strokeWidth(1)
-
-        Row() {
-          Text('检测状态')
-            .fontSize(14)
-            .fontColor($r('app.color.text_3'))
-          Blank()
-          Text(sourceRowStateLabel(this.selectedSource.detectState))
-            .fontSize(14)
-            .fontColor($r('app.color.text_1'))
-        }
-        .width('100%')
-        .padding({ top: 12, bottom: 12 })
-
-        Divider()
-          .color($r('app.color.divider'))
-          .strokeWidth(1)
-
-        Row() {
-          Text('耗时')
-            .fontSize(14)
-            .fontColor($r('app.color.text_3'))
-          Blank()
-          Text(this.selectedSource.detectState.length > 0 ?
-            this.selectedSource.respondMs.toString() + 'ms' : '—')
-            .fontSize(14)
-            .fontColor($r('app.color.text_1'))
-        }
-        .width('100%')
-        .padding({ top: 12, bottom: 12 })
-      }
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
   }
 
   @Builder
@@ -1627,13 +1665,13 @@ export struct BookSourceManagePage {
             ListItem() {
               SourceManageRow({
                 source: source,
-                onDetail: () => {
+                onDetail: (source: SourceRow) => {
                   this.openSourceDetail(source);
                 },
-                onToggle: (on: boolean) => {
+                onToggle: (source: SourceRow, on: boolean) => {
                   this.toggleSource(source, on);
                 },
-                onDelete: () => {
+                onDelete: (source: SourceRow) => {
                   this.confirmRemoveSource(source);
                 }
               })
@@ -1742,13 +1780,13 @@ export struct BookSourceManagePage {
             ListItem() {
               SourceManageRow({
                 source: source,
-                onDetail: () => {
+                onDetail: (source: SourceRow) => {
                   this.openSourceDetail(source);
                 },
-                onToggle: (on: boolean) => {
+                onToggle: (source: SourceRow, on: boolean) => {
                   this.toggleSource(source, on);
                 },
-                onDelete: () => {
+                onDelete: (source: SourceRow) => {
                   this.confirmRemoveSource(source);
                 }
               })
@@ -1844,7 +1882,20 @@ export struct BookSourceManagePage {
         }
       }) {
         if (this.selectedSource !== undefined) {
-          this.sourceDetailContent()
+          // A mounted panel can retain stale text when the selected source changes.
+          ForEach([this.selectedSource.id], (_id: number) => {
+            SourceDetailPanel({
+              detail: this.sourceDetail,
+              loading: this.sourceDetailLoading,
+              failed: this.sourceDetailFailed,
+              onDelete: () => {
+                const row: SourceRow | undefined = this.selectedSource;
+                if (row !== undefined) {
+                  this.confirmRemoveSource(row);
+                }
+              }
+            })
+          }, (id: number) => id.toString())
         } else {
           this.statusContent()
         }

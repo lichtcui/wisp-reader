@@ -61,9 +61,9 @@ export function sortSourceRowsForManage(rows: SourceRow[]): SourceRow[] {
 @ComponentV2
 export struct SourceManageRow {
   @Param source: SourceRow | undefined = undefined;
-  @Event onDetail: () => void = () => {};
-  @Event onToggle: (on: boolean) => void = () => {};
-  @Event onDelete: () => void = () => {};
+  @Event onDetail: (source: SourceRow) => void = () => {};
+  @Event onToggle: (source: SourceRow, on: boolean) => void = () => {};
+  @Event onDelete: (source: SourceRow) => void = () => {};
 
   private name(): string {
     const source: SourceRow | undefined = this.source;
@@ -86,15 +86,15 @@ export struct SourceManageRow {
     return [
       {
         value: '详情',
-        action: () => this.onDetail()
+        action: () => this.onDetail(source)
       },
       {
         value: source.enabled ? '停用' : '启用',
-        action: () => this.onToggle(!source.enabled)
+        action: () => this.onToggle(source, !source.enabled)
       },
       {
         value: '删除',
-        action: () => this.onDelete()
+        action: () => this.onDelete(source)
       }
     ];
   }
@@ -121,7 +121,12 @@ export struct SourceManageRow {
       if (this.source !== undefined) {
         Toggle({ type: ToggleType.Switch, isOn: this.source.enabled })
           .selectedColor($r('app.color.brand'))
-          .onChange((on: boolean) => this.onToggle(on))
+          .onChange((on: boolean) => {
+            const source: SourceRow | undefined = this.source;
+            if (source !== undefined) {
+              this.onToggle(source, on);
+            }
+          })
           .margin({ left: 8 })
         MoreMenuButton({
           items: this.menuItems(),
@@ -133,6 +138,11 @@ export struct SourceManageRow {
     .height(72)
     .padding({ left: 16, right: 4 })
     .alignItems(VerticalAlign.Center)
-    .onClick(() => this.onDetail())
+    .onClick(() => {
+      const source: SourceRow | undefined = this.source;
+      if (source !== undefined) {
+        this.onDetail(source);
+      }
+    })
   }
 }

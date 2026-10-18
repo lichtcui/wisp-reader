@@ -481,25 +481,46 @@ query + group 过滤、chip 计数和三档稳定排序，再一次性 `setItems
 `SPEC-SOURCE-LIST.md` 的 Success Criteria 原文）。
 **Estimated scope:** Medium
 
-### Task T3.4 详情抽屉 + UI-SPEC 同步
+### Task T3.4 详情抽屉 + UI-SPEC 同步（已完成）
 
 **Description:** `SourceDetailPanel.ets` 替代现在的 `statusContent()`「书源状态」内容，并同步
 `UI-SPEC.md`。**调用点数量不变（仍 8 处）。**
 
+**Compatibility note:** 当前 `statusContent()` 仍用于检测作业状态，选中单源时原本由
+`sourceDetailContent()` 输出详情。为不改检测作业分支和删除/启停语义，本任务只把选中单源的
+`sourceDetailContent()` 替换为 `SourceDetailPanel`；两者继续复用同一个常驻 `BottomDrawer`。
+
 **Acceptance criteria:**
-- [ ] 抽屉展示：名称 / 地址 / 分组 / 启停 / 最近检测（态·耗时·时间）/ 规则字段只读 + 删除
-- [ ] 仍是 `BottomDrawer` 调用点，数量 8 处不变（未新起裸 `bindSheet`）
-- [ ] `docs/specs/UI-SPEC.md` §2 第 6 处调用点的名称与用途已更新
-- [ ] 组件的展示逻辑不含每帧增长的计算
+- [x] 抽屉展示：名称 / 地址 / 分组 / 启停 / 最近检测（态·耗时·时间）/ 规则字段只读 + 删除
+- [x] 仍是 `BottomDrawer` 调用点，数量 8 处不变（未新起裸 `bindSheet`）
+- [x] `docs/specs/UI-SPEC.md` §2 第 6 处调用点的名称与用途已更新
+- [x] 组件的展示逻辑不含每帧增长的计算
 
 **Verification:**
-- [ ] `rg -n "BottomDrawer" entry/src/main/ets` 计数为 8
-- [ ] 真机：点行打开抽屉，字段与源数据一致
-- [ ] `make check` 通过
+- [x] `rg -n "BottomDrawer" entry/src/main/ets` 计数为 8
+- [x] 真机：整行 / 菜单「详情」打开同一抽屉，字段与源数据一致，关闭后切换不串数据
+- [x] `make check` 通过
+
+**Evidence（2026-10-18）：**新增 `components/SourceDetailPanel.ets`，`BookSourceManage` 在打开详情时异步
+`ensureSourceStore` + `SourceStore.getSource(row.id)`，仅对选中的单条源构造展示快照；请求序号校验避免
+快速切换时旧结果回写。名称、地址、分组、启停、最近检测（状态 / 耗时 / 时间）、搜索 / 详情 / 目录 / 正文
+四类规则只读字段与删除入口均由该组件展示，删除仍调用既有 `confirmRemoveSource()`。展示快照只在
+`loadSourceDetail()` 完成时构建，`build()` 仅渲染固定 4 个规则字段，不按书源数量计算。静态核对
+`BottomDrawer(` 为 8 处，`bindSheet` 仅存在于 `ui/common/BottomDrawer.ets` 的兼容实现；`make test`
+65 passed，`make check` 通过（185 个 keep 名），`make run` 编译、安装、force-stop、启动成功。
+debug 真机 `33Z0224424136564` 的 `dumpLayout` 证据：整行打开 `👍玄幻阁`
+（`http://www.xuanhuange.net`），关闭后打开第三源 `黑炎小说`（`http://www.heiyan.info/`），
+再关闭后经菜单「详情」打开 `小说`（`http://www.yetianlian.info`）；三条都显示名称、地址、分组
+「校验可用」、已启用、未测 / `—` / `—`，规则内容分别为各自的搜索 / 详情 / 目录 / 正文 JSON，
+底部均有「删除书源」。删除入口弹出既有二次确认「确定删除「👍玄幻阁」吗？」，取消后未写入。
+最终干净 HAP 无 ArkTS / JS 异常，日志无临时探针。首次复现到关闭后已挂载的详情组件仍绘制首源，
+而查询与快照均已更新；按选中源 id 键控重建详情组件后复验通过，`BottomDrawer` 本身仍常驻。
 
 **Dependencies:** T3.1
-**Files likely touched:** `components/SourceDetailPanel.ets`（新）、`pages/BookSourceManage.ets`、
-`docs/specs/UI-SPEC.md`
+**Files touched:** `entry/src/main/ets/components/SourceDetailPanel.ets`（新）、
+`entry/src/main/ets/components/SourceRows.ets`、`entry/src/main/ets/pages/BookSourceManage.ets`、
+`docs/specs/UI-SPEC.md`、
+`docs/research/BOOKSOURCE-REVAMP-TODO.md`、`docs/progress.md`
 **Estimated scope:** Small
 
 ### Checkpoint 3 — 列表
@@ -507,7 +528,8 @@ query + group 过滤、chip 计数和三档稳定排序，再一次性 `setItems
 - [ ] map §9-3（滚动 / 搜索 ≤100 ms）与 §9-10（默认视图 + 首屏）有实测
 - [x] 删除 / 恢复内置 100% 走确认（T3.2 真机证据）
 - [x] 空态齐全（T3.3 真机布局验证）
-- [ ] `UI-SPEC.md` 与实现一致（调用点 8 处）
+- [x] T3.4 详情抽屉整行 / 菜单共用、字段一致、关闭后切换不串数据（真机布局验证）
+- [x] `UI-SPEC.md` 与实现一致（调用点 8 处）
 - [x] `make check` 通过
 - [ ] **与人对齐后再进 Phase 5**
 

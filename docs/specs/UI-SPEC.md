@@ -128,7 +128,7 @@
 
 | `sheetSize` | 高度 | 用例 |
 |---|---|---|
-| `large` | 宿主高的 `90%` | 阅读页目录、「源状态」、搜索结果「选择来源」、书源状态、听书目录 |
+| `large` | 宿主高的 `90%` | 阅读页目录、「源状态」、搜索结果「选择来源」、书源详情、听书目录 |
 | `medium` | 宿主高的 `70%` | （暂无调用点，保留语义） |
 | `fit` | 内容高度，`constraintSize({ maxHeight: '90%' })` | 阅读页设置 |
 
@@ -163,10 +163,12 @@
 | 3 | `pages/Reader.ets:1410` | 阅读页 · 阅读设置 | `fit` | `false` | `this.bgColor()` |
 | 4 | `pages/SearchResult.ets:633` | 搜索结果 · 源状态 | `large` | 默认 `true` | 默认 |
 | 5 | `pages/SearchResult.ets:645` | 搜索结果 · 选择来源 | `large` | 默认 `true` | 默认 |
-| 6 | `pages/BookSourceManage.ets:706` | 书源管理 · 书源状态 | `large` | 默认 `true` | 默认 |
+| 6 | `pages/BookSourceManage.ets:1875` | 书源管理 · 书源详情（整行 / 菜单共用） | `large` | 默认 `true` | 默认 |
 | 7 | `pages/Listening.ets:382` | 听书页 · 目录 | `large` | 默认 `true` | 默认 |
 | 8 | `pages/Reader.ets`（`grep -n "PANEL_SOURCE"`） | 阅读页 · 换源（v1.1） | `large` | `true`（传 `titleColor` / `iconColor`） | `this.bgColor()` |
 
+> #6 是单源详情：点整行与行尾菜单「详情」共用同一个常驻抽屉，展示名称、地址、分组、启停、
+> 最近检测（状态 / 耗时 / 时间）与规则字段只读内容；删除入口仍复用现有二次确认。
 > 行号会漂移；**以命令为准**：`grep -rn "BottomDrawer({" entry/src/main/ets/pages/`
 > 新增抽屉（第 8 处）必须同时登记到本表。
 
