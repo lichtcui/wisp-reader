@@ -361,18 +361,30 @@
 `＋`/`⋯` 页内行 + 底部作业条占位。撤掉现有导入区与「工具」组。
 
 **Acceptance criteria:**
-- [ ] `SegmentedCell` 两段；两段共用**同一份**投影（不重复持有 3000 行）
-- [ ] 列表用 `LazyForEach`，`build` 里无随行数增长的 filter/sort/map
-- [ ] 导入 / 规则调试器 / 导出 / 恢复内置 收进 `＋` / `⋯`；滚动区第一屏是列表
-- [ ] 两段各自保留滚动与筛选状态；进页面总是「书源」段
+- [x] `SegmentedCell` 两段；两段共用**同一份**投影（不重复持有 3000 行）
+- [x] 列表用 `LazyForEach`，`build` 里无随行数增长的 filter/sort/map
+- [x] 导入 / 规则调试器 / 导出 / 恢复内置 收进 `＋` / `⋯`；滚动区第一屏是列表
+- [x] 两段各自保留滚动与筛选状态；进页面总是「书源」段
 
 **Verification:**
-- [ ] `make run` + `uitest dumpLayout`：确认首屏可见搜索框与筛选条，列表在首屏
+- [x] `make run` + `uitest dumpLayout`：确认首屏可见搜索框与筛选条，列表在首屏
 - [ ] 3000 条下滚动目视无掉帧
-- [ ] `make check` 通过
+- [x] `make check` 通过
+
+**Evidence（2026-10-18，设备 `33Z0224424136564`）：** `reload()` 只调用一次 `listRows()`，
+`rows` / `sourceDs` / `detectDs` 共用同一份 `SourceRow[]`；两个 `LazyForEach` 的构建体都只调用
+`sourceRowCell(source)`。`make run` 完成 debug HAP 编译、安装、force-stop 与启动；
+`uitest dumpLayout` 成功取得 145236 B：搜索框 `[162,506][1179,655]`、筛选 chips 在
+`[54,682][1072,790]`、可滚动 `List` 在 `[0,925][1260,2529]`，13 条书源首屏只物化 6 个
+`ListItem`。真机把书源段查询设为 `abc`、选中「启用」，检测段选中「失败」后切回，两个段的状态均保留；
+书源列表下滑后切到检测段再切回，首批可见行不变；在检测段退出页面再进入，书源段为选中态（品牌底色）。
+`＋` 菜单可打开并显示导入入口，`⋯` 菜单可打开并显示导出与 T1.6 入口；菜单项与代码核对一致。
+设备上未启动 T1.6 造数：现有 seeded 路径会先做 store 测量并自动恢复，未提供可停留滚动的 3000 行列表，
+因此本轮不修改 T1.6 流程，取消确认后原数据未变。**3000 条列表滚动首帧仍未验证。**
 
 **Dependencies:** T1.1–T1.6
-**Files likely touched:** `pages/BookSourceManage.ets`、`common/Const.ets`
+**Files touched:** `entry/src/main/ets/pages/BookSourceManage.ets`、
+`docs/research/BOOKSOURCE-REVAMP-TODO.md`、`docs/progress.md`
 **Estimated scope:** Medium
 
 ### Task T3.2 行 + `⋯` 菜单 + 二次确认
