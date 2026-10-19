@@ -108,7 +108,12 @@ pub async fn content(source_json: String, chapter_url: String) -> Result<String>
 
 /// Detect whether sources can complete a reading chain; returns JSON
 /// `DetectResult[]`. `opts_json` may carry
-/// `{ keyword, concurrency, timeoutMs }`.
+/// `{ keyword, concurrency, timeoutMs, mode }`.
+///
+/// `mode: "probe"` runs only the search step and returns after one request;
+/// `mode: "full"` (the default) runs search, detail, TOC, and first-chapter
+/// content. Missing or unknown modes fall back to `"full"` for compatibility.
+/// An omitted timeout defaults to 8s for probe and 45s for full.
 #[napi]
 pub async fn detect(sources_json: String, opts_json: String) -> Result<String> {
     let sources = sources_from_json(&sources_json)?;
@@ -121,14 +126,17 @@ pub async fn detect(sources_json: String, opts_json: String) -> Result<String> {
         concurrency: Option<usize>,
         #[serde(default)]
         timeoutMs: Option<u64>,
+        #[serde(default)]
+        mode: Option<String>,
     }
     let opts: DetectOpts = serde_json::from_str(&opts_json).unwrap_or_default();
+    let mode = engine::runtime::DetectMode::from_opt(opts.mode.as_deref());
     let results = engine::runtime::detect(
         &sources,
         opts.keyword.as_deref().unwrap_or("重生"),
         opts.concurrency.unwrap_or(4),
-        opts.timeoutMs
-            .unwrap_or(engine::runtime::DEFAULT_DETECT_TIMEOUT_MS),
+        opts.timeoutMs.unwrap_or_else(|| mode.default_timeout_ms()),
+        mode,
     )
     .await;
     serde_json::to_string(&results).map_err(err)

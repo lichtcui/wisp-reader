@@ -59,6 +59,11 @@ idle ──start──> running ──批循环耗尽──> done
    （进程重启：running → 读 job.json，fingerprint 匹配则续跑，否则 idle）
 ```
 
+**启动与恢复（T5 已接入）：** 书源页首次 `reload()` 后调用一次 `DetectJobRunner.restore(ctx)`。
+fingerprint 匹配的 `running` 作业自动对账并续跑；`done` / `cancelled` / `failed` 只恢复展示。
+跨进程恢复的 `cancelled` / `failed` 没有运行时 `sourceIds`，不得伪造「继续」；只有当前进程内仍持有
+冻结源集合的终态作业才允许显式续跑。
+
 **T4.1 冻结的状态语义（2026-10-18）：** `start` 在 running 时拒绝；`failed` / `cancelled` 仅在
 fingerprint 相同时从原 `cursor` 继续；`done` 或 fingerprint 变化时建立新一轮并从 0 开始。
 `cursor` 按去空、去重、字典序排序后的源 ID 顺序推进，避免同 fingerprint 因集合顺序变化导致续跑漏源或重测。
@@ -132,10 +137,9 @@ map 文件 §9-6 的判据相应改为「应用在前台时持续推进」。（
 
 ## Boundaries
 
-- **Ask first**：续跑是否要用户确认；
-  批大小与并发的关系。
+- **Ask first**：批大小与并发的关系。
 - **Never**：每源写盘或每源刷 UI；一次性 `JSON.parse` 3000 条结果；在 fingerprint 不匹配时续跑；
-  为了让取消更快而给引擎加取消原语。
+  跨进程伪造终态作业的续跑；为了让取消更快而给引擎加取消原语。
 
 ## Open Questions
 
@@ -143,8 +147,8 @@ map 文件 §9-6 的判据相应改为「应用在前台时持续推进」。（
    存在且可用；**不能**同时持两个任务（`9800005`），并存须用「一个任务多类型」；受「>10 分钟不更新进度
    即取消」约束。证据 → [`../research/T0.1-LONG-TASK-EVIDENCE.md`](../research/T0.1-LONG-TASK-EVIDENCE.md)。
    **遗留**：TTS 侧长时任务当前不成立（P0，`docs/bugfix/TASKS.md`），「与 TTS 共存」待其修复后复验。
-2. 续跑时机：进程启动即自动续跑，还是进书源页/由用户点「继续」？（自动续跑可能让用户困惑：
-   刚打开应用就在跑网络请求，且耗流量。）
+2. ~~续跑时机~~ **已定（T5）**：进入书源页并完成首次 `reload()` 后恢复一次；fingerprint 匹配的
+   `running` 作业自动续跑，终态作业只恢复展示。当前进程内的 `cancelled` / `failed` 由用户点「继续」。
 3. 批大小 32 与引擎并发的匹配：**并发已定 16**（T0.2 实测，`SPEC-DETECT-ENGINE.md` §3.5）；
    批 32 + 并发 16 = 2 个串行波次，取消的「最坏收尾时间」≈2×8 s（L1 cap）。是否改成
    「批大小 = 并发数 = 16」以让取消更利落（代价：单批 NAPI JSON 开销翻倍）？

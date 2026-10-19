@@ -19,7 +19,8 @@
         "icon": "$media:layered_image",
         "label": "$string:EntryAbility_label",
         "backgroundModes": [
-          "audioPlayback"
+          "audioPlayback",
+          "dataTransfer"
         ],
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",

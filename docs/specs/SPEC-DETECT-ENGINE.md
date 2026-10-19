@@ -29,6 +29,11 @@ Commands / Project Structure / Code Style / Testing Strategy / Boundaries 见 ma
 `detect_chain` 已经是独立函数、内部已分阶段（`search_one` → 详情 → 目录 → 正文），所以 L1 不是新链路，
 而是早退：L1 只需在 `search_one` 返回后的那个分支收口。
 
+T2.2 实现把成功阶段也放在 `stage` 中：probe 命中为 `ok=true` / `stage="search"` /
+`detail="搜索命中"` / `contentLen=0`，full 成功仍为 `stage="content"`。probe 未命中不新增失败原因，
+仍返回 `ok=false` / `stage="no_results"`；只有搜索请求本身分类出的错误才保留 `blocked` /
+`network_error` / `timeout` 等原因，不能把「没搜到」误写成 `unavailable`。
+
 **2. 契约：复用 `detect`，加 `mode`，不新增 NAPI 函数。**
 
 ```rust
@@ -38,10 +43,14 @@ Commands / Project Structure / Code Style / Testing Strategy / Boundaries 见 ma
 ///
 /// `mode` 取 `"probe"` 时只跑搜索链路（1 次请求），用于对整个书源集合做
 /// 快速预检；取 `"full"`（默认）时跑完整链路（搜索 → 详情 → 目录 → 首章正文）。
-/// 两档的 `DetectResult` 形状相同，`stage` 沿用既有 `FailReason` 取值。
+/// 两档的 `DetectResult` 形状相同；失败 `stage` 沿用 `FailReason`，成功为
+/// `"search"`（probe）或 `"content"`（full）。
 #[napi]
 pub async fn detect(sources_json: String, opts_json: String) -> Result<String>
 ```
+
+缺省、显式 `"full"` 和未知 mode 都走 full，保证旧调用方与旧选项 JSON 兼容；只有精确的 `"probe"`
+进入预检。ArkTS 包装层的第三参数缺省值同样是 `"full"`。
 
 理由：`detect-job` 是分批调用（建议 32 源/批），结果一次返回完全在预算内，因此不需要
 `detectStart / detectProgress / detectResults / detectCancel` 这套分片接口。少一个 NAPI 函数就少一处
@@ -68,11 +77,12 @@ L1 只发 1 次请求，长下限没有意义；L2 要串 4+ 次请求，保持�
   见 `SPEC-DETECT-JOB.md` §2「取消」）。
 - 实现在 `T2.2`（与 `mode` 一起落）。**Ask first 项已确认：L1 = 8 s（2026-10-15）。**
 
-**4. `respondTime` / `lastUpdateTime` 接回。**
+**4. `respondTime` / `lastUpdateTime` 接回（T2.1，已完成并 release 真机验证 2026-10-17）。**
 
 书源 JSON 里本来就有 Legado 原生的 `respondTime` / `lastUpdateTime`（`resources/rawfile/bundled-sources.json`
-可见），但 `rust/legado-engine/src/types.rs:30` 的 `BookSource` 未声明这两个字段 → **serde 解析时被静默丢弃**。
-接回来之后：
+可见）。2026-10-17 以 `c357fb7` 为基线核对时，Rust `BookSource` 与混淆 keep 列表已声明这两个字段；
+本次补齐 ArkTS `BookSource` 接口和真实书源回归单测。release 混淆包启动探针读到「黑炎小说」的
+`respondTime=3662` / `lastUpdateTime=1685889740162`，与内置 JSON 一致。接回之后：
 
 - 检测结果的时间/耗时可以直接落在书源自身的字段上，成为 `source-store` 的
   `respond_time` / `last_detect_at` 列来源，也是「增量检测」的输入。
@@ -129,14 +139,20 @@ python3 scripts/detect-bench.py --input <3911条导出.json> --sample 400 --seed
 
   估算前提是本样本的源构成（91% 死源、命中率 9%）；若源池几乎全存活（内置 13 条那种），
   单源搜索耗时仍是 0.7–2 s 量级 → 3000 源在并发 16 下也在数分钟量级。
-- 落点：`Const.ets` 单一常量（`T2.2` 同时把 Rust clamp 与 ArkTS 传值一起改），`detect-job` 的批大小 32
+- 落点：`Const.ets` 单一常量（`T2.2` 已把 Rust clamp 与 ArkTS 传值一起改为 16），`detect-job` 的批大小 32
   与它对齐（批 32 ÷ 并发 16 = 2 波，最坏收尾 ≤16 s，见 `SPEC-DETECT-JOB.md` 开放问题 3）。
   **Ask first 项已确认：并发 = 16（2026-10-15）。**
 
 ## Success Criteria
 
 1. L1 预检 3000 源，在决定的并发与超时下**现实 ≤ 20 分钟**（现状同集合 1–5 小时）。
-2. L1 的 `DetectResult` 与 L2 形状一致，`stage` 复用既有 `FailReason` 取值，**不新增语义重复的字段**。
+
+   **T2.3 主机实测（2026-10-18，非真机）**：全量导出 3907 条中筛出 3171 条启用且有搜索规则的源，
+   固定关键词「剑来」、并发 16；L1 墙钟 **237 s（3m57s）**，低于 20 分钟判据。L2 同批墙钟
+   283 s（4m43s）。完整逐源表、集合关系与边界见
+   [`T2.3-DETECT-TRUTH-TABLE.md`](../research/T2.3-DETECT-TRUTH-TABLE.md)。手机端 3000 源单轮仍未验证。
+2. L1 的 `DetectResult` 与 L2 形状一致，失败 `stage` 复用既有 `FailReason` 取值；成功阶段分别为
+   `search`（L1）与 `content`（L2），**不新增语义重复的字段**。
    L1 未命中必须是 `no_results`（「源可用但探测词没命中」），不能记成 `unavailable`——现状
    `pages/BookSourceManage.ets:24-36` 的 `detectStateOf` 依赖这个区分来决定什么该被一键清理，不许破坏它。
 3. `mode` 经 NAPI 往返在 release 包下可读（keep 列表；`make run-release` 验证）。
@@ -157,4 +173,5 @@ python3 scripts/detect-bench.py --input <3911条导出.json> --sample 400 --seed
    见「关键设计决策 5」；32 留作真机上调档。
 2. L1 用的关键词：复用 `DEFAULT_DETECT_KEYWORD`（当前「重生」）还是单独配一个命中率更高的词？
 3. L1 的「命中」判定阈值：`search_one` 返回 ≥1 条即通过，还是要求 ≥N 条 / 名称相关性？
-4. `stage` 是否需要为 L1 新增取值（例如区分「预检通过」），还是通过 `mode` 由调用方解释？
+4. ~~`stage` 是否需要为 L1 新增取值？~~ → **已定：probe 命中用 `stage="search"`，调用方结合 `mode`
+   解释为预检通过；失败值不变。**

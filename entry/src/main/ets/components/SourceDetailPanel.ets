@@ -20,6 +20,7 @@ export interface SourceDetailData {
 @ComponentV2
 export struct SourceDetailPanel {
   @Param detail: SourceDetailData | undefined = undefined;
+  @Param detectMode: string = 'full';
   @Param loading: boolean = false;
   @Param failed: boolean = false;
   @Event onDelete: () => void = () => {};
@@ -34,7 +35,7 @@ export struct SourceDetailPanel {
 
   private stateColor(state: string): ResourceColor {
     if (state === 'ok') {
-      return $r('app.color.brand');
+      return this.detectMode === 'probe' ? $r('app.color.text_3') : $r('app.color.brand');
     }
     if (state === 'noResult') {
       return $r('app.color.text_3');
@@ -71,7 +72,7 @@ export struct SourceDetailPanel {
         .fontSize(14)
         .fontColor($r('app.color.text_3'))
       Blank()
-      Text(sourceRowStateLabel(detail.detectState))
+      Text(sourceRowStateLabel(detail.detectState, this.detectMode))
         .fontSize(12)
         .fontColor(this.stateColor(detail.detectState))
         .padding({ left: 10, right: 10, top: 3, bottom: 3 })

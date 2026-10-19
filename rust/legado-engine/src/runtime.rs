@@ -7,7 +7,7 @@
 // 下面只列**名字**，不列行号（行号会漂）；定位用 `grep -n "<名字>" rust/legado-engine/src/runtime.rs`。
 //   对外入口：  search / book_info / toc / content / detect / verify_chain / download_cover
 //   搜索：      search_one（单源）/ SourceSearch（单源结果）/ SearchOptions
-//   链路校验：  detect_one / detect_chain（搜索→详情→目录→正文）/ DEFAULT_DETECT_TIMEOUT_MS
+//   链路校验：  DetectMode / detect_one / detect_chain（搜索→详情→目录→正文）/ DEFAULT_DETECT_TIMEOUT_MS
 //   正文清洗：  ct_of / spec_for / clean_text / strip_script_style / eval_rule_concat
 //   书名匹配：  normalize_book_name / names_match / bigram_jaccard
 //   封面：      cover_cache_path / looks_like_image / has_image_magic /
@@ -435,21 +435,51 @@ fn eval_rule_concat(content: &str, content_type: &str, rule: &str) -> String {
 /// (`http_client`), but the chain had no aggregate bound; a source could stall
 /// for minutes. Mirrors the JS bridge's 45s overall cap upstream.
 pub const DEFAULT_DETECT_TIMEOUT_MS: u64 = 45_000;
+pub const PROBE_DETECT_TIMEOUT_MS: u64 = 8_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DetectMode {
+    Probe,
+    #[default]
+    Full,
+}
+
+impl DetectMode {
+    /// Missing and unknown values retain the legacy full-chain behavior.
+    pub fn from_opt(value: Option<&str>) -> Self {
+        match value {
+            Some("probe") => Self::Probe,
+            _ => Self::Full,
+        }
+    }
+
+    pub fn default_timeout_ms(self) -> u64 {
+        match self {
+            Self::Probe => PROBE_DETECT_TIMEOUT_MS,
+            Self::Full => DEFAULT_DETECT_TIMEOUT_MS,
+        }
+    }
+}
 
 pub async fn detect(
     sources: &[BookSource],
     keyword: &str,
     concurrency: usize,
     timeout_ms: u64,
+    mode: DetectMode,
 ) -> Vec<DetectResult> {
     let owned: Vec<BookSource> = sources.to_vec();
     let keyword = keyword.to_string();
-    let per_source = Duration::from_millis(timeout_ms.clamp(10_000, 120_000));
+    let min_timeout_ms = match mode {
+        DetectMode::Probe => 3_000,
+        DetectMode::Full => 10_000,
+    };
+    let per_source = Duration::from_millis(timeout_ms.clamp(min_timeout_ms, 120_000));
     stream::iter(owned.into_iter().map(|s| {
         let keyword = keyword.clone();
-        async move { detect_one(&s, &keyword, per_source).await }
+        async move { detect_one(&s, &keyword, per_source, mode).await }
     }))
-    .buffer_unordered(concurrency.clamp(1, 8))
+    .buffer_unordered(concurrency.clamp(1, 16))
     .collect()
     .await
 }
@@ -457,9 +487,14 @@ pub async fn detect(
 /// Run one source's detection with an aggregate timeout. A timeout is reported
 /// as `stage = "timeout"` and must be treated as *retryable* by the caller, not
 /// as proof the source is broken.
-async fn detect_one(source: &BookSource, keyword: &str, budget: Duration) -> DetectResult {
+async fn detect_one(
+    source: &BookSource,
+    keyword: &str,
+    budget: Duration,
+    mode: DetectMode,
+) -> DetectResult {
     let started = std::time::Instant::now();
-    match tokio::time::timeout(budget, detect_chain(source, keyword)).await {
+    match tokio::time::timeout(budget, detect_chain(source, keyword, mode)).await {
         Ok(mut out) => {
             out.elapsedMs = started.elapsed().as_millis() as u64;
             out
@@ -476,7 +511,7 @@ async fn detect_one(source: &BookSource, keyword: &str, budget: Duration) -> Det
     }
 }
 
-async fn detect_chain(source: &BookSource, keyword: &str) -> DetectResult {
+async fn detect_chain(source: &BookSource, keyword: &str, mode: DetectMode) -> DetectResult {
     let mut out = DetectResult {
         sourceUrl: source.bookSourceUrl.clone(),
         sourceName: source.bookSourceName.clone(),
@@ -502,6 +537,12 @@ async fn detect_chain(source: &BookSource, keyword: &str) -> DetectResult {
     if item.bookUrl.trim().is_empty() {
         out.stage = FailReason::NoBookUrl.as_str().to_string();
         out.detail = "搜索结果缺少书籍地址".into();
+        return out;
+    }
+    if mode == DetectMode::Probe {
+        out.ok = true;
+        out.stage = "search".into();
+        out.detail = "搜索命中".into();
         return out;
     }
     let chain = verify_chain(source, &item.bookUrl, Some(&item.name)).await;
@@ -878,17 +919,58 @@ mod tests {
         assert!(!names_match("测试书名", "完全不同的书名"));
     }
 
-    /// Minimal blocking mock server: maps a path prefix to a fixed body.
-    fn mock_server() -> (String, std::thread::JoinHandle<()>) {
+    #[test]
+    fn test_detect_mode_defaults_to_full() {
+        assert_eq!(DetectMode::from_opt(Some("probe")), DetectMode::Probe);
+        assert_eq!(DetectMode::from_opt(Some("full")), DetectMode::Full);
+        assert_eq!(DetectMode::from_opt(None), DetectMode::Full);
+        assert_eq!(DetectMode::from_opt(Some("unknown")), DetectMode::Full);
+        assert_eq!(DetectMode::Probe.default_timeout_ms(), PROBE_DETECT_TIMEOUT_MS);
+        assert_eq!(DetectMode::Full.default_timeout_ms(), DEFAULT_DETECT_TIMEOUT_MS);
+    }
+
+    const DETECT_SEARCH_HTML: &str = "<ul>\
+        <li class='item'><a href='/book/1'>书一</a></li>\
+        <li class='item'><a href='/book/2'>书二</a></li>\
+        </ul>";
+    const DETECT_BOOK_HTML: &str =
+        "<h1>书一</h1><div class='intro'>简介文字</div><a id='toc' href='/toc'>目录</a>";
+    const DETECT_TOC_HTML: &str = "<ul>\
+        <li class='vol'><span>第一卷</span></li>\
+        <li class='item'><a href='/c/1'>第一章</a></li>\
+        <li class='item'><a href='/c/2'>第二章</a></li>\
+        </ul>";
+    const DETECT_CHAPTER_HTML: &str = "<div id='content'>正文内容正文内容正文内容正文内容正文内容\
+        正文内容正文内容正文内容正文内容正文内容正文内容正文内容正文内容</div>";
+
+    /// Minimal blocking mock server: maps fixed fixture paths to fixed bodies.
+    fn mock_server() -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::thread::JoinHandle<()>,
+    ) {
+        mock_server_with_toc(true)
+    }
+
+    fn mock_server_with_toc(toc_available: bool) -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::thread::JoinHandle<()>,
+    ) {
         use std::io::{Read, Write};
         use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let base = format!("http://{addr}");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_thread = Arc::clone(&hits);
         let handle = std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut socket) = stream else { break };
+                hits_for_thread.fetch_add(1, Ordering::SeqCst);
                 let mut buf = [0u8; 4096];
                 let n = socket.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]);
@@ -901,21 +983,15 @@ mod tests {
                     .unwrap_or("/")
                     .to_string();
                 let body = if path.starts_with("/search") {
-                    "<ul><li class='item'><a href='/book/1'>书一</a></li>\
-                     <li class='item'><a href='/book/2'>书二</a></li></ul>"
-                        .to_string()
+                    DETECT_SEARCH_HTML.to_string()
                 } else if path == "/book/1" {
-                    "<h1>书一</h1><div class='intro'>简介文字</div><a id='toc' href='/toc'>目录</a>"
-                        .to_string()
+                    DETECT_BOOK_HTML.to_string()
+                } else if path == "/toc" && toc_available {
+                    DETECT_TOC_HTML.to_string()
                 } else if path == "/toc" {
-                    "<ul>\
-                     <li class='vol'><span>第一卷</span></li>\
-                     <li class='item'><a href='/c/1'>第一章</a></li>\
-                     <li class='item'><a href='/c/2'>第二章</a></li>\
-                     </ul>"
-                        .to_string()
+                    String::new()
                 } else if path.starts_with("/c/") {
-                    format!("<div id='content'>{}</div>", "正文内容".repeat(40))
+                    DETECT_CHAPTER_HTML.to_string()
                 } else {
                     "nf".to_string()
                 };
@@ -927,7 +1003,7 @@ mod tests {
                 let _ = socket.write_all(resp.as_bytes());
             }
         });
-        (base, handle)
+        (base, hits, handle)
     }
 
     /// Binary-safe blocking server for the cover tests: routes by path.
@@ -1056,7 +1132,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_search_and_chain_end_to_end() {
-        let (base, _h) = mock_server();
+        let (base, _hits, _h) = mock_server();
         let source = sample_source(&base);
 
         let out = search(&[source.clone()], "书", &SearchOptions::default()).await;
@@ -1082,7 +1158,101 @@ mod tests {
         let content = content(&source, &chapters[1].url).await.unwrap();
         assert!(content.content.chars().count() > 50);
 
-        let detected = detect(&[source], "书", 2, DEFAULT_DETECT_TIMEOUT_MS).await;
+        let detected =
+            detect(&[source], "书", 2, DEFAULT_DETECT_TIMEOUT_MS, DetectMode::Full).await;
         assert!(detected[0].ok, "detect failed: {:?}", detected[0]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_detect_probe_stops_after_search() {
+        use std::sync::atomic::Ordering;
+
+        let (base, hits, _h) = mock_server();
+        let source = sample_source(&base);
+
+        let detected = detect(
+            &[source],
+            "书",
+            2,
+            PROBE_DETECT_TIMEOUT_MS,
+            DetectMode::Probe,
+        )
+        .await;
+
+        assert!(detected[0].ok, "probe failed: {:?}", detected[0]);
+        assert_eq!(detected[0].stage, "search");
+        assert_eq!(detected[0].contentLen, 0);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_detect_probe_no_results_is_not_unavailable() {
+        use std::sync::atomic::Ordering;
+
+        let (base, hits, _h) = mock_server();
+        let mut source = sample_source(&base);
+        source
+            .ruleSearch
+            .as_mut()
+            .unwrap()
+            .bookList = Some("li.missing".into());
+
+        let detected = detect(
+            &[source],
+            "书",
+            2,
+            PROBE_DETECT_TIMEOUT_MS,
+            DetectMode::Probe,
+        )
+        .await;
+
+        assert!(!detected[0].ok, "empty probe must fail: {:?}", detected[0]);
+        assert_eq!(detected[0].stage, "no_results");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_detect_full_runs_complete_chain() {
+        use std::sync::atomic::Ordering;
+
+        let (base, hits, _h) = mock_server();
+        let source = sample_source(&base);
+
+        let detected = detect(
+            &[source],
+            "书",
+            2,
+            DEFAULT_DETECT_TIMEOUT_MS,
+            DetectMode::Full,
+        )
+        .await;
+
+        assert!(detected[0].ok, "full detect failed: {:?}", detected[0]);
+        assert_eq!(detected[0].stage, "content");
+        assert!(detected[0].contentLen >= 50);
+        assert_eq!(hits.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_detect_full_toc_fetch_failure_is_explicit() {
+        use std::sync::atomic::Ordering;
+
+        let (base, hits, _h) = mock_server_with_toc(false);
+        let source = sample_source(&base);
+
+        let detected = detect(
+            &[source],
+            "书",
+            2,
+            DEFAULT_DETECT_TIMEOUT_MS,
+            DetectMode::Full,
+        )
+        .await;
+
+        assert!(!detected[0].ok, "toc failure must fail: {:?}", detected[0]);
+        assert_eq!(detected[0].stage, FailReason::TocFetch.as_str());
+        assert_eq!(detected[0].detail, format!("{base}/toc"));
+        assert_eq!(detected[0].contentLen, 0);
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
     }
 }

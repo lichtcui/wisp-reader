@@ -3,17 +3,15 @@ import { fileIo, picker } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import BuildProfile from 'BuildProfile';
 import { bookEngine } from '../engine/BookEngineNapi';
-import { BookSource, DetectResult, ExcludedSource, GateResult } from '../engine/types';
+import { BookSource, ExcludedSource, GateResult } from '../engine/types';
 import { loadBundled } from '../model/SourceRepository';
 import {
-  allForEngine,
   exportAll,
   getSource,
   listRows,
   remove,
   replaceAll,
   setEnabled,
-  sourceNaturalKey,
   SourceRow,
   upsertMany
 } from '../model/SourceStore';
@@ -26,11 +24,11 @@ import {
 } from '../model/SourceStoreBench';
 import { T16ReadyResult, T16RestoreResult, T16SeedResult } from '../model/SourceStoreBenchTypes';
 import { ensureSourceStore } from '../model/SourceStoreMigration';
-import { InsetDivider, SegmentedCell } from '../components/ListCells';
+import { SegmentedCell } from '../components/ListCells';
+import { DetectPanel } from '../components/DetectPanel';
 import {
   SourceManageRow,
   sourceRowMatchesQuery,
-  sourceRowStateLabel,
   sortSourceRowsForManage
 } from '../components/SourceRows';
 import {
@@ -40,14 +38,18 @@ import {
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 import { DEFAULT_DETECT_KEYWORD } from '../common/Const';
-
-/**
- * Detection verdict, derived from `DetectResult`. `noResult` and `timeout` are
- * deliberately kept apart from `unavailable`: a source that merely returned no
- * hits for the probe keyword (or timed out once) is not proven broken, so it is
- * excluded from the one-tap cleanup actions.
- */
-type DetectState = 'ok' | 'noResult' | 'timeout' | 'unavailable';
+import {
+  DETECT_BACKGROUND_INACTIVE,
+  DetectJobRunner
+} from '../model/DetectJobRunner';
+import {
+  DETECT_MODE_FULL,
+  DETECT_MODE_PROBE,
+  DETECT_STATUS_CANCELLED,
+  DETECT_STATUS_DONE,
+  DETECT_STATUS_FAILED,
+  DETECT_STATUS_RUNNING
+} from '../model/DetectJob';
 
 const SEARCH_DEBOUNCE_MS: number = 150;
 const SOURCE_FILTER_ALL: number = 0;
@@ -55,97 +57,6 @@ const SOURCE_FILTER_ENABLED: number = 1;
 const SOURCE_FILTER_DISABLED: number = 2;
 const SOURCE_FILTER_UNTESTED: number = 3;
 const SOURCE_FILTER_FAILED: number = 4;
-const DETECT_FILTER_ALL: number = 0;
-const DETECT_FILTER_UNTESTED: number = 1;
-const DETECT_FILTER_FAILED: number = 2;
-
-function detectStateOf(result: DetectResult): DetectState {
-  if (result.ok) {
-    return 'ok';
-  }
-  if (result.stage === 'no_results') {
-    return 'noResult';
-  }
-  if (result.stage === 'timeout') {
-    return 'timeout';
-  }
-  return 'unavailable';
-}
-
-function detectStateLabel(state: DetectState): string {
-  if (state === 'ok') {
-    return '可用';
-  }
-  if (state === 'noResult') {
-    return '无结果';
-  }
-  if (state === 'timeout') {
-    return '超时';
-  }
-  return '不可用';
-}
-
-/** Map a detect `stage` (engine `FailReason` string) to a user-facing label. */
-function detectStageLabel(stage: string): string {
-  if (stage === 'no_results') {
-    return '搜索未命中';
-  }
-  if (stage === 'timeout') {
-    return '检测超时';
-  }
-  if (stage === 'network_error') {
-    return '网络错误';
-  }
-  if (stage === 'builder_error') {
-    return '无法构建搜索请求';
-  }
-  if (stage === 'no_book_url') {
-    return '未解析到书籍地址';
-  }
-  if (stage === 'bookinfo_fetch') {
-    return '详情页获取失败';
-  }
-  if (stage === 'toc_fetch') {
-    return '目录页获取失败';
-  }
-  if (stage === 'toc_parse') {
-    return '目录解析失败';
-  }
-  if (stage === 'no_toc_rule') {
-    return '缺少目录规则';
-  }
-  if (stage === 'chapter_fetch') {
-    return '章节页获取失败';
-  }
-  if (stage === 'no_content_rule') {
-    return '缺少正文规则';
-  }
-  if (stage === 'content_empty') {
-    return '正文为空';
-  }
-  if (stage === 'content_short') {
-    return '正文过短';
-  }
-  if (stage === 'mismatch') {
-    return '书名不一致';
-  }
-  if (stage === 'blocked') {
-    return '被站点拦截';
-  }
-  if (stage === 'not_found') {
-    return '页面不存在';
-  }
-  if (stage === 'rate_limited') {
-    return '请求过于频繁';
-  }
-  if (stage === 'server_error') {
-    return '服务器错误';
-  }
-  if (stage === 'http_error') {
-    return 'HTTP 错误';
-  }
-  return stage.length > 0 ? stage : '未知错误';
-}
 
 function detailPad2(value: number): string {
   return value < 10 ? '0' + value.toString() : value.toString();
@@ -288,18 +199,8 @@ export struct BookSourceManagePage {
   @Local sourceChipUntested: number = 0;
   @Local sourceChipFailed: number = 0;
   @Local sourceListCount: number = 0;
-  @Local detectQuery: string = '';
-  @Local detectAppliedQuery: string = '';
-  @Local detectFilter: number = DETECT_FILTER_ALL;
-  @Local detectGroup: string | undefined = undefined;
-  @Local detectGroups: string[] = [];
-  @Local detectChipTotal: number = 0;
-  @Local detectChipUntested: number = 0;
-  @Local detectChipFailed: number = 0;
-  @Local detectListCount: number = 0;
   @Local enabledRows: number = 0;
   @Local totalRows: number = 0;
-  @Local jobText: string = '检测书源…';
   @Local summary: string = '';
   @Local excludedSummary: string = '';
   @Local excluded: ExcludedSource[] = [];
@@ -307,7 +208,14 @@ export struct BookSourceManagePage {
   @Local showUrl: boolean = false;
   @Local urlInput: string = '';
   @Local busy: boolean = false;
-  @Local detectResults: DetectResult[] = [];
+  @Local runner: DetectJobRunner = DetectJobRunner.instance();
+  @Local detectMode: string = DETECT_MODE_FULL;
+  @Local detectClockNow: number = Date.now();
+  @Local detectLaunching: boolean = false;
+  @Local detectCanResume: boolean = false;
+  @Local detectBackgroundState: string = DETECT_BACKGROUND_INACTIVE;
+  @Local jobOkCount: number = 0;
+  @Local jobUnavailableCount: number = 0;
   @Local statusVisible: boolean = false;
   @Local selectedSource: SourceRow | undefined = undefined;
   @Local sourceDetail: SourceDetailData | undefined = undefined;
@@ -317,17 +225,24 @@ export struct BookSourceManagePage {
   private pageStartedAt: number = 0;
   private t16Pending: boolean = false;
   private t16MeasureStarted: boolean = false;
+  private detectRestoreStarted: boolean = false;
   private sourceDs: SourceManageDataSource = new SourceManageDataSource();
-  private detectDs: SourceManageDataSource = new SourceManageDataSource();
   private sourceScroller: Scroller = new Scroller();
-  private detectScroller: Scroller = new Scroller();
   private sourceDebounceId: number = -1;
-  private detectDebounceId: number = -1;
   private sourceDetailRequest: number = 0;
+  private detectClockId: number = -1;
+
+  @Monitor('runner.updatedAt', 'runner.status')
+  onDetectJobChanged(): void {
+    this.syncDetectJobView();
+    this.reload();
+  }
 
   aboutToAppear(): void {
     this.activeSegment = 0;
     this.pageStartedAt = Date.now();
+    this.detectClockNow = this.pageStartedAt;
+    this.startDetectClock();
     this.preparePage();
   }
 
@@ -336,14 +251,31 @@ export struct BookSourceManagePage {
       clearTimeout(this.sourceDebounceId);
       this.sourceDebounceId = -1;
     }
-    if (this.detectDebounceId >= 0) {
-      clearTimeout(this.detectDebounceId);
-      this.detectDebounceId = -1;
+    if (this.detectClockId >= 0) {
+      clearInterval(this.detectClockId);
+      this.detectClockId = -1;
     }
   }
 
   private ctx(): common.UIAbilityContext | undefined {
     return this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
+  }
+
+  private startDetectClock(): void {
+    if (this.detectClockId >= 0) {
+      clearInterval(this.detectClockId);
+    }
+    this.detectClockId = setInterval((): void => {
+      this.detectClockNow = Date.now();
+      this.detectBackgroundState = this.runner.runtimeBackgroundState();
+      this.detectCanResume = this.runner.canResume();
+    }, 1000);
+  }
+
+  private syncDetectJobView(): void {
+    this.detectMode = this.runner.mode === DETECT_MODE_PROBE ? DETECT_MODE_PROBE : DETECT_MODE_FULL;
+    this.detectCanResume = this.runner.canResume();
+    this.detectBackgroundState = this.runner.runtimeBackgroundState();
   }
 
   private async reload(): Promise<void> {
@@ -358,19 +290,31 @@ export struct BookSourceManagePage {
       this.totalRows = next.length;
       this.enabledRows = this.countEnabled(next);
       this.sourceGroups = this.collectGroups(next);
-      this.detectGroups = this.collectGroups(next);
       this.resetStaleGroups();
       this.refreshSourceProjection();
-      this.refreshDetectProjection();
+      this.refreshJobCounts();
     } catch (err) {
       this.rows = [];
       this.sourceGroups = [];
-      this.detectGroups = [];
       this.totalRows = 0;
       this.enabledRows = 0;
       this.refreshSourceProjection();
-      this.refreshDetectProjection();
+      this.refreshJobCounts();
     }
+  }
+
+  private refreshJobCounts(): void {
+    let ok: number = 0;
+    let unavailable: number = 0;
+    for (const row of this.rows) {
+      if (row.detectState === 'ok') {
+        ok += 1;
+      } else if (row.detectState === 'unavailable') {
+        unavailable += 1;
+      }
+    }
+    this.jobOkCount = ok;
+    this.jobUnavailableCount = unavailable;
   }
 
   private countEnabled(rows: SourceRow[]): number {
@@ -405,9 +349,6 @@ export struct BookSourceManagePage {
     if (this.sourceGroup !== undefined && this.sourceGroups.indexOf(this.sourceGroup) < 0) {
       this.sourceGroup = undefined;
     }
-    if (this.detectGroup !== undefined && this.detectGroups.indexOf(this.detectGroup) < 0) {
-      this.detectGroup = undefined;
-    }
   }
 
   private contextRows(rows: SourceRow[], query: string, group: string | undefined): SourceRow[] {
@@ -435,16 +376,6 @@ export struct BookSourceManagePage {
       return row.detectState.length === 0;
     }
     if (this.sourceFilter === SOURCE_FILTER_FAILED) {
-      return row.detectState === 'unavailable';
-    }
-    return true;
-  }
-
-  private detectFilterMatches(row: SourceRow): boolean {
-    if (this.detectFilter === DETECT_FILTER_UNTESTED) {
-      return row.detectState.length === 0;
-    }
-    if (this.detectFilter === DETECT_FILTER_FAILED) {
       return row.detectState === 'unavailable';
     }
     return true;
@@ -490,36 +421,6 @@ export struct BookSourceManagePage {
     this.sourceListCount = next.length;
   }
 
-  private refreshDetectProjection(): void {
-    const context: SourceRow[] = this.contextRows(this.rows, this.detectAppliedQuery, this.detectGroup);
-    let untested: number = 0;
-    let failed: number = 0;
-    for (const row of context) {
-      if (row.detectState.length === 0) {
-        untested += 1;
-      } else if (row.detectState === 'unavailable') {
-        failed += 1;
-      }
-    }
-    this.detectChipTotal = context.length;
-    this.detectChipUntested = untested;
-    this.detectChipFailed = failed;
-    if ((this.detectFilter === DETECT_FILTER_UNTESTED && untested === 0) ||
-      (this.detectFilter === DETECT_FILTER_FAILED && failed === 0)) {
-      this.detectFilter = DETECT_FILTER_ALL;
-    }
-
-    const visible: SourceRow[] = [];
-    for (const row of context) {
-      if (this.detectFilterMatches(row)) {
-        visible.push(row);
-      }
-    }
-    const next: SourceRow[] = sortSourceRowsForManage(visible);
-    this.detectDs.setItems(next);
-    this.detectListCount = next.length;
-  }
-
   private scheduleSourceQuery(value: string): void {
     this.sourceQuery = value;
     if (this.sourceDebounceId >= 0) {
@@ -529,18 +430,6 @@ export struct BookSourceManagePage {
       this.sourceDebounceId = -1;
       this.sourceAppliedQuery = value;
       this.refreshSourceProjection();
-    }, SEARCH_DEBOUNCE_MS);
-  }
-
-  private scheduleDetectQuery(value: string): void {
-    this.detectQuery = value;
-    if (this.detectDebounceId >= 0) {
-      clearTimeout(this.detectDebounceId);
-    }
-    this.detectDebounceId = setTimeout((): void => {
-      this.detectDebounceId = -1;
-      this.detectAppliedQuery = value;
-      this.refreshDetectProjection();
     }, SEARCH_DEBOUNCE_MS);
   }
 
@@ -554,34 +443,14 @@ export struct BookSourceManagePage {
     this.refreshSourceProjection();
   }
 
-  private clearDetectQuery(): void {
-    if (this.detectDebounceId >= 0) {
-      clearTimeout(this.detectDebounceId);
-      this.detectDebounceId = -1;
-    }
-    this.detectQuery = '';
-    this.detectAppliedQuery = '';
-    this.refreshDetectProjection();
-  }
-
   private selectSourceFilter(index: number): void {
     this.sourceFilter = index;
     this.refreshSourceProjection();
   }
 
-  private selectDetectFilter(index: number): void {
-    this.detectFilter = index;
-    this.refreshDetectProjection();
-  }
-
   private selectSourceGroup(group: string | undefined): void {
     this.sourceGroup = group;
     this.refreshSourceProjection();
-  }
-
-  private selectDetectGroup(group: string | undefined): void {
-    this.detectGroup = group;
-    this.refreshDetectProjection();
   }
 
   private clearSourceCriteria(): void {
@@ -594,18 +463,6 @@ export struct BookSourceManagePage {
     this.sourceFilter = SOURCE_FILTER_ALL;
     this.sourceGroup = undefined;
     this.refreshSourceProjection();
-  }
-
-  private clearDetectCriteria(): void {
-    if (this.detectDebounceId >= 0) {
-      clearTimeout(this.detectDebounceId);
-      this.detectDebounceId = -1;
-    }
-    this.detectQuery = '';
-    this.detectAppliedQuery = '';
-    this.detectFilter = DETECT_FILTER_ALL;
-    this.detectGroup = undefined;
-    this.refreshDetectProjection();
   }
 
   private async preparePage(): Promise<void> {
@@ -630,6 +487,16 @@ export struct BookSourceManagePage {
       return;
     }
     await this.reload();
+    if (!this.detectRestoreStarted) {
+      this.detectRestoreStarted = true;
+      const previousStatus: string = this.runner.status;
+      const previousUpdatedAt: number = this.runner.updatedAt;
+      await this.runner.restore(ctx);
+      this.syncDetectJobView();
+      if (this.runner.status !== previousStatus || this.runner.updatedAt !== previousUpdatedAt) {
+        await this.reload();
+      }
+    }
   }
 
   private async runT16Ready(): Promise<void> {
@@ -818,10 +685,9 @@ export struct BookSourceManagePage {
       this.totalRows = next.length;
       this.enabledRows = this.countEnabled(next);
       this.sourceGroups = this.collectGroups(next);
-      this.detectGroups = this.collectGroups(next);
       this.resetStaleGroups();
       this.refreshSourceProjection();
-      this.refreshDetectProjection();
+      this.refreshJobCounts();
       if (this.selectedSource !== undefined && this.selectedSource.id === row.id) {
         this.statusVisible = false;
         this.selectedSource = undefined;
@@ -873,7 +739,8 @@ export struct BookSourceManagePage {
       }
       this.enabledRows = this.countEnabled(this.rows);
       this.refreshSourceProjection();
-      this.refreshDetectProjection();
+      this.refreshJobCounts();
+      this.rows = this.rows.slice();
     } catch (err) {
       this.summary = '保存启用状态失败';
     }
@@ -943,7 +810,6 @@ export struct BookSourceManagePage {
     this.summary = `已恢复内置书源 ${bundled.length} 个`;
     this.excluded = [];
     this.excludedSummary = '';
-    this.detectResults = [];
     this.statusVisible = false;
     this.selectedSource = undefined;
     this.sourceDetail = undefined;
@@ -985,13 +851,59 @@ export struct BookSourceManagePage {
     this.loadSourceDetail(row, request);
   }
 
-  private openDetectStatus(): void {
-    this.sourceDetailRequest += 1;
-    this.selectedSource = undefined;
-    this.sourceDetail = undefined;
-    this.sourceDetailLoading = false;
-    this.sourceDetailFailed = false;
-    this.statusVisible = true;
+  private async launchDetect(mode: string, sourceIds: string[]): Promise<void> {
+    if (this.detectLaunching) {
+      return;
+    }
+    if (sourceIds.length === 0) {
+      this.summary = '当前范围没有可检测的书源';
+      return;
+    }
+    this.detectLaunching = true;
+    try {
+      const accepted: boolean = await this.runner.start(mode, DEFAULT_DETECT_KEYWORD, sourceIds);
+      this.syncDetectJobView();
+      if (accepted) {
+        this.summary = '';
+      } else if (this.runner.status !== DETECT_STATUS_RUNNING) {
+        this.summary = '检测作业启动失败';
+      }
+    } finally {
+      this.detectLaunching = false;
+      this.syncDetectJobView();
+    }
+  }
+
+  private async cancelDetect(): Promise<void> {
+    if (this.detectLaunching) {
+      return;
+    }
+    this.detectLaunching = true;
+    try {
+      if (!(await this.runner.cancel())) {
+        this.summary = '检测作业未在运行';
+      }
+      this.syncDetectJobView();
+    } finally {
+      this.detectLaunching = false;
+      this.syncDetectJobView();
+    }
+  }
+
+  private async resumeDetect(): Promise<void> {
+    if (this.detectLaunching) {
+      return;
+    }
+    this.detectLaunching = true;
+    try {
+      if (!(await this.runner.resume())) {
+        this.summary = '当前进程未保留可续跑范围，请重新开始';
+      }
+      this.syncDetectJobView();
+    } finally {
+      this.detectLaunching = false;
+      this.syncDetectJobView();
+    }
   }
 
   private detailRequestCurrent(row: SourceRow, request: number): boolean {
@@ -1031,53 +943,9 @@ export struct BookSourceManagePage {
     }
   }
 
-  private async runDetect(): Promise<void> {
-    if (this.busy) {
-      return;
-    }
-    const ctx: common.UIAbilityContext | undefined = this.ctx();
-    if (ctx === undefined) {
-      return;
-    }
-    let enabled: BookSource[] = [];
-    try {
-      await ensureSourceStore(ctx);
-      enabled = await allForEngine({ enabled: true });
-    } catch (err) {
-      this.summary = '检测失败';
-      return;
-    }
-    if (enabled.length === 0) {
-      this.summary = '没有启用的书源';
-      return;
-    }
-    this.busy = true;
-    this.detectResults = [];
-    this.statusVisible = false;
-    try {
-      this.detectResults = await bookEngine.detect(enabled, DEFAULT_DETECT_KEYWORD);
-      this.summary = this.detectSummary();
-      this.jobText = this.detectSummary();
-      this.statusVisible = true;
-    } catch (err) {
-      this.summary = '检测失败';
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  private countState(state: DetectState): number {
-    let n = 0;
-    for (const r of this.detectResults) {
-      if (detectStateOf(r) === state) {
-        n += 1;
-      }
-    }
-    return n;
-  }
-
   private sourceRowKey(source: SourceRow): string {
-    return source.id.toString() + '#' + (source.enabled ? '1' : '0');
+    return source.id.toString() + '#' + (source.enabled ? '1' : '0') + '#' +
+      source.detectState + '#' + source.respondMs.toString();
   }
 
   private groupLabel(group: string | undefined): string {
@@ -1106,11 +974,6 @@ export struct BookSourceManagePage {
   private sourceGroupMenuItems(): MenuElement[] {
     return this.groupMenuItems(this.sourceGroups,
       (next: string | undefined) => this.selectSourceGroup(next));
-  }
-
-  private detectGroupMenuItems(): MenuElement[] {
-    return this.groupMenuItems(this.detectGroups,
-      (next: string | undefined) => this.selectDetectGroup(next));
   }
 
   private addMenuItems(): MenuElement[] {
@@ -1158,36 +1021,61 @@ export struct BookSourceManagePage {
     return items;
   }
 
-  private detectSummary(): string {
-    return `检测完成：可用 ${this.countState('ok')} / 无结果 ${this.countState('noResult')} / ` +
-      `超时 ${this.countState('timeout')} / 不可用 ${this.countState('unavailable')}`;
-  }
-
-  /** 检测结果是自然键（URL + 名称）；同 URL 孪生源不能按 URL 批量误伤。 */
-  private unavailableKeys(): Set<string> {
-    const set: Set<string> = new Set<string>();
-    for (const r of this.detectResults) {
-      if (detectStateOf(r) === 'unavailable') {
-        set.add(sourceNaturalKey(r.sourceUrl, r.sourceName));
-      }
-    }
-    return set;
-  }
-
-  private unavailableIds(): Set<number> {
-    const keys: Set<string> = this.unavailableKeys();
+  private uniqueSourceIds(sourceIds: number[]): Set<number> {
     const ids: Set<number> = new Set<number>();
-    for (const row of this.rows) {
-      if (keys.has(sourceNaturalKey(row.url, row.name))) {
-        ids.add(row.id);
+    for (const id of sourceIds) {
+      if (Number.isInteger(id) && id > 0) {
+        ids.add(id);
       }
     }
     return ids;
   }
 
-  /** One-tap: turn off every source judged hard-unavailable. */
-  private async disableUnavailable(): Promise<void> {
-    const ids: Set<number> = this.unavailableIds();
+  private matchingUnavailableRows(sourceIds: number[]): SourceRow[] {
+    const ids: Set<number> = this.uniqueSourceIds(sourceIds);
+    const matched: SourceRow[] = [];
+    for (const row of this.rows) {
+      if (ids.has(row.id) && row.detectState === 'unavailable') {
+        matched.push(row);
+      }
+    }
+    return matched;
+  }
+
+  private confirmDisableUnavailable(sourceIds: number[]): void {
+    const rows: SourceRow[] = this.matchingUnavailableRows(sourceIds);
+    let enabled: number = 0;
+    for (const row of rows) {
+      if (row.enabled) {
+        enabled += 1;
+      }
+    }
+    if (enabled === 0) {
+      this.summary = '不可用源均已关闭';
+      return;
+    }
+    this.getUIContext().showAlertDialog({
+      title: '关闭不可用书源',
+      message: '将关闭 ' + enabled.toString() + ' 个不可用书源，书源数据会保留。',
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        fontColor: $r('app.color.text_2'),
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '关闭',
+        fontColor: $r('app.color.brand'),
+        action: () => {
+          this.disableUnavailable(sourceIds);
+        }
+      }
+    });
+  }
+
+  private async disableUnavailable(sourceIds: number[]): Promise<void> {
+    const ids: Set<number> = this.uniqueSourceIds(sourceIds);
     if (ids.size === 0) {
       return;
     }
@@ -1199,14 +1087,12 @@ export struct BookSourceManagePage {
     try {
       await ensureSourceStore(ctx);
       for (const row of this.rows) {
-        if (ids.has(row.id) && row.enabled) {
+        if (ids.has(row.id) && row.detectState === 'unavailable' && row.enabled) {
           await setEnabled(row.id, false);
           changed += 1;
         }
       }
-      if (changed > 0) {
-        await this.reload();
-      }
+      await this.reload();
     } catch (err) {
       this.summary = '关闭不可用源失败';
       return;
@@ -1214,10 +1100,33 @@ export struct BookSourceManagePage {
     this.summary = changed > 0 ? `已关闭 ${changed} 个不可用源` : '不可用源均已关闭';
   }
 
-  /** One-tap: remove every source judged hard-unavailable. */
-  private async deleteUnavailable(): Promise<void> {
-    const keys: Set<string> = this.unavailableKeys();
-    const ids: Set<number> = this.unavailableIds();
+  private confirmDeleteUnavailable(sourceIds: number[]): void {
+    const rows: SourceRow[] = this.matchingUnavailableRows(sourceIds);
+    if (rows.length === 0) {
+      return;
+    }
+    this.getUIContext().showAlertDialog({
+      title: '删除不可用书源',
+      message: '确定删除 ' + rows.length.toString() + ' 个不可用书源吗？删除后不可恢复。',
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        fontColor: $r('app.color.text_2'),
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '删除',
+        fontColor: $r('app.color.brand'),
+        action: () => {
+          this.deleteUnavailable(sourceIds);
+        }
+      }
+    });
+  }
+
+  private async deleteUnavailable(sourceIds: number[]): Promise<void> {
+    const ids: Set<number> = this.uniqueSourceIds(sourceIds);
     if (ids.size === 0) {
       return;
     }
@@ -1229,7 +1138,7 @@ export struct BookSourceManagePage {
     try {
       await ensureSourceStore(ctx);
       for (const row of this.rows) {
-        if (ids.has(row.id)) {
+        if (ids.has(row.id) && row.detectState === 'unavailable') {
           await remove(row.id);
           removed += 1;
         }
@@ -1239,33 +1148,7 @@ export struct BookSourceManagePage {
       this.summary = '删除不可用源失败';
       return;
     }
-    this.detectResults = this.detectResults.filter((r: DetectResult) =>
-      !keys.has(sourceNaturalKey(r.sourceUrl, r.sourceName)));
     this.summary = `已删除 ${removed} 个不可用源`;
-    if (this.detectResults.length === 0) {
-      this.statusVisible = false;
-    }
-  }
-
-  private stateColor(state: DetectState): Resource {
-    if (state === 'ok') {
-      return $r('app.color.brand');
-    }
-    if (state === 'noResult') {
-      return $r('app.color.text_3');
-    }
-    if (state === 'timeout') {
-      return $r('app.color.info');
-    }
-    return $r('app.color.warning');
-  }
-
-  private resultDetail(result: DetectResult): string {
-    const state: DetectState = detectStateOf(result);
-    if (state === 'ok') {
-      return `正文 ${result.contentLen} 字 · ${result.elapsedMs}ms`;
-    }
-    return `${detectStageLabel(result.stage)} · ${result.elapsedMs}ms`;
   }
 
   private reasonCounts(): string {
@@ -1282,94 +1165,53 @@ export struct BookSourceManagePage {
     return parts.join('、');
   }
 
-  @Builder
-  statusRow(result: DetectResult) {
-    Row() {
-      Column({ space: 3 }) {
-        Text(result.sourceName.length > 0 ? result.sourceName : result.sourceUrl)
-          .fontSize(14)
-          .fontColor($r('app.color.text_1'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.resultDetail(result))
-          .fontSize(12)
-          .fontColor($r('app.color.text_4'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-
-      Text(detectStateLabel(detectStateOf(result)))
-        .fontSize(12)
-        .fontColor(this.stateColor(detectStateOf(result)))
-        .padding({ left: 10, right: 10, top: 3, bottom: 3 })
-        .backgroundColor($r('app.color.bg_pill'))
-        .borderRadius(10)
-    }
-    .width('100%')
-    .padding({ top: 8, bottom: 8 })
-    .alignItems(VerticalAlign.Center)
+  private jobModeLabel(): string {
+    return this.runner.mode === DETECT_MODE_PROBE ? '预检' : '完整检测';
   }
 
-  @Builder
-  statusContent() {
-    Column() {
-      Text(this.detectSummary())
-        .fontSize(14)
-        .fontColor($r('app.color.text_1'))
-        .width('100%')
-      Text('可用=完整链路通过；无结果=探测词未命中，源未必失效；超时=请求超时，可能瞬时。' +
-        '以上两者不参与一键清理。不可用=链路失败（网络/解析/规则缺失等），可一键关闭或删除。')
-        .fontSize(12)
-        .fontColor($r('app.color.text_4'))
-        .width('100%')
-        .margin({ top: 6 })
-
-      Scroll() {
-        Column() {
-          ForEach(this.detectResults, (result: DetectResult, index: number) => {
-            this.statusRow(result)
-            if (index < this.detectResults.length - 1) {
-              InsetDivider()
-            }
-          }, (result: DetectResult, index: number) => result.sourceUrl + '|' + index.toString())
-        }
-        .width('100%')
-      }
-      .width('100%')
-      .constraintSize({ maxHeight: 320 })
-      .scrollBar(BarState.Off)
-      .margin({ top: 8 })
-
-      Row({ space: 12 }) {
-        Button(`关闭全部不可用（${this.countState('unavailable')}）`)
-          .layoutWeight(1)
-          .height(44)
-          .fontSize(14)
-          .fontColor($r('app.color.brand'))
-          .backgroundColor($r('app.color.bg_pill'))
-          .borderRadius(22)
-          .enabled(this.countState('unavailable') > 0)
-          .onClick(() => {
-            this.disableUnavailable();
-          })
-        Button(`删除全部不可用（${this.countState('unavailable')}）`)
-          .layoutWeight(1)
-          .height(44)
-          .fontSize(14)
-          .fontColor($r('app.color.on_brand'))
-          .backgroundColor($r('app.color.brand'))
-          .borderRadius(22)
-          .enabled(this.countState('unavailable') > 0)
-          .onClick(() => {
-            this.deleteUnavailable();
-          })
-      }
-      .width('100%')
-      .margin({ top: 12 })
+  private jobBarTitle(): string {
+    if (this.runner.status === DETECT_STATUS_RUNNING) {
+      return this.runner.done.toString() + '/' + this.runner.total.toString() + ' · ' + this.jobModeLabel();
     }
-    .width('100%')
+    if (this.runner.status === DETECT_STATUS_DONE) {
+      return this.runner.mode === DETECT_MODE_PROBE ? '预检完成' : '检测完成';
+    }
+    if (this.runner.status === DETECT_STATUS_CANCELLED) {
+      return '已取消';
+    }
+    if (this.runner.status === DETECT_STATUS_FAILED) {
+      return '检测失败';
+    }
+    return '检测书源…';
+  }
+
+  private jobBarMeta(): string {
+    if (this.runner.status === DETECT_STATUS_RUNNING) {
+      return '检测中 · 每批 ' + this.runner.batchSize.toString() + ' 个';
+    }
+    if (this.runner.status === DETECT_STATUS_DONE) {
+      const okLabel: string = this.runner.mode === DETECT_MODE_PROBE ? '预检通过' : '可用';
+      return okLabel + ' ' + this.jobOkCount.toString() + ' / 不可用 ' +
+        this.jobUnavailableCount.toString();
+    }
+    if (this.runner.status === DETECT_STATUS_CANCELLED ||
+      this.runner.status === DETECT_STATUS_FAILED) {
+      return '已测 ' + this.runner.done.toString() + ' / ' + this.runner.total.toString();
+    }
+    return '选择范围后开始检测';
+  }
+
+  private jobBarDotColor(): ResourceColor {
+    if (this.runner.status === DETECT_STATUS_RUNNING) {
+      return $r('app.color.info');
+    }
+    if (this.runner.status === DETECT_STATUS_FAILED) {
+      return $r('app.color.warning');
+    }
+    if (this.runner.status === DETECT_STATUS_DONE) {
+      return $r('app.color.brand');
+    }
+    return $r('app.color.text_4');
   }
 
   @Builder
@@ -1525,41 +1367,7 @@ export struct BookSourceManagePage {
   }
 
   @Builder
-  detectSearchBar() {
-    Row() {
-      SymbolGlyph($r('sys.symbol.magnifyingglass'))
-        .fontSize(18)
-        .fontColor([$r('app.color.text_4')])
-      TextInput({ text: this.detectQuery, placeholder: '搜索检测结果' })
-        .layoutWeight(1)
-        .height(44)
-        .fontSize(15)
-        .fontColor($r('app.color.text_1'))
-        .placeholderColor($r('app.color.text_5'))
-        .backgroundColor(Color.Transparent)
-        .padding({ left: 8, right: 0 })
-        .onChange((value: string) => {
-          this.scheduleDetectQuery(value);
-        })
-      if (this.detectQuery.length > 0) {
-        Text('✕')
-          .fontSize(14)
-          .fontColor($r('app.color.text_4'))
-          .padding({ left: 6, right: 4, top: 8, bottom: 8 })
-          .onClick(() => {
-            this.clearDetectQuery();
-          })
-      }
-    }
-    .width('100%')
-    .height(44)
-    .padding({ left: 14, right: 8 })
-    .backgroundColor($r('app.color.bg_card'))
-    .borderRadius(22)
-  }
-
-  @Builder
-  emptyState(sourceScope: boolean) {
+  emptyState() {
     Column({ space: 10 }) {
       Text(this.totalRows === 0 ? '还没有书源' : '没有匹配的书源')
         .fontSize(16)
@@ -1578,10 +1386,8 @@ export struct BookSourceManagePage {
         .onClick(() => {
           if (this.totalRows === 0) {
             this.confirmResetBundled();
-          } else if (sourceScope) {
-            this.clearSourceCriteria();
           } else {
-            this.clearDetectCriteria();
+            this.clearSourceCriteria();
           }
         })
     }
@@ -1665,6 +1471,7 @@ export struct BookSourceManagePage {
             ListItem() {
               SourceManageRow({
                 source: source,
+                detectMode: this.detectMode,
                 onDetail: (source: SourceRow) => {
                   this.openSourceDetail(source);
                 },
@@ -1690,7 +1497,7 @@ export struct BookSourceManagePage {
         .visibility(this.sourceListCount === 0 ? Visibility.Hidden : Visibility.Visible)
 
         if (this.sourceListCount === 0) {
-          this.emptyState(true)
+          this.emptyState()
         }
       }
       .layoutWeight(1)
@@ -1703,114 +1510,44 @@ export struct BookSourceManagePage {
 
   @Builder
   detectSegment() {
-    Column() {
-      Column({ space: 8 }) {
-        this.detectSearchBar()
-        Scroll() {
-          Row({ space: 8 }) {
-            ManageFilterChip({
-              label: '全部 ' + this.detectChipTotal.toString(),
-              selected: this.detectFilter === DETECT_FILTER_ALL,
-              onSelect: () => this.selectDetectFilter(DETECT_FILTER_ALL)
-            })
-            if (this.detectChipUntested > 0) {
-              ManageFilterChip({
-                label: '未测 ' + this.detectChipUntested.toString(),
-                selected: this.detectFilter === DETECT_FILTER_UNTESTED,
-                onSelect: () => this.selectDetectFilter(DETECT_FILTER_UNTESTED)
-              })
-            }
-            if (this.detectChipFailed > 0) {
-              ManageFilterChip({
-                label: '失败 ' + this.detectChipFailed.toString(),
-                selected: this.detectFilter === DETECT_FILTER_FAILED,
-                onSelect: () => this.selectDetectFilter(DETECT_FILTER_FAILED)
-              })
-            }
-            Text(this.groupLabel(this.detectGroup))
-              .fontSize(13)
-              .fontColor(this.detectGroup === undefined ? $r('app.color.text_2') : $r('app.color.brand'))
-              .backgroundColor($r('app.color.bg_pill'))
-              .height(32)
-              .padding({ left: 14, right: 14 })
-              .borderRadius(16)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .bindMenu(this.detectGroupMenuItems())
-          }
-          .padding({ right: 16 })
-        }
-        .width('100%')
-        .height(32)
-        .scrollable(ScrollDirection.Horizontal)
-        .scrollBar(BarState.Off)
+    DetectPanel({
+      rows: this.rows,
+      status: this.runner.status,
+      mode: this.runner.mode,
+      total: this.runner.total,
+      done: this.runner.done,
+      startedAt: this.runner.startedAt,
+      updatedAt: this.runner.updatedAt,
+      message: this.runner.message,
+      backgroundState: this.detectBackgroundState,
+      clockNow: this.detectClockNow,
+      launching: this.detectLaunching,
+      canResume: this.detectCanResume,
+      onStart: (mode: string, sourceIds: string[]) => {
+        this.launchDetect(mode, sourceIds);
+      },
+      onCancel: () => {
+        this.cancelDetect();
+      },
+      onResume: () => {
+        this.resumeDetect();
+      },
+      onDetail: (source: SourceRow) => {
+        this.openSourceDetail(source);
+      },
+      onToggle: (source: SourceRow, on: boolean) => {
+        this.toggleSource(source, on);
+      },
+      onDelete: (source: SourceRow) => {
+        this.confirmRemoveSource(source);
+      },
+      onDisableUnavailable: (sourceIds: number[]) => {
+        this.confirmDisableUnavailable(sourceIds);
+      },
+      onDeleteUnavailable: (sourceIds: number[]) => {
+        this.confirmDeleteUnavailable(sourceIds);
       }
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 4, bottom: 8 })
-
-      Row({ space: 12 }) {
-        if (this.detectResults.length > 0) {
-          Text('查看状态')
-            .fontSize(13)
-            .fontColor($r('app.color.brand'))
-            .onClick(() => {
-              this.openDetectStatus();
-            })
-        }
-        Blank()
-        Button(this.busy ? '处理中…' : '检测可用性')
-          .height(36)
-          .fontSize(14)
-          .fontColor($r('app.color.on_brand'))
-          .backgroundColor($r('app.color.brand'))
-          .borderRadius(18)
-          .enabled(!this.busy)
-          .onClick(() => {
-            this.runDetect();
-          })
-      }
-      .width('100%')
-      .height(44)
-      .padding({ left: 16, right: 16 })
-      .alignItems(VerticalAlign.Center)
-
-      Stack() {
-        List({ scroller: this.detectScroller }) {
-          LazyForEach(this.detectDs, (source: SourceRow) => {
-            ListItem() {
-              SourceManageRow({
-                source: source,
-                onDetail: (source: SourceRow) => {
-                  this.openSourceDetail(source);
-                },
-                onToggle: (source: SourceRow, on: boolean) => {
-                  this.toggleSource(source, on);
-                },
-                onDelete: (source: SourceRow) => {
-                  this.confirmRemoveSource(source);
-                }
-              })
-            }
-          }, (source: SourceRow) => 'detect_' + this.sourceRowKey(source))
-        }
-        .width('100%')
-        .height('100%')
-        .divider({
-          strokeWidth: 1,
-          color: $r('app.color.divider'),
-          startMargin: 16
-        })
-        .cachedCount(8)
-        .scrollBar(BarState.Off)
-        .visibility(this.detectListCount === 0 ? Visibility.Hidden : Visibility.Visible)
-
-        if (this.detectListCount === 0) {
-          this.emptyState(false)
-        }
-      }
-      .layoutWeight(1)
-      .width('100%')
-    }
+    })
     .width('100%')
     .height('100%')
     .visibility(this.activeSegment === 1 ? Visibility.Visible : Visibility.Hidden)
@@ -1819,33 +1556,76 @@ export struct BookSourceManagePage {
   @Builder
   jobBar() {
     Row({ space: 10 }) {
-      Row()
-        .width(6)
-        .height(6)
-        .borderRadius(3)
-        .backgroundColor(this.busy ? $r('app.color.info') : $r('app.color.brand'))
-      Text(this.jobText)
-        .fontSize(13)
-        .fontColor($r('app.color.text_2'))
+      Row({ space: 8 }) {
+        Row()
+          .width(7)
+          .height(7)
+          .borderRadius(4)
+          .backgroundColor(this.jobBarDotColor())
+        Column({ space: 4 }) {
+          Text(this.jobBarTitle())
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_2'))
+            .width('100%')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (this.runner.status === DETECT_STATUS_RUNNING) {
+            Progress({
+              value: this.runner.done,
+              total: this.runner.total > 0 ? this.runner.total : 1,
+              type: ProgressType.Linear
+            })
+              .width('100%')
+              .height(3)
+              .color($r('app.color.brand'))
+              .backgroundColor($r('app.color.bg_pill'))
+          } else {
+            Text(this.jobBarMeta())
+              .fontSize(12)
+              .fontColor($r('app.color.text_4'))
+              .width('100%')
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+        }
         .layoutWeight(1)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-      SymbolGlyph($r('sys.symbol.chevron_right'))
-        .fontSize(18)
-        .fontColor([$r('app.color.text_4')])
+        .alignItems(HorizontalAlign.Start)
+      }
+      .layoutWeight(1)
+      .height('100%')
+      .alignItems(VerticalAlign.Center)
+      .accessibilityText(this.jobBarTitle() + '，' + this.jobBarMeta())
+      .accessibilityLevel('yes')
+      .onClick(() => {
+        this.activeSegment = 1;
+      })
+
+      if (this.runner.status === DETECT_STATUS_RUNNING) {
+        Button(this.detectLaunching ? '正在停止…' : '取消')
+          .height(32)
+          .fontSize(13)
+          .fontColor($r('app.color.text_2'))
+          .backgroundColor($r('app.color.bg_pill'))
+          .borderRadius(16)
+          .enabled(!this.detectLaunching)
+          .accessibilityText('取消检测')
+          .onClick(() => {
+            this.cancelDetect();
+          })
+      } else {
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(18)
+          .fontColor([$r('app.color.text_4')])
+      }
     }
     .width('100%')
-    .height(52)
+    .height(60)
     .padding({ left: 16, right: 12 })
     .alignItems(VerticalAlign.Center)
     .backgroundColor($r('app.color.bg_card'))
     .borderRadius(10)
     .margin({ left: 16, right: 16, top: 6, bottom: 8 })
-    .accessibilityText('查看检测作业')
-    .accessibilityLevel('yes')
-    .onClick(() => {
-      this.activeSegment = 1;
-    })
   }
 
   build() {
@@ -1874,7 +1654,7 @@ export struct BookSourceManagePage {
 
       BottomDrawer({
         visible: this.statusVisible,
-        title: this.selectedSource !== undefined ? '书源详情' : '书源状态',
+        title: '书源详情',
         sheetSize: 'large',
         mode: 'overlay',
         onClose: () => {
@@ -1886,6 +1666,7 @@ export struct BookSourceManagePage {
           ForEach([this.selectedSource.id], (_id: number) => {
             SourceDetailPanel({
               detail: this.sourceDetail,
+              detectMode: this.detectMode,
               loading: this.sourceDetailLoading,
               failed: this.sourceDetailFailed,
               onDelete: () => {
@@ -1896,8 +1677,6 @@ export struct BookSourceManagePage {
               }
             })
           }, (id: number) => id.toString())
-        } else {
-          this.statusContent()
         }
       }
     }

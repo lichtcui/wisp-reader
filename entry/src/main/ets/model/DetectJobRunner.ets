@@ -309,6 +309,20 @@ export class DetectJobRunner {
     return true;
   }
 
+  /** Resume a cancelled/failed round only while this process still holds its frozen ids. */
+  canResume(): boolean {
+    return (this.job.status === 'cancelled' || this.job.status === 'failed') &&
+      this.job.sourceIds.length > 0 && this.runningTask === undefined && !this.starting;
+  }
+
+  /** Resume from the exact runtime source subset; persisted terminal jobs cannot fake this. */
+  async resume(): Promise<boolean> {
+    if (!this.canResume()) {
+      return false;
+    }
+    return this.start(this.job.mode, this.job.keyword, this.job.sourceIds.slice());
+  }
+
   /** Runtime-only background status for the later detect UI; not part of the trace contract. */
   runtimeBackgroundState(): string {
     return this.backgroundStateValue;

@@ -7,6 +7,8 @@ export interface BookSource {
   enabled?: boolean;
   enabledExplore?: boolean;
   weight?: number;
+  lastUpdateTime?: number;
+  respondTime?: number;
   /** 置信度 0–100，由搜索结果动态维护（失败扣分、成功回分）。缺省视为 100。 */
   confidence?: number;
   searchUrl?: string;
@@ -128,6 +130,9 @@ export interface DetectResult {
   contentLen: number;
   elapsedMs: number;
 }
+
+/** Probe stops after search; full verifies the complete reading chain. */
+export type DetectMode = 'probe' | 'full';
 
 /** Rule diagnostics for the debugger. */
 export interface RuleDiagnostic {

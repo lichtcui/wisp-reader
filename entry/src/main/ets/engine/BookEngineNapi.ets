@@ -10,8 +10,18 @@ import {
   search as nativeSearch,
   toc as nativeToc
 } from 'liblegado_core.so';
-import { Book, BookInfo, BookSource, Chapter, DetectResult, GateResult, ParseOutput } from './types';
+import {
+  Book,
+  BookInfo,
+  BookSource,
+  Chapter,
+  DetectMode,
+  DetectResult,
+  GateResult,
+  ParseOutput
+} from './types';
 import { ContentResult, IBookEngine, SearchOptions, SearchResult } from './IBookEngine';
+import { DETECT_CONCURRENCY } from '../common/Const';
 
 /**
  * `IBookEngine` implementation backed by the Rust engine (`liblegado_core.so`).
@@ -77,9 +87,16 @@ export class BookEngineNapi implements IBookEngine {
     return JSON.parse(raw) as GateResult;
   }
 
-  /** Verify the reading chain of each source. */
-  async detect(sources: BookSource[], keyword: string): Promise<DetectResult[]> {
-    const raw: string = await nativeDetect(JSON.stringify(sources), JSON.stringify({ keyword: keyword, concurrency: 4 }));
+  /** Detect source availability; omitted mode keeps the legacy full chain. */
+  async detect(
+    sources: BookSource[],
+    keyword: string,
+    mode: DetectMode = 'full'
+  ): Promise<DetectResult[]> {
+    const raw: string = await nativeDetect(
+      JSON.stringify(sources),
+      JSON.stringify({ keyword: keyword, concurrency: DETECT_CONCURRENCY, mode: mode })
+    );
     return JSON.parse(raw) as DetectResult[];
   }
 

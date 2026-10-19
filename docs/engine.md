@@ -45,7 +45,9 @@ rust/
 - `search`：按源并发（默认 8）+ 每源超时（默认 10s），返回每源 `SourceStatus`（ok/count/error/elapsedMs）。
 - `toc`：内部走 `nextTocUrl` 分页（上限 50、自引用防环）+ 卷 `isVolume` 跳过。
 - `content`：内部走 `nextContentUrl` 翻页（上限 30、自引用防环）拼成**整章**。
-- `detect`：搜索 → 详情 → 目录 → 首章正文，含「详情页书名 ≠ 搜索结果」一致性校验。
+- `detect`：`mode="full"`（缺省，未知值也回退到此档）走搜索 → 详情 → 目录 → 首章正文，含
+  「详情页书名 ≠ 搜索结果」一致性校验；`mode="probe"` 在搜索命中后早退，只发 1 次请求并返回
+  `stage="search"` / `contentLen=0`。probe 未命中仍是 `stage="no_results"`，不是 `unavailable`。
 - **二进制不过 NAPI**：封面由 Rust 下载写入沙箱目录，返回文件路径。
 
 ## v1 能力门禁（`gate::run`）
@@ -97,11 +99,13 @@ rust/
 ```bash
 make probe ARGS='entry/src/main/resources/rawfile/bundled-sources.json gate'
 make probe ARGS='源.json search 剑来 --limit 3'
-make probe ARGS='源.json detect 剑来'                 # 逐源校验 搜索→详情→目录→正文
+make probe ARGS='源.json detect 剑来 --mode probe'   # L1：只跑搜索，1 次请求后早退
+make probe ARGS='源.json detect 剑来 --mode full'    # L2：搜索→详情→目录→正文（缺省也是 full）
 make probe ARGS='源.json parse html "id.bookintro@tag.p@text" < page.html'
 ```
 
-默认只打摘要（样本条数、字数、前 200 字），`--json` 才 dump 完整 JSON；`--index N` 选源，`--timeout`/`--concurrency` 可调。
+默认只打摘要（样本条数、字数、前 200 字），`--json` 才 dump 完整 JSON；`--index N` 选源，`--timeout`/`--concurrency` 可调；
+`detect --mode probe|full` 直接走引擎两档，缺省 `full`。
 完整命令表在 `rust/legado-engine/examples/probe.rs` 头部。网络全在 Rust 侧，与 App 同一条链路（含 header/Cookie/限速/编码）。
 
 ## 生成内置书源

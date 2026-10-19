@@ -9,7 +9,7 @@
 //!   info  <bookUrl>             书源详情
 //!   toc   <tocUrl>              目录（含卷标记统计）
 //!   content <chapterUrl>        整章正文（含 nextUrl）
-//!   detect [关键词]             逐源校验「搜索→详情→目录→正文」链路
+//!   detect [关键词]             逐源校验（默认 full，`--mode probe` 只跑搜索）
 //!   fetch <url>                 直接抓一个 URL（看长度/编码效果/前缀）
 //!   parse <contentType> <rule>  从 stdin 读正文，单条规则 DSL 调试 + 诊断
 //!
@@ -17,7 +17,8 @@
 //!   --index N        用第 N 个源（默认 0，供 info/toc/content 这类单源命令用）
 //!   --limit N        样本条数上限（默认 5）
 //!   --concurrency N  搜索并发（默认 8）
-//!   --timeout MS     单请求超时毫秒（默认 10000；detect 默认用引擎的 45000）
+//!   --timeout MS     单请求超时毫秒（默认 10000；detect 按 mode 用 8000 / 45000）
+//!   --mode MODE      detect 档位：probe 或 full（默认 full，旧命令不变）
 //!   --json           直接 dump 完整 JSON（默认只打印摘要，免得刷爆上下文）
 //!
 //! `sources.json` 可以是 `[ … ]`（多源）或 `{ … }`（单源）；内置源可直接用
@@ -39,12 +40,20 @@ struct Opts {
     limit: usize,
     concurrency: usize,
     timeout_ms: u64,
+    detect_mode: runtime::DetectMode,
     json: bool,
 }
 
 impl Default for Opts {
     fn default() -> Self {
-        Self { index: 0, limit: 5, concurrency: 8, timeout_ms: 10_000, json: false }
+        Self {
+            index: 0,
+            limit: 5,
+            concurrency: 8,
+            timeout_ms: 10_000,
+            detect_mode: runtime::DetectMode::Full,
+            json: false,
+        }
     }
 }
 
@@ -93,6 +102,18 @@ async fn main() -> ExitCode {
     while i < argv.len() {
         match argv[i].as_str() {
             "--json" => opts.json = true,
+            "--mode" => {
+                let raw = argv.get(i + 1).cloned().unwrap_or_default();
+                opts.detect_mode = match raw.as_str() {
+                    "probe" => runtime::DetectMode::Probe,
+                    "full" => runtime::DetectMode::Full,
+                    _ => {
+                        println!("--mode 接受 probe 或 full，收到 `{raw}`");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                i += 1;
+            }
             "--index" | "--limit" | "--concurrency" | "--timeout" => {
                 let key = argv[i].clone();
                 let raw = argv.get(i + 1).cloned().unwrap_or_default();
@@ -320,17 +341,23 @@ async fn cmd_detect(
 ) -> Result<(), String> {
     let keyword = keyword.map(|s| s.as_str()).unwrap_or("重生");
     let timeout = if opts.timeout_ms == 10_000 {
-        runtime::DEFAULT_DETECT_TIMEOUT_MS
+        opts.detect_mode.default_timeout_ms()
     } else {
         opts.timeout_ms
     };
-    let results = runtime::detect(sources, keyword, opts.concurrency, timeout).await;
+    let results =
+        runtime::detect(sources, keyword, opts.concurrency, timeout, opts.detect_mode).await;
     if opts.json {
         dump(&results);
         return Ok(());
     }
     let ok = results.iter().filter(|r| r.ok).count();
-    println!("链路校验：{}/{} 可用（关键词「{keyword}」）", ok, results.len());
+    println!(
+        "链路校验（{:?}）：{}/{} 可用（关键词「{keyword}」，预算 {timeout}ms）",
+        opts.detect_mode,
+        ok,
+        results.len()
+    );
     for r in &results {
         println!(
             "  [{}] {} · {} · {} 字 · {}ms · {}",

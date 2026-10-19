@@ -13,7 +13,12 @@ export declare function content(sourceJson: string, chapterUrl: string): Promise
 /**
   * Detect whether sources can complete a reading chain; returns JSON
   * `DetectResult[]`. `opts_json` may carry
-  * `{ keyword, concurrency, timeoutMs }`.
+  * `{ keyword, concurrency, timeoutMs, mode }`.
+  *
+  * `mode: "probe"` runs only the search step and returns after one request;
+  * `mode: "full"` (the default) runs search, detail, TOC, and first-chapter
+  * content. Missing or unknown modes fall back to `"full"` for compatibility.
+  * An omitted timeout defaults to 8s for probe and 45s for full.
   */
 export declare function detect(sourcesJson: string, optsJson: string): Promise<string>
 

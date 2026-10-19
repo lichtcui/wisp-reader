@@ -20,18 +20,18 @@
 
 | # | 决定 | 理由 | 要改的 spec |
 |---|---|---|---|
-| A1 | **长时任务用 `BackgroundMode.DATA_TRANSFER`（T0.1 真机已定 2026-10-15）**：可用，息屏 **606 秒零丢 tick**；**一个 UIAbility 只能一个任务**（`9800005`），与 TTS 并存须用「一个任务带多类型」（`bgModes[]` / `updateBackgroundRunning`，@since 12）；受 SDK 硬约束「**>10 分钟不更新进度即取消**（进度通知须为实况窗 live view）」⇒ 每批更新进度、超长作业分片。降级路径（仅前台推进，2026-10-14 批准）**未触发** | 作业跑十数分钟，息屏中断等于白跑；实测停表恰在 10 分 03 秒，与 SDK 原文吻合。**新 P0**：TTS 侧长时任务 24 秒即被系统停（`AVSessionNotifyUpdateNotification` 失败 `980000502`）⇒ 「边听书边跑作业」须先修该 P0 | `SPEC-DETECT-JOB.md` §3.6 ✅已回写；证据 [`T0.1-LONG-TASK-EVIDENCE.md`](./T0.1-LONG-TASK-EVIDENCE.md) |
-| A2 | **并发上限 = 16、L1 超时 = 8 s**（T0.2 实测 + 用户确认，2026-10-15），写入 `Const.ets` 单一常量；实施在 `T2.2` | 实测 L1 吞吐：并发 8/16/32/64 = 312/582/879/1241 源/分钟；失败构成在 8→32 **逐项相同**（`blocked` 恒 5.8%），64 才见超时率抬头（5.9%→6.9%）。取 16（1.86×）= 优先保守（在途 TLS 连接数 ≤16，手机侧未实测）；3000 源 L1 单轮 ≈4.4 min（判据 ≤20 min 留 ~4.5× 余量），真机若 >15 min 则上调 32（数据已备） | `SPEC-DETECT-ENGINE.md` §3.3/§3.5 ✅已回写 |
-| A3 | **检测分组来源 = `bookSourceGroup` 字段**（即 `source-store` 的 `grp` 列）；「用户勾选」= 多选模式，后置 | 字段是唯一现成数据源；多选是纯增量 UI | `SPEC-DETECT-UI.md` §3 范围入口 |
-| A4 | **新建独立 `sources.db`**，不复用 `shelf.db` | 备份恢复目前把「源」与「书架」生命周期绑在一起；分库后书的清理不会动到源 | `SPEC-SOURCE-STORE.md` 开放问题 2 |
-| A5 | **迁移静默进行 + 保留旧 preferences 键 1 个版本 + 迁移前自动导出一份备份到 filesDir + 条数校验** | 对已导入数千源的用户，迁移失败等于数据全失 | `SPEC-SOURCE-STORE.md` §Success 4 / 开放问题 3–4 |
-| A6 | **`confidence` 一并迁入 `sources` 表**（作为列），不再随全量 blob 走 | 否则又留下第二套存储与第二次全量 parse | `SPEC-SOURCE-STORE.md` 开放问题 5 |
-| A7 | **检测结果保留最近 2 轮，每轮一个 `results-<轮次戳>.jsonl`**，更早轮次淘汰 | 单文件追加写会无限增长；两轮够做「上一轮 vs 本轮」对比 | `SPEC-DETECT-JOB.md` §3.3 ✅已回写 |
-| A8 | **增量窗口默认 7 天**，常量入 `Const.ets`，另留「全部重测」入口 | 与 `TTS_PREGEN_*` 同类开关的既有做法一致 | `SPEC-DETECT-UI.md` §3.4 ✅已回写 |
-| A9 | **分组只做筛选**（`分组 ▾` 选一个组看），不做分组分段展示/sticky 头（MVP） | 3000 条下 flat list + 排序已够；分段展示会与「异常置顶」排序冲突 | `SPEC-SOURCE-LIST.md` §4 ✅已回写 |
-| A10 | **异常置顶分三档**：需处理（`不可用`）/ 待复查（`未测`、`超时`、`无结果`）/ 正常（`可用`） | 直接按「异常」排序会把 `超时`/`无结果` 与真坏源混在一起，误导用户去清理它们（语义见 `SPEC-DETECT-UI.md`） | `SPEC-BOOKSOURCE-LAYOUT.md` §3.2 ✅已回写 |
-| A11 | **`＋` / `⋯` 放段选择器同排的页内行**，不用 `NavDestination.menus()` | 不依赖导航栏空间、不引入新先例 | `SPEC-BOOKSOURCE-LAYOUT.md` §6 ✅已回写 |
-| A12 | **筛选 chips 在计数为 0 时隐藏**（「全部」「启用」除外）；**段切换不记忆**，总是「书源」段 | 满屏 0 值 chip 是噪音；段记忆价值低、可预测性优先 | `SPEC-BOOKSOURCE-LAYOUT.md` §6 ✅已回写 |
+| A1 ✅ 已落地 | **长时任务用 `BackgroundMode.DATA_TRANSFER`（T0.1 真机已定 2026-10-15）**：可用，息屏 **606 秒零丢 tick**；**一个 UIAbility 只能一个任务**（`9800005`），与 TTS 并存须用「一个任务带多类型」（`bgModes[]` / `updateBackgroundRunning`，@since 12）；受 SDK 硬约束「**>10 分钟不更新进度即取消**（进度通知须为实况窗 live view）」⇒ 每批更新进度、超长作业分片。降级路径（仅前台推进，2026-10-14 批准）**未触发** | 作业跑十数分钟，息屏中断等于白跑；实测停表恰在 10 分 03 秒，与 SDK 原文吻合。**新 P0**：TTS 侧长时任务 24 秒即被系统停（`AVSessionNotifyUpdateNotification` 失败 `980000502`）⇒ 「边听书边跑作业」须先修该 P0 | `SPEC-DETECT-JOB.md` §3.6 ✅已回写；证据 [`T0.1-LONG-TASK-EVIDENCE.md`](./T0.1-LONG-TASK-EVIDENCE.md) |
+| A2 ✅ 已落地 | **并发上限 = 16、L1 超时 = 8 s**（T0.2 实测 + 用户确认，2026-10-15），写入 `Const.ets` 单一常量；实施在 `T2.2` | 实测 L1 吞吐：并发 8/16/32/64 = 312/582/879/1241 源/分钟；失败构成在 8→32 **逐项相同**（`blocked` 恒 5.8%），64 才见超时率抬头（5.9%→6.9%）。取 16（1.86×）= 优先保守（在途 TLS 连接数 ≤16，手机侧未实测）；3000 源 L1 单轮 ≈4.4 min（判据 ≤20 min 留 ~4.5× 余量），真机若 >15 min 则上调 32（数据已备） | `SPEC-DETECT-ENGINE.md` §3.3/§3.5 ✅已回写 |
+| A3 ✅ 已落地 | **检测分组来源 = `bookSourceGroup` 字段**（即 `source-store` 的 `grp` 列）；「用户勾选」= 多选模式，后置 | 字段是唯一现成数据源；多选是纯增量 UI | `SPEC-DETECT-UI.md` §3 范围入口 |
+| A4 ✅ 已落地 | **新建独立 `sources.db`**，不复用 `shelf.db` | 备份恢复目前把「源」与「书架」生命周期绑在一起；分库后书的清理不会动到源 | `SPEC-SOURCE-STORE.md` 开放问题 2 |
+| A5 ✅ 已落地 | **迁移静默进行 + 保留旧 preferences 键 1 个版本 + 迁移前自动导出一份备份到 filesDir + 条数校验** | 对已导入数千源的用户，迁移失败等于数据全失 | `SPEC-SOURCE-STORE.md` §Success 4 / 开放问题 3–4 |
+| A6 ✅ 已落地 | **`confidence` 一并迁入 `sources` 表**（作为列），不再随全量 blob 走 | 否则又留下第二套存储与第二次全量 parse | `SPEC-SOURCE-STORE.md` 开放问题 5 |
+| A7 ✅ 已落地 | **检测结果保留最近 2 轮，每轮一个 `results-<轮次戳>.jsonl`**，更早轮次淘汰 | 单文件追加写会无限增长；两轮够做「上一轮 vs 本轮」对比 | `SPEC-DETECT-JOB.md` §3.3 ✅已回写 |
+| A8 ✅ 已落地 | **增量窗口默认 7 天**，常量入 `Const.ets`，另留「全部重测」入口 | 与 `TTS_PREGEN_*` 同类开关的既有做法一致 | `SPEC-DETECT-UI.md` §3.4 ✅已回写 |
+| A9 ✅ 已落地 | **分组只做筛选**（`分组 ▾` 选一个组看），不做分组分段展示/sticky 头（MVP） | 3000 条下 flat list + 排序已够；分段展示会与「异常置顶」排序冲突 | `SPEC-SOURCE-LIST.md` §4 ✅已回写 |
+| A10 ✅ 已落地 | **异常置顶分三档**：需处理（`不可用`）/ 待复查（`未测`、`超时`、`无结果`）/ 正常（`可用`） | 直接按「异常」排序会把 `超时`/`无结果` 与真坏源混在一起，误导用户去清理它们（语义见 `SPEC-DETECT-UI.md`） | `SPEC-BOOKSOURCE-LAYOUT.md` §3.2 ✅已回写 |
+| A11 ✅ 已落地 | **`＋` / `⋯` 放段选择器同排的页内行**，不用 `NavDestination.menus()` | 不依赖导航栏空间、不引入新先例 | `SPEC-BOOKSOURCE-LAYOUT.md` §6 ✅已回写 |
+| A12 ✅ 已落地 | **筛选 chips 在计数为 0 时隐藏**（「全部」「启用」除外）；**段切换不记忆**，总是「书源」段 | 满屏 0 值 chip 是噪音；段记忆价值低、可预测性优先 | `SPEC-BOOKSOURCE-LAYOUT.md` §6 ✅已回写 |
 
 ## 3. 依赖图
 
@@ -219,23 +219,23 @@
 
 ### Phase 5 — `detect-ui` 与收尾（汇合点）
 
-- [ ] **T5.1 `DetectPanel.ets` 检测段** — 范围条（全部 / 未测 / 上次失败 / 分组 ▾，A3）；
+- [x] **T5.1 `DetectPanel.ets` 检测段** — 范围条（全部 / 未测 / 上次失败 / 分组 ▾，A3）；
   作业卡三态（运行中 / 已完成 / 已取消 + 继续）；结果面 `LazyForEach` + 检测态筛选；
   批量动作（关闭不可用 / 删除不可用，次级样式 + 二次确认）。
   - Files: `components/DetectPanel.ets`（新）、`pages/BookSourceManage.ets`
-- [ ] **T5.2 底部作业条四态**（跨段常驻）— 从未检测 / 运行中 / 已完成 / 已取消；点击切到检测段。
+- [x] **T5.2 底部作业条四态**（跨段常驻）— 从未检测 / 运行中 / 已完成 / 已取消；点击切到检测段。
   - Files: `components/DetectPanel.ets`、`pages/BookSourceManage.ets`
-- [ ] **T5.3 增量默认档 + 未测 / 上次失败筛选**（A8）
+- [x] **T5.3 增量默认档 + 未测 / 上次失败筛选**（A8）
   - Files: `components/DetectPanel.ets`、`components/SourceRows.ets`、`common/Const.ets`
-- [ ] **T5.4 收尾** — 判定口径文案收进按需展开；`docs/specs/UI-SPEC.md` 与
+- [x] **T5.4 收尾** — 判定口径文案收进按需展开；`docs/specs/UI-SPEC.md` 与
   `docs/specs/SPEC-*.md` 与实现对齐；`docs/progress.md` 更新；备份格式兼容回归；
   release 契约验证；map §9 十条判据逐条核。
   - Files: `docs/specs/UI-SPEC.md`、`docs/progress.md`、`docs/research/BOOKSOURCE-REVAMP-PLAN.md`
 
 ### Checkpoint 5 — 完成
-- [ ] map §9 十条成功判据逐条有实测证据
-- [ ] `make check` / `make test` / `make run-release` 全通过
-- [ ] 备份兼容回归：旧备份可导入，新导出逐字段一致
+- [x] map §9 十条成功判据逐条有实测证据
+- [x] `make check` / `make test` / `make run-release` 全通过
+- [x] 备份兼容回归：旧备份可导入，新导出逐字段一致
 - [ ] **与人对齐验收后再宣布完成**
 
 ## 6. 风险与缓解

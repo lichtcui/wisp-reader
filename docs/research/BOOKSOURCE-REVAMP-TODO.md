@@ -280,75 +280,111 @@
 
 ## 4. Phase 2 — `detect-engine`（会话 B，可与 Phase 1 并行）
 
-### Task T2.1 `respond_time` / `last_update_time` 接回
+### Task T2.1 `respond_time` / `last_update_time` 接回（已完成）
 
-**Description:** 书源 JSON 里本就有这两个字段，但 Rust `BookSource` 未声明 → serde 静默丢弃。
-补上并做三处同步，使检测结果的时间/耗时有地方落。
+**Description:** 书源 JSON 里本就有这两个字段，使检测结果的时间/耗时有地方落，并完成
+Rust / ArkTS / obfuscation keep 三处契约同步。
+
+**2026-10-17 实际核对：**基线 `c357fb7` 的 Rust `BookSource` 与 `entry/obfuscation-rules.txt`
+已经声明 `respondTime` / `lastUpdateTime`；缺口是 ArkTS `engine/types.ets` 与 focused test。本次只补这两处，
+没有改 detect 行为或存储层。
 
 **Acceptance criteria:**
-- [ ] `rust/legado-engine/src/types.rs` 声明两字段（`#[serde(rename_all = "camelCase")]` 语义正确）
-- [ ] `engine/types.ets` 同步；`entry/obfuscation-rules.txt` keep 列表同步
-- [ ] `make check` 的 keep 核对通过（无遗漏、无多余）
-- [ ] 解析带这两个字段的真实书源后，值不丢（`make probe` 或单测验证）
+- [x] `rust/legado-engine/src/types.rs` 声明两字段（沿用现有 camelCase 字段名与 serde 约定）
+- [x] `engine/types.ets` 同步；`entry/obfuscation-rules.txt` keep 列表同步
+- [x] `make check` 的 keep 核对通过
+- [x] 解析带这两个字段的真实书源后，值不丢（Rust 单测直接读取 `bundled-sources.json`）
 
 **Verification:**
-- [ ] `make test` 通过
-- [ ] `make check` 通过
-- [ ] `make run-release` 后确认 release 包下字段可读（混淆不吞字段）
+- [x] `make test` 通过（60 passed）
+- [x] `make check` 通过（184 个 keep 名字覆盖全部 JSON 字段，无遗漏）
+- [x] `make run-release` 后确认 release 包下字段可读（混淆不吞字段）
+
+**Evidence（2026-10-17）：**`test_bundled_source_preserves_timestamps` 从真实内置书源中选中同时带
+`respondTime > 0` / `lastUpdateTime > 0` 的条目，断言 serde 序列化后两值保持；
+`test_missing_timestamps_default_to_zero` 断言缺省字段回落为 `0`。设备门禁首次 `make devices` 返回
+`[Empty]`，按单手机规则停止；设备 `33Z0224424136564` 连接后执行 `make run-release`，release 编译、signed HAP 安装、
+force-stop 与启动均成功。启动探针在 release 包内读到内置书源「黑炎小说」的 `respondTime=3662`、
+`lastUpdateTime=1685889740162`，与 JSON 值一致；临时探针已移除。
 
 **Dependencies:** None
 **Files likely touched:** `rust/legado-engine/src/types.rs`、`entry/src/main/ets/engine/types.ets`、
 `entry/obfuscation-rules.txt`
 **Estimated scope:** Small
 
-### Task T2.2 `detect` 加 `mode`（probe 早退）
+### Task T2.2 `detect` 加 `mode`（probe 早退）（已完成）
 
 **Description:** 复用 `detect` 而不新增 NAPI 函数：加 `mode: "probe" | "full"`，probe 在
 `search_one` 返回后早退（1 次请求），full 保持现状完整链路。`lib.rs` 的 `///` 是契约唯一来源。
 
+**2026-10-18 实施结果：**缺省/未知 `mode` 回退 `full`；probe 默认预算 8 s（下限 3 s），full 默认
+45 s（下限 10 s，不变）。probe 命中返回 `ok=true` / `stage="search"` / `contentLen=0`；未命中保持
+`stage="no_results"`。按 T0.2 结论同时把单批并发上限与 ArkTS 传值落为 16；full 的阶段链路与超时不变。
+
 **Acceptance criteria:**
-- [ ] `lib.rs` 的 `///` 更新（含 `mode` 取值与两档语义），`make rust` 重生成并拷 `index.d.ts`
-- [ ] probe 只发 1 次请求即收口；full 行为与改动前完全一致
-- [ ] `BookEngineNapi.ets` 透传 `mode`；旧调用方不传时默认 `full`（行为不变）
-- [ ] **probe 未命中记 `no_results`，绝不记 `unavailable`**
+- [x] `lib.rs` 的 `///` 更新（含 `mode` 取值与两档语义），`make rust` 重生成并拷 `index.d.ts`
+- [x] probe 只发 1 次请求即收口；full 的搜索→详情→目录→正文阶段链路与改动前一致
+- [x] `BookEngineNapi.ets` 透传 `mode`；旧调用方不传时默认 `full`（行为不变）
+- [x] **probe 未命中记 `no_results`，绝不记 `unavailable`**
 
 **Verification:**
-- [ ] `make rust` 后确认 `index.d.ts` 已更新且未被手改
-- [ ] `make test` 通过
-- [ ] `make check` 通过（keep 列表含 `mode`）
-- [ ] `make run-release` 确认 release 下 `mode` 生效
+- [x] `make rust` 后确认 `index.d.ts` 已更新且未被手改
+- [x] `make test` 通过（64 passed）
+- [x] `make check` 通过（keep 列表含 `mode`，185 个名字无遗漏）
+- [x] `make run-release` 确认 release 下 `mode` 生效
+
+**Evidence（2026-10-18）：**`test_detect_probe_stops_after_search` 用 mock server 的原子计数器断言
+probe 只发 1 次请求，且 `stage="search"` / `contentLen=0`；`test_detect_probe_no_results_is_not_unavailable`
+断言未命中为 `no_results` 且仍只发 1 次请求；`test_detect_full_runs_complete_chain` 断言 full 走 4 次请求并
+到达 `stage="content"`；`test_detect_mode_defaults_to_full` 覆盖缺省、`full`、未知值及两档默认超时。
+设备 `33Z0224424136564` 的 release 启动探针（内置「黑炎小说」，关键词「剑来」）记录：
+`probe ok=true stage=search contentLen=0 elapsedMs=3009`；省略第三参数的 `default-full ok=true
+stage=content contentLen=1915 elapsedMs=7388`。临时探针移除后重新 `make run-release`，安装与启动成功；
+干净 HAP 的 `modules.abc` 无 `T22-PROBE` 字符串，运行日志也无该标记。
 
 **Dependencies:** T2.1
-**Files likely touched:** `rust/legado-engine/src/runtime.rs`、`rust/legado-core/src/lib.rs`、
-`entry/src/main/ets/engine/BookEngineNapi.ets`、`entry/src/main/cpp/types/liblegado_core/index.d.ts`（生成）
+**Files touched:** `rust/legado-engine/src/runtime.rs`、`rust/legado-engine/examples/probe.rs`、
+`rust/legado-core/src/lib.rs`、`entry/src/main/ets/common/Const.ets`、`entry/src/main/ets/engine/types.ets`、
+`entry/src/main/ets/engine/BookEngineNapi.ets`、`entry/obfuscation-rules.txt`、
+`entry/libs/arm64-v8a/liblegado_core.so` 与 `entry/src/main/cpp/types/liblegado_core/index.d.ts`（生成）
 **Estimated scope:** Medium
 
-### Task T2.3 L1/L2 真值表 + 真源实测
+### Task T2.3 L1/L2 真值表 + 真源实测 ✅ **已完成（2026-10-18）**
 
 **Description:** 用固定 HTML 夹具覆盖三条关键路由，并用真实书源对比 L1 与 L2 的耗时与结论一致性。
 
 **Acceptance criteria:**
-- [ ] `make test` 覆盖：L1 命中 / L1 未命中（记 `no_results`）/ L2 在目录阶段失败
-- [ ] `make probe` 真源实测 L1 与 L2 各 ≥3 个源，记录耗时比与结论差异
-- [ ] 确认 **L1 通过的集合 ⊇ L2 通过的集合**（若有反例，记录并评估）
-- [ ] 实测结论写入 `docs/research/`，并回写 `SPEC-DETECT-ENGINE.md` §Success 1
+- [x] `make test` 覆盖：L1 命中 / L1 未命中（记 `no_results`）/ L2 在目录阶段失败
+- [x] `make probe` 真源实测 L1 与 L2 各 ≥3 个源，记录耗时比与结论差异
+- [x] 确认 **L1 通过的集合 ⊇ L2 通过的集合**（若有反例，记录并评估）
+- [x] 实测结论写入 `docs/research/`，并回写 `SPEC-DETECT-ENGINE.md` §Success 1
 
 **Verification:**
-- [ ] `make test` 通过
-- [ ] `make probe ARGS='...'` 输出落 `/tmp`，`rg` 出对照表
-- [ ] `make check` 通过
+- [x] `make test` 通过
+- [x] `make probe ARGS='...'` 输出落 `/tmp`，`rg` 出对照表
+- [x] `make check` 通过
+
+**Evidence（2026-10-18）：**固定 mock HTML 覆盖 L1 命中（1 次请求、`stage="search"`）、L1 未命中
+（`stage="no_results"`，不是 `unavailable`）、L2 完整链路（4 次请求、`stage="content"`）与 L2 空目录页
+（3 次请求、`stage="toc_fetch"`、`contentLen=0`）；`make test` 为 65 passed。全量导出 3907 条中筛出
+3171 条启用且有搜索规则的源，固定关键词「剑来」、并发 16，L1 墙钟 237 s、L2 墙钟 283 s。
+L1 唯一通过键 169、L2 唯一通过键 18，`L2-only=0`，满足 L1 通过集合包含 L2 通过集合；18 个共同源
+L1 总耗时 16846 ms、L2 总耗时 37305 ms（2.21x）。全批 `no_results=1144` 且 `unavailable=0`；真实源
+`🔖九五小说①` 的 L2 目录失败明确记为 `toc_fetch`。完整命令、逐源表与重复定义风险见
+[`T2.3-DETECT-TRUTH-TABLE.md`](./T2.3-DETECT-TRUTH-TABLE.md)。
 
 **Dependencies:** T2.2
-**Files likely touched:** `rust/legado-engine/src/runtime.rs`（tests）、`docs/research/`、
-`docs/specs/SPEC-DETECT-ENGINE.md`
+**Files touched:** `rust/legado-engine/src/runtime.rs`（tests）、`rust/legado-engine/examples/probe.rs`、
+`docs/research/T2.3-DETECT-TRUTH-TABLE.md`、`docs/research/BOOKSOURCE-REVAMP-TODO.md`、
+`docs/specs/SPEC-DETECT-ENGINE.md`、`docs/engine.md`、`docs/progress.md`
 **Estimated scope:** Medium
 
 ### Checkpoint 2 — 引擎两档
 
-- [ ] L1 与 L2 的 `DetectResult` 形状一致，`stage` 复用既有 `FailReason`
-- [ ] L1 未命中 ≠ `unavailable`（否则一键清理会误删可用源）
-- [ ] 单轮时长估算对照 map §9-4 的 ≤20 分钟（用 T0.2 定的并发/超时）
-- [ ] `make test` / `make check` / `make run-release` 通过
+- [x] L1 与 L2 的 `DetectResult` 形状一致，`stage` 复用既有 `FailReason`
+- [x] L1 未命中 ≠ `unavailable`（否则一键清理会误删可用源）
+- [x] 单轮时长估算对照 map §9-4 的 ≤20 分钟（用 T0.2 定的并发/超时）
+- [x] `make test` / `make check` / `make run-release` 通过（`mode` 的设备证据见 T2.2）
 - [ ] **与人对齐后再进 Phase 4**
 
 ---
@@ -379,8 +415,16 @@
 `ListItem`。真机把书源段查询设为 `abc`、选中「启用」，检测段选中「失败」后切回，两个段的状态均保留；
 书源列表下滑后切到检测段再切回，首批可见行不变；在检测段退出页面再进入，书源段为选中态（品牌底色）。
 `＋` 菜单可打开并显示导入入口，`⋯` 菜单可打开并显示导出与 T1.6 入口；菜单项与代码核对一致。
-设备上未启动 T1.6 造数：现有 seeded 路径会先做 store 测量并自动恢复，未提供可停留滚动的 3000 行列表，
-因此本轮不修改 T1.6 流程，取消确认后原数据未变。**3000 条列表滚动首帧仍未验证。**
+上一轮未启动 T1.6 造数：现有 seeded 路径会先做 store 测量并自动恢复，未提供可停留滚动的 3000 行列表，
+因此当时不修改 T1.6 流程，取消确认后原数据未变。后续 3000 条验收使用既有 debug「T1.6 性能造数（3000）」
+入口造数，并用临时验收探针保留数据完成实测，交付前已恢复 13 条基线。debug 真机
+`33Z0224424136564` 冷启动进入书源页：`init=9 ms`、`list=33 ms`、`total=42 ms`、`first_frame=27 ms`、
+`page_to_ready=69 ms`；默认「启用」视图为 2000/3000 行，搜索框和筛选条在首屏，`LazyForEach` 仅物化
+6–7 个 `ListItem`。实际滑动 8 轮，滚动回调帧距 p50 `8 ms` / p95 `9 ms` / max `25 ms`，
+没有 `>=34 ms` 的间隔；搜索后 198 行（6 轮，max `23 ms`）和检测段 3000 行（6 轮，max `24 ms`）
+同样没有 `>=34 ms` 的间隔。搜索 `T1.6 00` 的防抖后投影 `12 ms`、端到端 `163 ms`，筛选 `7 ms`、
+分组 `8 ms`（84 行）；书源/检测往返切换后查询、筛选和滚动状态均保留。上列滚动数据来自 `List`
+滚动回调，不是硬件逐帧 hitrace。
 
 **Dependencies:** T1.1–T1.6
 **Files touched:** `entry/src/main/ets/pages/BookSourceManage.ets`、
@@ -608,7 +652,8 @@ debug 真机 `33Z0224424136564` 的 `dumpLayout` 证据：整行打开 `👍玄�
 force-stop，`job.json` 为 `running` / `cursor=32`，JSONL 仅 `0 -> 32`。原包重启后记录
 `detect cursor reconciled jsonl=32 cursor=32` 并从 32 续跑，最终为 `done` / `cursor=64`，JSONL 追加为
 `0 -> 32`、`32 -> 64`，首批行 SHA-256 前后不变。保留测试只留下当前轮与最近一轮；探针清理后
-设备恢复 13 条真实源，全表行内容与基线一致，`t1.6-sources.json` 哈希不变。runner 尚未接入生产启动/UI。
+设备恢复 13 条真实源，全表行内容与基线一致，`t1.6-sources.json` 哈希不变。当时 runner 尚未接入
+生产启动/UI，后续由 T5 完成。
 
 **Dependencies:** T1.1、T2.2、T4.1
 **Files touched:** `model/DetectJobRunner.ets`（新）、`model/DetectJob.ets`、
@@ -637,8 +682,8 @@ JSONL 为 0 行且超过 20 秒无新批次；末批缺源故障进入 `failed` 
 长时任务。1024 源探针以 32 批、每批 20 秒延迟运行约 10m27s，最终 `done` / `cursor=1024`，
 32 行 JSONL 覆盖全部批次，任务类型为 `dataTransfer`。TTS 先持任务时检测启动沿用同一任务并把模式
 更新为 `audioPlayback,dataTransfer`，取消后恢复 `audioPlayback` 且 `ttsPlaying=true`。每批只刷新一次
-冻结的 11 个 `@Trace` 字段，进度通知按 30 秒节流。临时探针已清理，设备恢复 13 条基线源；runner 尚未
-接入生产启动/UI，Phase 5 未开始。
+冻结的 11 个 `@Trace` 字段，进度通知按 30 秒节流。临时探针已清理，设备恢复 13 条基线源；生产启动/UI
+与真机、收尾门禁已由 T5 完成。
 
 **Dependencies:** T4.3、T0.1
 **Files likely touched:** `model/DetectJobRunner.ets`、`entry/src/main/module.json5`（如需）
@@ -650,81 +695,126 @@ JSONL 为 0 行且超过 20 秒无新批次；末批缺源故障进入 `failed` 
 - [x] 取消 ≤1 批、无残留通知、无残留网络请求
 - [x] `@Trace` 更新次数 ≈ 批次数
 - [x] `make test-detect` 通过
-- [ ] **与人对齐后再进 Phase 5**
+- [x] **与人对齐后再进 Phase 5**（2026-10-19 用户确认继续）
 
 ---
 
 ## 7. Phase 5 — `detect-ui` 与收尾（汇合，单会话串行）
 
-### Task T5.1 `DetectPanel.ets` 检测段
+**状态（2026-10-19）：** `T5.1`–`T5.4` 已完成。检测段与跨段作业条已接入 `DetectJobRunner` 的
+restore / monitor / launch / cancel / resume；debug 真机完成三态、取消/续跑、离页返回、增量/全量
+耗时对照与 3000 行结果面验证，备份兼容和 release 门禁通过。Checkpoint 5 的技术判据已收齐，
+仅剩与人对齐验收。
+
+### Task T5.1 `DetectPanel.ets` 检测段 — 已完成（2026-10-19）
 
 **Description:** 检测段内容：范围条 + 作业卡三态 + 结果面 + 批量动作。
 
 **Acceptance criteria:**
-- [ ] 范围条：全部 / 未测 / 上次失败 / 分组 ▾（分组来源 = `bookSourceGroup`）；默认档是**增量**
-- [ ] 作业卡三态：运行中（模式 / 已用 / 预计剩余 / 取消）、已完成、已取消（+ 继续）
-- [ ] 结果面用 `LazyForEach`，按检测态筛选（与书源段共用同一套维度）
-- [ ] 批量动作仅对 `unavailable`，次级样式 + 二次确认 + 明确条数
+- [x] 范围条：全部 / 未测 / 上次失败 / 分组 ▾（分组来源 = `bookSourceGroup`）；默认档是**增量**
+- [x] 作业卡三态：运行中（模式 / 已用 / 预计剩余 / 取消）、已完成、已取消（+ 继续）
+- [x] 结果面用 `LazyForEach`，按检测态筛选（与书源段共用同一套维度）
+- [x] 批量动作仅对 `unavailable`，次级样式 + 二次确认 + 明确条数
 
 **Verification:**
-- [ ] 真机：三种状态各截一次 `uitest dumpLayout`，`rg` 核对文案与按钮
-- [ ] 真机：确认「无结果 / 超时」在结果面上**没有**一键清理入口
-- [ ] 3000 条结果滚动流畅
-- [ ] `make check` 通过
+- [x] 真机：运行中 / 已完成 / 已取消三态各有一份 `uitest dumpLayout`，核对模式、进度、预计剩余、
+      取消与继续按钮
+- [x] 真机：确认「无结果 / 超时」在结果面上**没有**一键清理入口
+- [x] 3000 条结果面用 `LazyForEach`，滑动后每份 dump 仅物化 4–5 个 `ListItem`
+- [x] `make check` 通过
+
+**Evidence（2026-10-19，debug 真机 `33Z0224424136564`）：**运行中、完成、取消三态分别见
+[running-full](/private/tmp/t5-final-running-full-20261019-1.json)、
+[done](/private/tmp/t5-final-done-20261019-1.json)、
+[cancelled](/private/tmp/t5-final-cancelled-20261019-1.json)；取消按钮反馈与落定见
+[cancel-same-process](/private/tmp/t5-final-cancel-same-process-20261019-1.json)、
+[cancel-settled](/private/tmp/t5-final-cancel-settled-20261019-1.json)，继续后见
+[resumed](/private/tmp/t5-final-resumed-20261019-1.json)。无结果筛选布局见
+[noresult](/private/tmp/t5-final-noresult-20261019-1.json)，结果面只有「关闭不可用 / 删除不可用」，
+没有针对无结果或超时的批量入口；批量动作均带条数与二次确认，执行集合只取 `unavailable`。
+3000 行检测段的顶部、底部和连续快速滑动布局分别见
+[top](/tmp/t5-3000-detect-top.json)、[bottom](/tmp/t5-3000-detect-bottom.json)、
+[fling20](/tmp/t5-3000-detect-fling20.json)，每份 dump 中 `ListItem` 数为 4、4、5；结合
+Checkpoint 3 的滚动回调帧距 p50 `8 ms` / p95 `9 ms` / max `24 ms`，未出现 `>=34 ms` 间隔。
 
 **Dependencies:** T3.4、T4.3
 **Files likely touched:** `components/DetectPanel.ets`（新）、`pages/BookSourceManage.ets`
 **Estimated scope:** Medium
 
-### Task T5.2 底部作业条（四态，跨段常驻）
+### Task T5.2 底部作业条（四态，跨段常驻）— 已完成（2026-10-19）
 
 **Description:** 从未检测 / 运行中 / 已完成 / 已取消四态；点击切到检测段。
 
 **Acceptance criteria:**
-- [ ] 四态齐备，文案见 [`../specs/SPEC-BOOKSOURCE-LAYOUT.md`](../specs/SPEC-BOOKSOURCE-LAYOUT.md) §3.4
-- [ ] 跨段常驻；离开书源页再回来，进度仍是活的
-- [ ] 运行中可直接取消（无需先进检测段）
+- [x] 四态齐备，文案见 [`../specs/SPEC-BOOKSOURCE-LAYOUT.md`](../specs/SPEC-BOOKSOURCE-LAYOUT.md) §3.4
+- [x] 跨段常驻；离开书源页再回来，进度仍是活的
+- [x] 运行中可直接取消（无需先进检测段）
 
 **Verification:**
-- [ ] 真机：起作业 → 切段 → 返回列表页 → 再进书源页，进度连续
-- [ ] `make check` 通过
+- [x] 真机：起作业 → 切段 → 返回列表页 → 再进书源页，进度连续
+- [x] `make check` 通过
+
+**Evidence（2026-10-19，debug 真机 `33Z0224424136564`）：**生产页面在首次 `reload()` 后调用
+`runner.restore()`，并持续订阅 `runner.updatedAt` / `runner.status`。切到检测段后作业条仍在见
+[cross-segment](/private/tmp/t5-final-cross-segment-20261019-1.json)；返回书架/列表页再进入书源页，
+运行中进度与取消按钮仍在见 [return-running](/private/tmp/t5-final-return-running-20261019-1.json)。
+运行中可直接从作业条取消，`cancel-same-process` 显示「正在停止…」，`cancel-settled` 显示
+「已取消 · 已测 N / N」，无需先进入检测段。
 
 **Dependencies:** T5.1
 **Files likely touched:** `components/DetectPanel.ets`、`pages/BookSourceManage.ets`
 **Estimated scope:** Small
 
-### Task T5.3 增量默认档 + 未测/上次失败筛选
+### Task T5.3 增量默认档 + 未测/上次失败筛选 — 已完成（2026-10-19）
 
 **Description:** 增量窗口（默认 7 天）+ 「未测 / 上次失败」维度接入书源段筛选与检测段范围。
 
 **Acceptance criteria:**
-- [ ] 增量窗口常量入 `Const.ets`（7 天），另有「全部重测」入口
-- [ ] 书源段可筛「未测 / 上次失败」；检测段可据此选范围
-- [ ] 增量档下的耗时显著低于全量（实测对照）
+- [x] 增量窗口常量入 `Const.ets`（7 天），另有「全部重测」入口
+- [x] 书源段可筛「未测 / 上次失败」；检测段可据此选范围
+- [x] 增量档下的耗时显著低于全量（实测对照）
 
 **Verification:**
-- [ ] 真机：同一集合分别跑增量与全量，对比耗时
-- [ ] `make check` 通过
+- [x] 真机：同一集合分别跑增量与全量，对比耗时
+- [x] `make check` 通过
+
+**Evidence（2026-10-19，debug 真机 `33Z0224424136564`）：**`DETECT_INCREMENTAL_WINDOW_MS`
+为 7 天，检测段默认 `SCOPE_INCREMENTAL`，范围条另有「全部」「未测」「上次失败」与分组菜单；
+书源段提供「未测」「失败」筛选，「全部重测」明确走所有启用源。同一批 13 个启用源上，增量扫描
+`13/13` 用时 `00:08`，完整全量 `13/13` 用时 `00:12`，原始布局见
+[incremental](/tmp/t5-incremental-done.json) 与 [full](/tmp/t5-full-done.json)。增量结果为预检通过 9、
+无结果 2、超时 1、不可用 1；完整全量为可用 11、无结果 2、不可用 0。完整档耗时更高且结论更严格，
+未把预检通过升级成「可用」。
 
 **Dependencies:** T5.1、T3.3
 **Files likely touched:** `components/DetectPanel.ets`、`components/SourceRows.ets`、`common/Const.ets`
 **Estimated scope:** Small
 
-### Task T5.4 收尾
+### Task T5.4 收尾 — 已完成（2026-10-19）
 
 **Description:** 文案、文档、兼容性回归与判据核对。
 
 **Acceptance criteria:**
-- [ ] 判定口径文案（可用 / 无结果 / 超时 / 不可用 语义）收进按需展开，不常驻
-- [ ] `docs/specs/*.md` 与实现对齐；`docs/progress.md` 更新；
+- [x] 判定口径文案（可用 / 无结果 / 超时 / 不可用 语义）收进按需展开，不常驻
+- [x] `docs/specs/*.md` 与实现对齐；`docs/progress.md` 更新；
       `docs/research/BOOKSOURCE-REVAMP-PLAN.md` §2 的 A1–A12 标记为已落地
-- [ ] 备份兼容回归：旧备份可导入、新导出逐字段一致
-- [ ] map §9 十条判据逐条有实测证据（缺的补测或改写判据）
+- [x] 备份兼容回归：旧备份可导入、新导出逐字段一致
+- [x] map §9 十条判据逐条有实测证据（缺的补测或改写判据）
 
 **Verification:**
-- [ ] `make check` / `make test` / `make run-release` 全通过
-- [ ] 逐条核对 map §9，把证据链接写进本文件 Checkpoint 5
+- [x] `make check` / `make test` / `make run-release` 全通过
+- [x] 逐条核对 map §9，把证据链接写进本文件 Checkpoint 5
 - [ ] **与人对齐验收后再宣布完成**
+
+**Evidence（2026-10-19，release 真机 `33Z0224424136564`）：**判定口径只在「判定说明」展开后显示；
+`probe` 的 `ok` 为「预检通过（未验证）」，只有 `full` 的 `ok` 为「可用」。
+`SPEC-DETECT-UI.md` 的 Success 6 已与实现对齐，检查 `SPEC-DETECT-UI.md`、`SPEC-DETECT-JOB.md`
+与 `UI-SPEC.md` 后无剩余明确偏差。旧备份 `1007`、`1017` 与新导出均为 `schemaVersion=1`、13 个源，
+顶层键、源键集合与数组路径一致，差异仅为预期 `confidence`；三份文件见
+[1007](/tmp/t5-backup-old-1007.json)、[1017](/tmp/t5-backup-old-1017.json)、
+[new](/tmp/t5-backup-new.json)。`make run-release` 完成 release 编译、签名、安装、force-stop 与启动，
+按 bundle 过滤后的 release hilog 无 ArkTS `TypeError` / `ReferenceError` / `FATAL`，见
+[构建日志](/tmp/t5-final-run-release.log) 与 [hilog](/tmp/t5-final-release-hilog2.log)。
 
 **Dependencies:** T5.1–T5.3
 **Files likely touched:** `docs/specs/UI-SPEC.md`、`docs/progress.md`、
@@ -733,10 +823,44 @@ JSONL 为 0 行且超过 20 秒无新批次；末批缺源故障进入 `failed` 
 
 ### Checkpoint 5 — 完成
 
-- [ ] map §9 十条判据逐条有实测证据
-- [ ] `make check` / `make test` / `make run-release` 全通过
-- [ ] 备份兼容回归通过
+- [x] map §9 十条判据逐条有实测证据
+- [x] `make check` / `make test` / `make run-release` 全通过
+- [x] 备份兼容回归通过
 - [ ] **与人对齐验收**
+
+**map §9 逐条证据（2026-10-19）：**
+
+1. 3000 条首帧不阻塞、数据就绪 ≤300 ms：实测 `init=9 ms` / `list=33 ms` / `total=42 ms` /
+   `first_frame=27 ms` / `page_to_ready=69 ms`，见
+   [`T1.6-SOURCE-STORE-BENCH.md`](./T1.6-SOURCE-STORE-BENCH.md)。
+2. 单条 toggle / 删除 O(1)、≤16 ms：`upsertMany=477 ms`；首次 toggle `10 ms`，后续中位 `1 ms`，
+   remove `1 ms`，`jsonSerialize=0`，见 [`T1.6-SOURCE-STORE-BENCH.md`](./T1.6-SOURCE-STORE-BENCH.md)。
+3. 3000 行滚动无感知掉帧、搜索更新 ≤100 ms：Checkpoint 3 的滚动回调为 p50 `8 ms` / p95 `9 ms`，
+   检测段 max `24 ms`、无 `>=34 ms`；防抖后搜索投影 `12 ms`（端到端含 150 ms 防抖为 `163 ms`）。
+   T5 的检测段顶部/底部/连续滑动 dump 仅物化 4–5 个 `ListItem`，见
+   [top](/tmp/t5-3000-detect-top.json)、[bottom](/tmp/t5-3000-detect-bottom.json)、
+   [fling20](/tmp/t5-3000-detect-fling20.json)。
+4. L1 预检 3000 源 ≤20 分钟、全程有进度可取消：T0.2 实测选择并发 16 / L1 8 s（3000 源估算约
+   4.4 min）；T2.3 真源 3171 条 L1 墙钟 237 s。详见 [`T2.3-DETECT-TRUTH-TABLE.md`](./T2.3-DETECT-TRUTH-TABLE.md)
+   与本文件 T0.2。
+5. 中途强杀后从落盘进度续跑、已完成结果不丢：64 源首批后 force-stop，`job.json` 为
+   `running/cursor=32`、JSONL 仅 `0 -> 32`；重启从 32 续到 64，首批 SHA-256 不变。见本文件
+   T4.3 Evidence。
+6. 息屏 10 分钟继续推进：T0.1 真机息屏 606 秒零丢 tick；T4.4 的 1024 源 / 32 批任务持续推进
+   `10m27s` 到 `done/cursor=1024`，且与 TTS `audioPlayback` 合并后互不终止。见
+   [`T0.1-LONG-TASK-EVIDENCE.md`](./T0.1-LONG-TASK-EVIDENCE.md) 与本文件 T4.4 Evidence。
+7. 备份格式逐字段兼容、旧备份可导入：旧 `1007`、`1017` 与新导出均为 schema `1`、13 源，顶层键、
+   源键集合及数组路径一致，差异仅为预期 `confidence`；文件见
+   [1007](/tmp/t5-backup-old-1007.json)、[1017](/tmp/t5-backup-old-1017.json)、
+   [new](/tmp/t5-backup-new.json)。
+8. release 下新增落盘字段可读：`make check` 通过（200 个 keep 名字）；`make run-release` 编译、签名、
+   安装、force-stop、启动成功，release 日志无 ArkTS `TypeError` / `ReferenceError` / `FATAL`，见
+   [构建日志](/tmp/t5-final-run-release.log) 与 [hilog](/tmp/t5-final-release-hilog2.log)。
+9. `make test` / `make check` 通过：`make test` 65 passed，`make test-detect` 135 条断言通过，
+   `make check` 通过；本轮最终重跑结果记录在交付说明。
+10. 3000 条默认「启用」、异常分档置顶、搜索与筛选首屏可见：Checkpoint 3 已验证默认视图 2000/3000、
+    三档稳定排序及首屏布局；`LazyForEach` 只物化 6–7 个书源 `ListItem`。见本文件 Checkpoint 3 与
+    [`T1.6-SOURCE-STORE-BENCH.md`](./T1.6-SOURCE-STORE-BENCH.md)。
 
 ---
 
@@ -744,8 +868,8 @@ JSONL 为 0 行且超过 20 秒无新批次；末批缺源故障进入 `failed` 
 
 1. **`SPEC-SOURCE-LIST.md` Q4：恢复内置是「替换」还是「合并」？** `T3.2` 动手前必须定。
    现状是替换（`resetToBundled`），对已导入数千源的用户是最危险的按钮。
-2. **`SPEC-DETECT-UI.md` Q4：预检（L1）与完整（L2）结果的展示粒度。** `T5.1` 动手前必须定
-   ——在同一个「可用」列里混两种置信度会误导。
+2. ~~**`SPEC-DETECT-UI.md` Q4：预检（L1）与完整（L2）结果的展示粒度。**~~ **已定（T5）：**
+   `probe` 的 `ok` 显示为「预检通过（未验证）」并使用中性色；只有 `full` 的 `ok` 显示「可用」。
 3. **`SPEC-DETECT-UI.md` Q5：是否需要历史轮次对比。** 若需要，`T4.3` 的落盘保留策略要放宽
    （现定保留 2 轮）。
 4. **旧 preferences 回退保留几个版本**（现定 1 个）。取决于你对已导入源数量的判断。

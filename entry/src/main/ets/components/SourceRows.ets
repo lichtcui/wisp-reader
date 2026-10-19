@@ -1,9 +1,9 @@
 import { SourceRow } from '../model/SourceStore';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 
-export function sourceRowStateLabel(state: string): string {
+export function sourceRowStateLabel(state: string, mode: string = 'full'): string {
   if (state === 'ok') {
-    return '可用';
+    return mode === 'probe' ? '预检通过（未验证）' : '可用';
   }
   if (state === 'noResult') {
     return '无结果';
@@ -17,9 +17,9 @@ export function sourceRowStateLabel(state: string): string {
   return '未测';
 }
 
-export function sourceRowMeta(source: SourceRow): string {
+export function sourceRowMeta(source: SourceRow, mode: string = 'full'): string {
   const group: string = source.group.length > 0 ? source.group : '默认';
-  const state: string = sourceRowStateLabel(source.detectState);
+  const state: string = sourceRowStateLabel(source.detectState, mode);
   if (source.detectState.length === 0) {
     return group + ' · ' + state;
   }
@@ -61,6 +61,7 @@ export function sortSourceRowsForManage(rows: SourceRow[]): SourceRow[] {
 @ComponentV2
 export struct SourceManageRow {
   @Param source: SourceRow | undefined = undefined;
+  @Param detectMode: string = 'full';
   @Event onDetail: (source: SourceRow) => void = () => {};
   @Event onToggle: (source: SourceRow, on: boolean) => void = () => {};
   @Event onDelete: (source: SourceRow) => void = () => {};
@@ -75,7 +76,7 @@ export struct SourceManageRow {
 
   private meta(): string {
     const source: SourceRow | undefined = this.source;
-    return source === undefined ? '' : sourceRowMeta(source);
+    return source === undefined ? '' : sourceRowMeta(source, this.detectMode);
   }
 
   private menuItems(): MenuElement[] {

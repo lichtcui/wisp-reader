@@ -421,6 +421,34 @@ mod tests {
     }
 
     #[test]
+    fn test_bundled_source_preserves_timestamps() {
+        let bundled =
+            include_str!("../../../entry/src/main/resources/rawfile/bundled-sources.json");
+        let sources: Vec<BookSource> = serde_json::from_str(bundled).unwrap();
+        let source = sources
+            .iter()
+            .find(|source| source.respondTime > 0 && source.lastUpdateTime > 0)
+            .expect("bundled sources should contain detection timestamps");
+
+        let back = serde_json::to_value(source).unwrap();
+        assert_eq!(back["respondTime"], source.respondTime);
+        assert_eq!(back["lastUpdateTime"], source.lastUpdateTime);
+    }
+
+    #[test]
+    fn test_missing_timestamps_default_to_zero() {
+        let source: BookSource = serde_json::from_value(serde_json::json!({
+            "bookSourceName": "minimal",
+            "bookSourceUrl": "https://example.com",
+            "bookSourceType": 0
+        }))
+        .unwrap();
+
+        assert_eq!(source.respondTime, 0);
+        assert_eq!(source.lastUpdateTime, 0);
+    }
+
+    #[test]
     fn test_parse_concurrent_rate() {
         use serde_json::json;
         assert_eq!(
