@@ -1,12 +1,24 @@
 ---
 name: harmony-device-run
-description: 改完 source-reader（bundle com.lichtcui.sourcereader）代码后在真机验证的完整闭环流程（判定改动范围 → 编译 → 安装 → force-stop → 启动 → 抓日志），含改动范围判定、hdc/uitest 无 GUI 验证、构建与日志的输出卫生。用于本仓库任何代码改动后的验证，或用户反馈"改了没生效 / 设备上跑的是旧版"时。
+description: 改完 source-reader（bundle com.lichtcui.sourcereader）代码后在真机验证的完整闭环流程（判定改动范围 → 编译 → 安装 → force-stop → 启动 → 抓日志），含改动范围判定、hdc/uitest 无 GUI 验证、构建与日志的输出卫生。设备未连接时只提示用户连接，不做连接诊断。用于本仓库任何代码改动后的验证，或用户反馈"改了没生效 / 设备上跑的是旧版"时。
 ---
 
 # 真机验证闭环（source-reader）
 
 > 下面两个代码块来自项目根 `.harmony-skill.env`，由 `setup-codex.sh` 渲染；
 > 改命令后跑一次 `setup-codex.sh --force .`。
+
+## 0. 单手机连接门禁（强制）
+
+本项目的使用者只有一台日常手机，**不是常驻测试机**。真机验证必须由用户临时连接设备完成。
+
+- 需要真机时，先且只跑一次 `hdc list targets -v`（或 `make devices`）。
+- 结果为 `[Empty]` / `Offline`，或后续任一命令出现 `need connect-key`：**立即停止**，直接提示用户：
+  「请把手机连接到本机，解锁并在设备上确认 USB 调试 / 信任本机；连好后回复“继续”。」
+- 未得到用户明确回复前，不要自动做连接诊断或反复重试：不跑 `system_profiler` / `ioreg`、
+  `hdc kill -r` / `hdc start`、网络扫描、反复 `list targets`，也不继续 `make run` / `install` / `restart` / 抓日志。
+- 只有用户明确要求「排查连接问题」时，才进入 USB / hdc 诊断。
+- 用户回复已连接后，重新跑一次连接检查；通过则继续当前验收，结束前提醒用户手机可以断开。
 
 ## 1. 判定改动范围
 
@@ -41,6 +53,9 @@ make log              # 按 bundle 名筛 hilog；可加 Q=关键词
 3. **force-stop**：不 `aa force-stop`，`aboutToAppear` 不会重跑，界面看起来「没变化」。
 4. **启动**：`aa start` 后确认进程存在、窗口出现。
 5. **取证**：按 bundle 名筛日志 / dump 布局；只把关键行带回对话。
+
+`hdc` 可能在退出码为 0 时打印 `[Fail] ... need connect-key`；看到该文本同样按 §0 立即停止并提示连接，
+不能只看退出码。
 
 ## 3. 输出卫生（避免刷爆上下文）
 
@@ -95,6 +110,7 @@ sqlite3 /tmp/db/<库名>.db "<查询>"
 
 `改动文件 → 真机现象（截图 / 关键日志 ≤3 行）→ 结论 → 未验证项`。
 不复述命令、不贴完整日志、不贴整份 dumpLayout。
+设备未连接时只写一行阻塞原因并请用户连接，不展开连接排查过程。
 
 ## 相关
 

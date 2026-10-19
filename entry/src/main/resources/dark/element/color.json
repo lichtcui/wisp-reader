@@ -125,6 +125,14 @@
       "value": "#999999"
     },
     {
+      "name": "reader_divider",
+      "value": "#30303A"
+    },
+    {
+      "name": "reader_divider_day",
+      "value": "#EDEDED"
+    },
+    {
       "name": "listen_bg",
       "value": "#5A2A33"
     },

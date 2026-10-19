@@ -58,6 +58,7 @@ const JOB_FILE: string = 'job.json';
 const DATA_TRANSFER_MODE: string = 'dataTransfer';
 const AUDIO_PLAYBACK_MODE: string = 'audioPlayback';
 const PROGRESS_NOTIFY_INTERVAL_MS: number = 30000;
+const CANCEL_FEEDBACK_MIN_MS: number = 400;
 
 export const DETECT_BACKGROUND_INACTIVE: string = 'inactive';
 export const DETECT_BACKGROUND_REQUESTING: string = 'requesting';
@@ -303,8 +304,22 @@ export class DetectJobRunner {
         hilog.warn(DOMAIN, TAG, 'detect cancelled-state persistence error: %{public}s', errorText(err as Error));
       }
     }
-    this.refreshTrace();
-    await this.releaseBackground();
+    const releaseStartedAt: number = Date.now();
+    try {
+      // Keep the running trace visible while teardown finishes so the UI can
+      // render its disabled "stopping" state instead of removing the control.
+      await this.releaseBackground();
+    } finally {
+      const remainingFeedbackMs: number = CANCEL_FEEDBACK_MIN_MS - (Date.now() - releaseStartedAt);
+      if (remainingFeedbackMs > 0) {
+        await new Promise<void>((resolve: (value: void) => void): void => {
+          setTimeout((): void => {
+            resolve();
+          }, remainingFeedbackMs);
+        });
+      }
+      this.refreshTrace();
+    }
     hilog.info(DOMAIN, TAG, 'detect job cancelled cursor=%{public}d', this.job.cursor);
     return true;
   }

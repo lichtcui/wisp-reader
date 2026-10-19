@@ -30,6 +30,12 @@ export struct BottomDrawer {
   @Param mode: AppSheetMode = 'system';
   @Param showHeader: boolean = true;
   @Param panelBackground: Resource = $r('app.color.bg_page');
+  // Separator lines drawn inside the panel: the title divider and the drag
+  // indicator. Defaults to the app token. A drawer whose panel follows the
+  // *reader's* day/night switch must pass its own pair instead: under a dark
+  // system theme `divider` is #2A2A2A, which paints a black line across the
+  // light (`reader_bg_day`) panel.
+  @Param lineColor: ResourceColor = $r('app.color.divider');
   @Event onClose: () => void = () => {};
   @BuilderParam content: () => void = this.emptyContent;
 
@@ -218,7 +224,7 @@ export struct BottomDrawer {
         .width(36)
         .height(4)
         .borderRadius(2)
-        .backgroundColor($r('app.color.divider'))
+        .backgroundColor(this.lineColor)
     }
     .width('100%')
     .margin({ top: 8 })
@@ -242,7 +248,7 @@ export struct BottomDrawer {
       if (this.showHeader) {
         this.titleBar()
         Divider()
-          .color($r('app.color.divider'))
+          .color(this.lineColor)
           .strokeWidth(1)
       }
       this.contentArea()
@@ -256,7 +262,7 @@ export struct BottomDrawer {
       if (this.showHeader) {
         this.titleBar()
         Divider()
-          .color($r('app.color.divider'))
+          .color(this.lineColor)
           .strokeWidth(1)
       }
       this.contentArea()

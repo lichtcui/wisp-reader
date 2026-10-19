@@ -15,8 +15,8 @@
 - M5 结果（2026-09-25，真机验证） — L41
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L81
 - 在办：书源管理改造（3000 条） — L115
-- 未决 / 风险 — L185
-- 交接备忘 — L301
+- 未决 / 风险 — L228
+- 交接备忘 — L346
 <!-- TOC:END -->
 
 ---
@@ -34,7 +34,7 @@
 | M6 | 规则调试器 + 缓存清理 + 备份恢复 | ✅ 功能全部落地：规则调试器 UI（`pages/RuleDebugger.ets`，真机验收未做）、备份/恢复（`pages/BackupManage.ets`，含 2026-10-07 修的真「全量覆盖」）、目录缓存统计/清理、**缓存上限策略（`model/CacheTrim.ets`，2026-10-07 实现并真机六项压测通过）**。仅余规则调试器页真机验收 → [`research/CACHE-LIMIT-PLAN.md`](./research/CACHE-LIMIT-PLAN.md) |
 | v1.1 | **换源**（阅读页顶栏入口 / 书名 + 作者严格匹配 / 进度按章节序号迁移） | ✅ 已完成（真机验证往返切换 + 缓存清理，见上文同名节）；**2026-10-13 又修「候选被静默丢掉 + 每轮白等 13 源」并加预热，真机复验通过（候选 2→7 行、切换 ≤1s）**|
 | v1.2 | **书架「更新」**（手动批量查新章，只查详情不爬目录） | ✅ 已完成（**2026-10-13 真机验收 12 项**：进度文案 / 两个 toast 分支 / 本地书排除 / 零误写 / 防重入 / 幂等 / 编辑态隐藏；「有新章」分支真机不可造，见指针）→ [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-SHELF-7 |
-| v1.3 | **TTS 预生成（服务端章级缓存 + job worker）** | 🔶 **阶段一（服务端）2026-10-13 完成并 7/7 验收**（VPS，App 零改动）；阶段二（App 侧整章播缓存/变速/听完删）未开工 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-TTS-7、[`research/TTS-PREGEN-IMPL.md`](./research/TTS-PREGEN-IMPL.md) §4.1.1 |
+| v1.3 | **TTS 预生成（服务端章级缓存 + job worker）** | 🔶 **阶段一（服务端）2026-10-13 完成并 7/7 验收**；**阶段二（App 侧）同日实现，`make hap` + `make check` + 主机仿真 `make test-pregen` 87/87 通过**；**同日 D17：停用远端 VITS 实时链路**（实时改系统 TTS，VPS 只留给预生成缓存；跨章 16k↔24k 按章重建渲染器）。真机验收（2026-10-14 第二轮，自造短章本地书《短章测试》）：**缓存章路线全线贯通** —— ① D17 系统 TTS 实时 16 kHz ✓（`renderer ready rate=16000` + `begin para=0 route=realtime`）；② **缓存章 24 kHz 命中 ✓**（`route=cache` → `preg playing key=ec27bbff…` → `play para=1..6`）；③ **跨章 16k↔24k 双向重建渲染器 ✓**（`render rate 16000 -> 24000` 与 `24000 -> 16000`）；④ 音频未算完的章**出声前**退实时 ✓（`preg fallback=realtime why=notfound`，同章不混声线/采样率）；⑤ **听完即删 ✓**（`preg cache delete … code=204` + 设备 `pregkeys/` 清空）且下一章无人干预自动续；⑥ 顺带修三个真 bug：**本地书 pregKey 被静默丢弃**（正文不进 `ChapterCache` ⇒ 改 sidecar `filesDir/pregkeys/`，权威顺序「条目在就只信条目」）、**`%f` 日记打成 `rate=}f`**（hilog 不支持 `%f` ⇒ 新门禁 `scripts/check-hilog-format.sh` 接进 `make check`）、**提交后立刻进章把刚提交的缓存键抹掉**（404 = job 还没算完，旧逻辑当失效 ⇒ 现 `notfound` 一律保留键、**不跳过下载**，`pending=` 只进日志，仿真 91/91；**真机待验**）。未跑：拖动/变速逐项拍照、锁屏媒体卡、`expired` 分支、Wi-Fi 门禁取证（待 `ip route`）→ [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-TTS-7、[`research/TTS-PREGEN-IMPL.md`](./research/TTS-PREGEN-IMPL.md) §3.6 / §4.2 |
 | v2 | QuickJS/Boa JS 引擎、在线 TTS、真分页 | ⏳ |
 
 
@@ -115,17 +115,30 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 ## 在办：书源管理改造（3000 条）
 
 **状态：specs + plan + 任务清单已批准；`T0.2` / `T0.1` 门禁已完成；`T1.1`–`T1.6`
-均已真机通过（2026-10-17）。Phase 1 存储地基的技术验收已完成。Phase 3 的 `T3.1`–`T3.4`
-已完成（2026-10-18，debug 真机）：两段共用一份 `SourceRow` 投影，列表改用 `LazyForEach`，
+均已真机通过（2026-10-17）。Phase 1 存储地基的技术验收已完成；`T2.1` / `T2.2` 已完成并在 release
+真机验证。`T2.3` 真值表与真源对照已完成（2026-10-18，主机 probe；手机端 3000 源未验），
+Checkpoint 2 除“与人对齐后再进 Phase 4”外已通过。Phase 3 的 `T3.1` 页面骨架已完成
+（2026-10-18，debug 真机）：两段共用一份 `SourceRow` 投影，列表改用 `LazyForEach`，
 导入/调试/导出/恢复内置收进页内 `＋` / `⋯`；两段查询、筛选与滚动状态均保留。
 3000 条首帧/滚动已完成真机验收（2026-10-18）：冷启动 `init=9 ms`、`list=33 ms`、`total=42 ms`、
 `first_frame=27 ms`、`page_to_ready=69 ms`；默认书源、搜索后 198 行、检测段 3000 行三组实际滑动
 均为滚动回调帧距 p50 `8 ms` / p95 `9 ms`，max `25` / `23` / `24 ms`，`>=34 ms` 为 0。
-`T3.2` 已完成并真机验证：两行式行 + 开关 + 行尾 `⋯`，删除与「恢复内置」均走二次确认；
-「恢复内置」采用用户确认的**替换全部现有书源**语义。`T3.3` 已完成并真机验证：150 ms 防抖、
-计数 chips、分组筛选、两类空态及书源/检测两段独立状态。`T3.4` 详情抽屉已完成并真机验证：
-单源 `SourceDetailPanel` 按需读取完整规则字段，整行 / 菜单「详情」共用常驻抽屉并防快速切换串数据。
-`make test` 65 passed、`make check` 与 `make run` 通过，`BottomDrawer` 仍 8 处且无新增裸 `bindSheet`。**
+`T3.2` 已完成并真机验证（2026-10-18，debug `33Z0224424136564`）：两行式行 + 开关 + 行尾 `⋯`
+（详情 / 启停 / 删除），删除与「恢复内置」均走二次确认；“恢复内置”采用用户确认的**替换全部
+现有书源**语义。布局取证覆盖两行式行、行尾菜单和详情抽屉；取消删除/取消恢复后主库哈希与全表数据
+未变；`👍玄幻阁` 关闭时汇总为 `12/13`，数据库中只有 id `12119` 的 `enabled` 变化，重启后保持，
+再开启恢复 `13/13`。`make test` 65 passed，`make check`、`make hap` 通过。
+`T3.3` 已完成并真机验证（2026-10-18，debug `33Z0224424136564`）：150 ms 防抖搜名称/地址/分组；
+默认「启用」+ 不可用/待复查/可用三档稳定排序；计数 chips、分组筛选、两类空态，以及书源/检测
+两段独立的查询、筛选、分组、投影和滚动状态。投影在 build 外一次算好再 `setItems()`。3000 条
+合成数据上，防抖结束到投影完成 `8 ms`（端到端 `158 ms`），筛选 `6–12 ms`，分组 `8 ms`；三档
+排序、两类空态、分段隔离与恢复内置的“仅弹替换确认”均有 `dumpLayout` 证据。测试后已恢复设备
+基线库与 13 条书源，最终 HAP 安装启动无 ArkTS/JS 异常。`T3.4` 已完成并真机验证
+（2026-10-18，debug `33Z0224424136564`）：新增单源 `SourceDetailPanel`，整行 / 菜单「详情」
+共用常驻抽屉，按需 `getSource(id)` 读取完整规则字段并防快速切换串数据。布局取证覆盖首源
+`👍玄幻阁` → 关闭 → 第三源 `黑炎小说`、菜单「详情」打开 `小说`；名称、地址、分组、启停、
+检测态 / 耗时 / 时间、四类规则及删除二次确认均与选中源一致，取消删除未写入。`make test`
+65 passed、`make check` 与 `make run` 通过，`BottomDrawer` 仍 8 处且无新增裸 `bindSheet`。**
 
 - 设计（索引）：[`specs/SPEC-BOOKSOURCE-REVAMP.md`](./specs/SPEC-BOOKSOURCE-REVAMP.md)（capability map + 共享契约）
   + 五份模块 spec（`source-store` / `source-list` / `detect-engine` / `detect-job` / `detect-ui`）
@@ -171,16 +184,46 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
   `20 ms` 作为调度抖动风险保留。路径、哈希、hilog 与复跑说明 →
   [`research/T1.6-SOURCE-STORE-BENCH.md`](./research/T1.6-SOURCE-STORE-BENCH.md)。
   新增 `scripts/check-t16-bench.sh`，随 `make check` 执行；`make check` 通过。
-- **T2.1 / T2.2 / T2.3 已完成（2026-10-17–18，release 真机 + 主机 probe）**：时间字段契约、
-  probe/full 两档检测和 L1/L2 真值表均已验证；T2.3 真源对照为 L1 237 s / L2 283 s，
-  L1 通过集合包含 L2，详见 `T2.3-DETECT-TRUTH-TABLE.md`。Checkpoint 2 仅余人工门禁。
-- **下一步**：T4.1–T4.4 已完成。T4.4 在 debug 真机验证了 96 源完成/取消/失败三条路径、取消后无后续
-  批次且任务归零、1024 源 32 批约 10m27s 持续推进，以及 TTS `audioPlayback` 与检测
-  `dataTransfer` 合并后互不终止；每批只刷新一次冻结的 `@Trace`，进度通知按 30 秒节流。临时探针已清理，
-  设备恢复 13 条基线源。runner 尚未接入生产启动/UI 调用点，Phase 5 未开始；Checkpoint 4 仅剩与人对齐。
-  Checkpoint 3 与 T2.3 均已完成，不重跑。
+- **T2.1 已完成（2026-10-17，release 真机验证）**：基线 `c357fb7` 已有 Rust
+  `BookSource.lastUpdateTime` / `respondTime` 与混淆 keep，本次补齐 ArkTS `BookSource` 接口。
+  focused test 直接解析 `bundled-sources.json` 并验证真实值 round-trip，另验缺省字段为 `0`。
+  `make test` 60 passed；`make check` 的 keep 核对 184 个名字无遗漏。设备门禁首次
+  `make devices` 返回 `[Empty]`，按要求停止；设备 `33Z0224424136564` 连接后 `make run-release` 完成 release 编译、
+  signed HAP 安装、force-stop 与启动。启动探针在 release 混淆包读到「黑炎小说」
+  `respondTime=3662` / `lastUpdateTime=1685889740162`，与内置 JSON 一致；临时探针已移除。
+- **T2.2 已完成（2026-10-18，release 真机验证）**：`detect` 复用原 NAPI 入口新增
+  `mode: "probe" | "full"`；缺省/未知值回退 `full`，probe 默认 8 s、在 `search_one` 命中后早退，
+  full 仍走搜索→详情→目录→正文。Rust focused tests 覆盖 1 次请求早退、full 4 次请求、缺省值和
+  `no_results`；`make test` 64 passed，`make check` 的 185 个 keep 名字无遗漏。release 探针读到
+  `probe stage=search contentLen=0 elapsedMs=3009` 与省略 mode 的 `default-full stage=content
+  contentLen=1915 elapsedMs=7388`；临时探针已移除并重装干净 HAP，包内与日志均无 `T22-PROBE`。
+- **T2.3 已完成（2026-10-18，主机 probe）**：固定 HTML 真值表覆盖 L1 命中、L1 未命中
+  （`no_results`）、L2 完整通过和 L2 空目录页（`toc_fetch`）；`make test` 65 passed。
+  对 3907 条全量导出中 3171 条启用且有搜索规则的源，固定「剑来」、并发 16 跑同一批 L1/L2：
+  L1 墙钟 237 s、169 个唯一通过键，L2 墙钟 283 s、18 个唯一通过键；`L2-only=0`，L1 通过集合包含
+  L2。18 个共同源逐源耗时 16846 → 37305 ms（2.21x）。全批 `no_results=1144` 且
+  `unavailable=0`；`🔖九五小说①` 的目录失败明确为 `toc_fetch`。重复定义会让逐行结果波动
+  （`💯 连尚读书` 同键 L1 一成一败、L2 两次均成功），按自然键归并后才判集合。完整证据 →
+  [`research/T2.3-DETECT-TRUTH-TABLE.md`](./research/T2.3-DETECT-TRUTH-TABLE.md)。
+- **P0 T-CROSS-4 已关闭（2026-10-17 真机 10 分钟验收）**：TTS 的 `AUDIO_PLAYBACK`
+  长时任务此前约 **24 秒**后被系统停（`980000502` = `ERR_BGTASK_OBJECT_NOT_EXIST`），根因是 AVSession 先
+  `activate()`、`startBackgroundRunning` 后到的顺序竞态。`TtsController.start()` 已改成先起长时任务再建/激活 AVSession。
+  **复测**：亮屏基线正常 → `17:22:19` 息屏 → `play para=83`（17:22:27）持续到 `120`（17:27:45）→ 自动跨章后继续到新章 `13`（17:32:45）；
+  全程 `freezer:/`、无 `Frozen` / `HandleOnContinuousTaskStop` / `standby`。锁屏 OCR 识别到章节名与「剑来 · 烽火戏诸侯」，
+  AVSession 为 top session 且 metadata 正确；媒体键 10 实现 pause/resume，12/13 触发 next/prev。
+  `allowEnableNotification` 仍为 `false`，但不再影响本场景 ⇒ 通知总开关不是本 P0 的必要条件。
+  证据与判据 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-CROSS-4（本轮见 §第三十四次同步）
+- **T0.1 探针已清理（2026-10-15）**：`model/BackgroundProbe.ets` 删除 + `Settings.ets` 顶部 TEMP 组移除
+  （`Settings.ets` 已回到与 HEAD 一致；`make hap` ✓、真机 `make run` 后设置页无残留）
+- **下一步**：T5.1–T5.4 已完成，代码、debug 真机、release 与备份兼容回归均已通过。
+  生产页面已接入 `DetectJobRunner`（首次 reload 后 restore、跨段作业条、启动/取消/续跑）；三态布局、
+  离页返回、直接取消、增量/全量 `8s vs 12s`、无结果/超时不清理及 3000 行 `LazyForEach` 均有证据。
+  `make test` 65 passed、`make test-detect` 135 条断言通过、`make check` 与 `make run-release` 通过；
+  map §9 十条判据已逐条写入 `BOOKSOURCE-REVAMP-TODO.md` 的 Checkpoint 5。
+  现在只差 Checkpoint 5 的人工验收，未获确认前不宣布整个书源改造完成。Checkpoint 3 与 T2.3 均已完成，不重跑。
   T1.6 残留风险是 16 ms 阈值对首次写调度较敏感（前一轮首样本 `20 ms`，稳态中位 `1–2 ms`）。
-- 动手前待答：预检/完整结果的展示粒度（`T5.1`）；恢复内置已定为**替换**。
+  P0 T-CROSS-4 已关闭；剩余小项是预生成 `failed=10` 的独立排查，不阻塞书源改造。
+- 已定：预检 `ok` 为「预检通过（未验证）」、完整 `ok` 为「可用」；恢复内置为**替换**。
 
 ## 未决 / 风险
 
@@ -191,7 +234,9 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 
 - **T-TTS-7 TTS 预生成「阶段一」（服务端）2026-10-13 完成并 7/7 验收通过**（**App 侧一行未改**，不在设备上）：VPS 新增 `server/tts_cache.py`（内容寻址键 + 落盘布局 + 淘汰/保护 + 文件系统队列）、`server/job_worker.py`（**独立进程**，`import gsv_batch.synth_native` 作唯一合成口径，单 worker 单音色 `流萤`）、`tts-job.service`（**默认 disabled**，`MemoryMax=3800M`，启动自检 swap ≥4 G）、`server/pregen_test.py`（验收客户端）、`server/deploy.sh`；`app.py` 新增 6 个端点（`/job` `/job/status` `/audio/{key}` `DELETE /cache/{key}` `/cache/stats` `/cache/probe`）。
   实测：整章 8709 字 / 41 段 = **7 块**（≤1500 字/块）/ 音频 **1777.5 s** / **合成 3.34 h（RTF 6.76；记账请用 3.3 h / 8709 字，立项基准 2.78 h 是主机噪声更好的结果）** / HWM **3638 MB**；并发 `/tts` 45 次全部成功且**门闸连打 16 次让位**（09:14:04→09:17:49）；小样本 285 字（RTF 5.03 / 峰值 −2.0 dBFS / 0% 削顶）、幂等、淘汰与保护（含 `409 cache_full_wait_playback`）、Range 206、`kill -9` 重排恢复、SIGTERM 退条不留半章全通过。磁盘先回收 3.6 G（删 GSV 用不到的三个子模型）。
-  **未做**：阶段二（App 侧 `流萤` 音色 + `/audio` 整章播放/变速/听完 `DELETE`）与「批任务运行期间真机听书」的真机回归（主机侧同源探针已覆盖）；AI 生成音频只有 `curl` 能听。→ [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-TTS-7、[`research/TTS-PREGEN-IMPL.md`](./research/TTS-PREGEN-IMPL.md) §4.1.1、[`remote-tts-deploy.md`](./remote-tts-deploy.md) §9
+  **未做**：阶段二的真机回归（整章播缓存 / 拖动 / 变速 / 退实时不半章换声线 / 听完删）与「批任务运行期间真机听书」（主机侧同源探针已覆盖）；AI 生成音频只有 `curl` 能听。→ [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-TTS-7、[`research/TTS-PREGEN-IMPL.md`](./research/TTS-PREGEN-IMPL.md) §4.1.1 / §4.2、[`remote-tts-deploy.md`](./remote-tts-deploy.md) §9
+  **阶段二代码（2026-10-13 同日）**：新 `model/TtsPregen.ets`（契约/纯函数/HTTP）、`model/TtsPregenRunner.ets`（单例跟踪器，5 s 轮询）、`model/PregAudioSource.ets`（WAV → 24 kHz S16LE 读盘 + seek）；改 `model/TtsController.ets`（章级原子切换 + 预取下一章 + 听完即删）、`model/ChapterCache.ets`（`pregKey`）、`pages/Listening.ets`（预生成行）、`pages/ListeningSettings.ets`（预生成分组）、新 `scripts/tts-pregen-sim.py` + `make test-pregen`（**88/88 通过**：真源码机械切片跑路由/时间轴/倍速/文案，并据此修掉「服务端只剩过期项时『重试失败』按钮点了没反应」）。
+  验证到哪：`make hap` 成功 + `check-keep-props.sh` 172 个 keep 名全覆盖；**没上过设备**，`hdc list targets` 为空。
 
 - **T-SHELF-7 书架「更新」：2026-10-13 真机验收通过（设备 `33Z0224424136564` · debug · `make run`）**：进度 `检查中 0/2` → `1/2`、**`total = 2`（本地书正确排除）**、toast `没有发现新章节，1 本未检查` 与（停用两个同 URL 孪生源后）`检查失败，请检查网络或书源`、
   失败书不建基线且不影响其余书、**全程 `shelf.db` 逐列零写入**（反复点击/注入/复跑均如此）、连点两次只跑一轮、幂等、编辑态顶栏无入口 —— 共 12 项。
@@ -264,7 +309,7 @@ top session，锁屏/媒体键可控。两者 App 内 UI/控制器/后台/定时
 
 **未决**
 
-- **TTS 离线批量预生成（2026-10-12 已立项，阶段一未开工、仓库与线上零改动）**：用户提「VPS 空闲时批量预生成 50–100 章，听书优先读缓存音频」。
+- **TTS 离线批量预生成（2026-10-12 立项 / 2026-10-13 阶段一上 VPS 7/7 验收、阶段二代码落地未上真机）**：用户提「VPS 空闲时批量预生成 50–100 章，听书优先读缓存音频」。
   评估结论：**约束搬家** —— `RTF<1` 只属于实时流式，批量改用 `RTF ≤ 24 ÷ 每日收听小时数`（听 2 h/天 → ≤12）。
   **用户拍板（同日）**：① 默认引擎 = **GPT-SoVITS v2ProPlus（流萤微调）**（试听后「`cut5` + `fragment_interval=0.3` 这个听着效果比较好」）；
   ② 缓存 **WAV 直出（24 kHz mono）+ 严格淘汰**（已播放优先删、**未播放项保护**）；③ 素材**先手动喂**（curl），客户端入口后置。

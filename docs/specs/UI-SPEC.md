@@ -92,7 +92,8 @@
 | 遮罩 | `Color.Transparent`（**不压暗**，番茄式）。`app.color.mask` 仅 system 模式使用 |
 | 点遮罩关闭 | 遮罩层 `onClick → onClose` |
 | 面板背景 | 默认 `$r('app.color.bg_page')`；阅读页传 `panelBackground: this.bgColor()` 以跟随日夜模式 |
-| 拖拽指示条 | 自绘 `36×4`、radius 2、`divider` 色，上边距 8；system 模式的系统 `dragBar` 不再使用 |
+| 面板线色 | 默认 `$r('app.color.divider')`（标题分割线 + 拖拽条共用）；面板跟随**阅读日夜主题**的抽屉传 `lineColor: this.lineColor()` |
+| 拖拽指示条 | 自绘 `36×4`、radius 2、`lineColor` 色，上边距 8；system 模式的系统 `dragBar` 不再使用 |
 
 > **为什么必须有阴影**：overlay 面板底色是纯白 `bg_page`，遮罩又是透明的，背后的页面同样纯白 → 白叠白时 `borderRadius` 圆角边界**完全不可见**。阴影用于勾勒顶部边缘与圆角。
 >
@@ -113,6 +114,9 @@
 1. 拖拽指示条（§1.3）
 2. `showHeader === true` 时：标题栏 48vp（标题 17fp Medium，左 padding 20；右侧 X `SymbolGlyph(xmark)` 20fp，40×40 热区）+ 1px `divider`
    - 标题色 / 图标色默认 `text_1` / `text_3`；面板底色**不跟全局主题**的抽屉（阅读页换源：底色为 `reader_bg`，`reader_bg` 在浅色系统下也是深色）必须传 `titleColor` / `iconColor`（传阅读页的 `textColor()` / `dimColor()`）。
+   - 面板底色跟**阅读日夜主题**（而非系统主题）的抽屉**必须同时传 `lineColor`**（标题分割线 + 拖拽指示条）：
+     系统深色 + 阅读白天时全局 `divider` = `#2A2A2A`，画在白面板（`reader_bg_day`）上就是**一整条黑线**。
+     阅读页 4 处抽屉（目录正/倒序、设置、换源）统一传 `this.lineColor()`（`reader_divider` / `reader_divider_day`）。
 3. 内容区：左右 padding 16、底部 padding 24，`layoutWeight(1)`（`fit` 时为 0）
    - 内容区**没有顶部内边距**：首屏元素自带顶部留白（阅读页目录/设置为卡片自带 12vp；
      「源状态」的统计区为 `padding({ top: 16, bottom: 24 })`）。
@@ -144,6 +148,7 @@
 | `sheetTopRadius` | 20 | 抽屉顶部圆角 |
 | `sheetCardRadius` | 12 | 抽屉内卡片 |
 | `dragBar` | 36×4 / radius 2 | 拖拽指示条 |
+| `reader_divider` / `reader_divider_day` | `#30303A` / `#EDEDED` | 阅读页抽屉的线色（标题分割线 + 拖拽条），跟随阅读日夜主题 |
 
 颜色：`mask` L `#52000000` / D `#80000000`；`bg_page` L `#FFFFFF` / D `#121212`；
 `divider` L `#EDEDED` / D `#2A2A2A`；`brand` `#DA3838`；`text_1` `#333333`。
@@ -170,6 +175,8 @@
 > #6 是单源详情：点整行与行尾菜单「详情」共用同一个常驻抽屉，展示名称、地址、分组、启停、
 > 最近检测（状态 / 耗时 / 时间）与规则字段只读内容；删除入口仍复用现有二次确认。
 > 行号会漂移；**以命令为准**：`grep -rn "BottomDrawer({" entry/src/main/ets/pages/`
+> 行 1 / 2 / 3 / 8（阅读页 4 处）除了 `panelBackground: this.bgColor()`，还必须传 `lineColor: this.lineColor()`
+> （漏传 = 系统深色 + 阅读白天时标题下发一条黑线）。
 > 新增抽屉（第 8 处）必须同时登记到本表。
 
 ---

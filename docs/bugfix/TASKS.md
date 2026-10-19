@@ -1,3 +1,19 @@
+> **2026-10-17 第三十四次同步**：㉞ **T-CROSS-4 真机 10 分钟验收通过（P0 关闭）** ——
+> 设备 `33Z0224424136564`、debug 包、PID `62344`，《剑来》第十三章系统 TTS 实时路线。亮屏基线约 1 分 40 秒正常；
+> `17:22:19` 息屏，`17:22:21` 记录 `Ability onBackground` + `TTSStateObserver--OnPageHide`。其后 `play para=` 持续推进：
+> `17:22:27 para=83` → `17:23:46 para=93` → `17:27:45 para=120`；`17:27:55` 自动跨到下一章（`render rate 16000 -> 24000`），
+> `17:28:03 para=1` → `17:32:45 para=13`。全程 `/proc/62344/cgroup` 为 `cpu:/key-background` + `freezer:/`，
+> **无 `freezer:/Frozen`、无 `HandleOnContinuousTaskStop`、无 `standby`**；`continuous task probe` 在 `bg+25s / +45s / +60s`
+> 均为 `id=573 modes=audioPlayback suspend=false`。⇒ 顺序修复有效，息屏冻结不再复现。
+> **通知侧结论更正**：`bm dump -n com.lichtcui.sourcereader` 仍显示 `allowEnableNotification: false`，但本次 10 分钟播放**未受影响**
+> ⇒「通知总开关为 false 是冻结必要条件」的主嫌不成立；通知相关问题若还要追，应另立条目，不能再作为 T-CROSS-4 的阻塞。
+> **锁屏媒体卡/媒体键**：OCR 截图（`/tmp/lock1.png`）识别出 `第一卷 笼中雀 第十四章...` 与 `剑来 · 烽火戏诸侯`；
+> `hidumper -s AVSessionService -a -show_session_info` 显示本 App `is active=true`、`is the topsession=true`（`pid 62344`，
+> tag `source-reader-listen`）；`-show_metadata` 同样回 `title=第一卷 笼中雀 第十四章 五月初五` / `artist=剑来 · 烽火戏诸侯` / `duration=849400`。
+> 媒体键：`keyEvent 10` → 日志 `pause`，再按 → `resume` 且 `play para` 继续；`keyEvent 12/13` 分别触发媒体 next/prev
+> （两次均出现新的 `begin para=0 route=cache`，key13 后 AVSession metadata 回到第十四章）⇒ 路由可用。
+> 本轮**未改业务代码**，只更新验收记录与文档目录。
+>
 > **2026-10-16 第三十三次同步**：㉝ **T-TTS-7 阶段二「听感验收」通过（bug① 无白噪/无爆音 主观确认）+ 登记 1 个打磨项 + 记 3 个新坑** ——
 > **听感（设备 `33Z0224424136564` · 本地书《短章测试》`bookId=c9af6cb1` · 第三章缓存 key `0e7542fe7b66c631`，服务端 `audioMs=11700` / `561644 B`）**：在**缓存章内**用段落滑杆 **1.5x ↔ 1.0x 来回拖 + 切变速**共 8 次落点，用户判定 **无白噪、无爆音 ✓**；**「听到的正文 == 屏上章」✓**（bug② 主观闭环）。日志逐次 `preg play para=1 base=1733.333333 rate=1.50` / `para=2 base=5200`（交替）+ `preg playing key=0e7542fe7b66c631`，章尾 `preg chapter end` → `preg cache delete code=204`（「听完即删」如预期）。⇒ bug ①/② **主观 + 客观均已闭环**（客观证据见第三十 / 第三十二次同步）。
 > **打磨项（P2，本轮只登记不修）**：**拖动体感「声音重复 + 顿挫」** —— 滑杆是 `step: 1` 的**段落滑杆**（`pages/Listening.ets::progressBlock`，`value = paragraphIndex + 1`）⇒ 落点即段落起点，来回拖必然**重听整段**（设计粒度，非 bug）；且重启用 `pause() → flush() → start()`（`TtsController::startPregRenderer`），渲染器里排队的旧字节被**整段丢掉** ⇒ 中间有一小段静音 = 顿挫。要更丝滑：① 滑杆改连续（段内按 ms / 字节精确 seek，需全链路重测）；② 压缩 flush 后的静默窗口。
@@ -48,6 +64,77 @@
 > **路由取证**（toybox 无 `ip`，用 `/proc/net/route`）：仅 `wlan0`(192.168.10.110) 与 `ancowlan0` 有 IPv4 路由、**主表里无 `rmnet*`**（默认路由不在主表，`getDefaultNetSync().bearer` 判据仍待用别的方式核）；且 `tts_pregen_wifi_only=false` ⇒ 门禁本来就没拦。
 > **阻塞**：设备 USB 掉线（`hdc list targets` `[Empty]`、系统 USB 树里看不到设备）；Wi-Fi 可达（`ping 192.168.10.110` 0% 丢包）但**无线调试端口未开**（8710/8711/5555 均不可连）⇒ 需**重插 USB 线**（或开发者选项开「无线调试」）。
 > 门禁：`make test-pregen` ✓ 104/104、`make hap` ✓、`check-keep-props` ✓、`check-hilog-format` ✓。
+>
+> **2026-10-15 第三十一次同步**：㉛ **`T0.1` 长时任务真机门禁出结论（A1 已定）+ 顺手挖到一个 P0：TTS 的长时任务根本没成立** ——
+> **A1（已回写 `SPEC-DETECT-JOB.md` §3.6、plan §2 A1、`BOOKSOURCE-REVAMP-TODO.md` T0.1）**：
+> ① `BackgroundMode.DATA_TRANSFER` **存在且可用**（真机 `startBackgroundRunning` 成功 + 通知栏常驻通知；`module.json5` 已加 `dataTransfer`）；
+> ② **息屏 606 秒零丢 tick**（07:46:38→07:56:39，应用 PID 未变、每 5 s 一次），停表恰在 **10 分 03 秒** —— 与 SDK 原文规则
+> 「`DATA_TRANSFER` 进度超过 **10 分钟**不更新即取消，且进度通知必须是**实况窗（live view）**」吻合 ⇒ 作业必须
+> **按 ≤10 分钟节奏更新进度**（3000 源单轮 c=16 ≈4.4 min 落在窗口内，多轮/超长须分片）；
+> ③ **同一 UIAbility 不能同时持两个长时任务**（第二个 `startBackgroundRunning` 报 `9800005 The application has applied for a
+> continuous task`），共存正解是**一个任务带多类型**：`startBackgroundRunning(ctx, bgModes: string[], wantAgent)` /
+> `updateBackgroundRunning(ctx, bgModes[])`（**均 @since 12**，可用；@since 21 的 `ContinuousTaskRequest` 多任务形态本工程用不了）。
+> 降级路径（仅前台推进，2026-10-14 已批准）**未触发**，Phase 4 范围不变。
+> 证据全文：[`T0.1-LONG-TASK-EVIDENCE.md`](../research/T0.1-LONG-TASK-EVIDENCE.md)（含 SDK `.d.ts` 原文摘引）。
+>
+> **P0（本轮新发现，独立于 T0.1）：TTS 的 `AUDIO_PLAYBACK` 长时任务约 24 秒后即被系统停掉 ⇒ 听书息屏会被冻结**。
+> 真机取证（2026-10-15 13:17，PID 49386，设备 `33Z0224424136564`）：
+> ```
+> 13:17:03.700 av_session/AVSession: [UpdateFrontSession] AVSessionNotifyUpdateNotification failed, uid = 20020278, pid = 49386, ret = 980000502
+> 13:17:03.712 SourceReaderTts: background task started              ← startBackgroundRunning 返回成功（误导）
+> 13:17:03.787 CONTINUOUS_TASK: [CancelNotification:159] CancelNotification error label , id -1
+> 13:17:27.296 sceneboard/CONTINUOUS_TASK: HandleOnContinuousTaskStop  ← 24 秒后任务被停
+> 13:17:58.500 CONTINUOUS_TASK: [UpdateBackgroundRunningInner:1170] continuous task is not exist: 20020278_EntryAbility_10437, use start befor update
+> ```
+> 独立复现（同日 08:05→08:07，上一进程 1755）：TTS 播放中息屏 → **50 秒后应用整体被冻结**（`play para=` 停在同段），
+> 系统侧 `SUSPEND_MSG: [20020278] standby because of being frozen`；冻结前应用侧已持续报
+> `AVSession: [operator()]SetAVPlaybackState:2 in syncExecutor timeout after err:0`。与 SDK 明示的挂起原因吻合：
+> `ContinuousTaskSuspendReason.SYSTEM_SUSPEND_AUDIO_PLAYBACK_NOT_USE_AVSESSION = 5` / `_NOT_RUNNING = 6`
+> ⇒ **系统认为「接了任务但没接有效 AVSession / 没在播」**，于是不豁免冻结。**这与 M5 记录的「锁屏控件/媒体键可控、
+> 切后台不断」矛盾**：M5 走的是自持音频焦点路线，D17 改系统 TTS 后音频焦点归引擎，App 的 AVSession 不再被认作 front session。
+> **影响**：① 听书的后台/息屏播放（v1 承诺能力）在真机上不成立；② Phase 4「边听书边跑预检」不能靠 TTS 的任务保命。
+> **待办**：查 `980000502` 语义（SDK `.d.ts` 无此码，需靠 `av_session` 源码/文档）→ 确认是「AVSession 未成 front session」
+> 还是「未发布媒体通知」→ 按 M5 路线核对 D17 前后差异 → 修完再跑「TTS + 息屏 10 分钟」。
+> 门禁：`make hap` ✓、`make check` ✓（`make test`/`make probe` 本任务未改 Rust）。
+>
+> **2026-10-17 P0 定性完成 + 补丁已落盘（真机验收待设备重连）**：
+> **① `980000502` 已解码 = `ERR_BGTASK_OBJECT_NOT_EXIST`**（`resourceschedule_background_task_mgr/frameworks/common/include/bgtaskmgr_inner_errors.h:47-48`，
+> 接在 `ERR_BGTASK_OBJECT_EXISTS = 980000501` 之后顺延）。**调用链**：
+> `multimedia_av_session/.../avsession_service.cpp:844-857 AVSessionService::UpdateFrontSession(sessionItem, isAdd=true)`
+> → `BackgroundTaskMgrHelper::AVSessionNotifyUpdateNotification(uid, pid, true)` →
+> `bg_continuous_task_mgr.cpp:1709-1741` 在 `continuousTaskInfosMap_` 里查不到该 uid 的任务 ⇒ 返回该码。
+> **即：AVSession 先成为 front 并把「长时任务通知」职责移交后台任务模块那一刻，我们的 `AUDIO_PLAYBACK` 任务还没申请出来。**
+> 日志 `.700`（失败）与 `.712`（`background task started`）相隔 **12 ms** ⇒ **确定性顺序竞态，首次进听书必命中**。
+> **② 更致命的是这个副作用**：`bg_continuous_task_mgr.cpp:1733` 把 `avSessionNotification_[uid] = true` 写在「任务是否存在」检查
+> **之前**（不可逆）⇒ 即使这次调用失败，BTM 此后也认定「该 uid 的通知由 AVSession 负责」而**自己不再发通知**
+> （`:2331-2341 GetNotificationText()` 对 `AUDIO_PLAYBACK && isPublish==true` 直接跳过文案生成）。
+> **③ `CancelNotification error label , id -1` 是设计行为**：上述分支把空文案当「无通知可撤」并置 `notificationId_ = -1`，
+> 含义是「这块不归我」，**不是根因**；真风险是「两边都没发出去」。
+> **④ 冻结机制有 SDK 原文**：`@ohos.resourceschedule.backgroundTaskManager.d.ts` 的 `on('continuousTaskSuspend')`（@since 20，
+> 本工程 `compatibleSdkVersion=12` **不可直接调**）明写「系统检测到应用未真正执行对应业务时**不直接取消**任务，而是标记 suspended；
+> **长时任务被挂起后，应用切到后台就会被挂起（冻结）**」；实现 `bg_continuous_task_mgr.cpp:1787-1820 HandleSuspendContinuousAudioTask`
+> 先撤通知，再 `HandleAppContinuousTaskStop(uid)`，后者（`:2264-2279`）只回调**非 hap** 的系统订阅者 ⇒ 正是抓到的
+> `sceneboard/CONTINUOUS_TASK: HandleOnContinuousTaskStop`。另 `SuspendContinuousTask`（`:1445-1468`）对**未注册
+> `on('continuousTaskSuspend')` 的应用直接按 stop 处理** ⇒ 一个 `on(...)` 监听本可改命（但 API 不可用，故只能靠修时序+通知侧）。
+> ⇒ **一个因三个症状**：任务被判「未真正执行」→ 撤通知 + 通知系统「该应用长时任务已停」→ 退后台/息屏后被冻结 →
+> 应用进程内的 AudioRenderer `writeData` 回调饿死 → `play para=` 停在同一段。挂起原因只有 `SYSTEM_SUSPEND_AUDIO_PLAYBACK_NOT_USE_AVSESSION = 5`
+> / `…_NOT_RUNNING = 6` 两个枚举，本工程 API 受限无法直接从应用侧读。
+> **本轮改动（`entry/src/main/ets/model/TtsController.ets`，+60/-6，`make hap` ✓ 7.6 s）**：
+> ① **顺序修复**：`start()` 改为 `ensureEngine → **startBackground** → ensuresession → ensureRenderer`（转正内嵌在 `ensureSession` 之前；
+>    `beginFrom()` 里的 `startBackground()` 靠 `bgRunning` 守卫变成幂等空操作）；
+> ② **探针（只读，无行为变更）**：`activate` / `setLaunchAbility` / `setAVMetadata` / `setAVPlaybackState` 的错误码**不再吞**
+>    （`… failed code=… msg=…`）；AVSession 调用 >300 ms 打 `setAVMetadata|setAVPlaybackState slow <ms>`（历史 `syncExecutor timeout`
+>    在应用侧的回声）；`notificationManager.isNotificationEnabledSync()` → `notify enabled=… where=session-ready|bg-started`；
+>    `background task started dt=<ms> ms`；`avsession ready id=…`。**未动 NAPI / 落盘 JSON 字段** ⇒ 无需改 `obfuscation-rules.txt`。
+> **待真机验收（设备重连后一次跑完，约 8 min）**：`make run` → 听书出声 → 息屏前后来回各查一次
+> `hdc shell hidumper -s 1903 -a "--get 20020278"`（**SA 1903 = `bgtaskmgr_service`**，`sa_profile/1903.json`；
+> `bg_continuous_task_dumper.cpp` 的 `--get <uid>`，另有 `--all` 可列全部记录含 `suspendState` / `notificationId`）
+> ⇒ **回 `No running continuous task` = 任务已被取消（记录已 erase）；仍在且 `suspendState: true` = 只是被挂起**（两种都会冻结，但修法不同）。
+> 判据：① `980000502` 应**消失**（时序已修）；② `setAVPlaybackState slow/failed` 是否在冻结前扎堆（H2）；
+> ③ `notify enabled=false`（H1）；④ 最终验收 = **息屏 10 分钟 `play para=` 持续推进 + 锁屏媒体卡/媒体键可用 + 无 `HandleOnContinuousTaskStop`**。
+> **修正原猜测**：原以为「D17 后 App 的 AVSession 不再是 front session」，但 D17 只换了 PCM 来源、输出层（自建 AudioRenderer +
+> AVSession**未**变）⇒ 这个猜测不成立；当前主嫌是「通知职责被双失 + 时序竞态」。且 M5 只验过「Home 后不断」，**从未验过「息屏 N 分钟」**
+> ⇒ 按现有证据**不能判定为 D17 回归**。
 >
 > **2026-10-14 第三十次同步**：㉚ **修两个 T-TTS-7 阶段二真机 bug（缓存章拖动白噪 / 缓存键张冠李戴）+ 设备再次掉线** ——
 > **bug ① 拖动 seek 后整章白噪（已修，日志侧已见生效，听感待用户确认）**：`PregAudioSource` 把「毫秒 → 字节」四舍五入，会落到**奇数字节**；16 bit mono 下等于把采样高低字节互换 ⇒ 刺耳白噪。修法：新增纯函数 `pregSeekBytes(ms, sampleRate, bytesPerFrame)` 一律折成**整帧**字节（本例 2 B）；`make test-pregen` +3 条断言（含「200 个零碎 ms 全部帧对齐」）。真机日志：`preg rate=1.50`（变速 1.5× 出声）与 `preg play … base=711.78 rate=1.50`（缓存章内拖到 711.78 ms 后继续出声、其后 `play para=` 正常推进）。
@@ -240,6 +327,18 @@
     ① 修复前：音频在 ch0 播放时阅读页点「下一章」→ 库被写成 ch1（复现覆盖）；修复后同一操作库仍留音频章，阅读页在音频下一次推进段落时被拉回音频段（含长段落所在页，非第 1 页）；
     ② 播放中暂停 → 立即落盘（`STATE_PUSH_MS` 临时抬到 60s 仍见写入，证明走的是新 `setPlaying(false)` 路径；常量已还原 1000）；
     ③ 暂停后阅读页跳章写入恢复（归属已释放）；④ 无 TTS 会话的书照常写进度。
+
+- [x] **T-CROSS-4（P0）听书（系统 TTS 实时路线）息屏后被整体冻结**：`AUDIO_PLAYBACK` 长时任务约 24 s 即被系统停/挂起 ⇒ 退后台冻结（`play para=` 停在同一段）。**2026-10-17 真机 10 分钟验收通过，已关闭。**
+  - 根因（2026-10-17 已定性）：`980000502 = ERR_BGTASK_OBJECT_NOT_EXIST` —— **AVSession 先 `activate()` 成为 front、`startBackgroundRunning` 后到**（12 ms 竞态），
+    且 BTM 此后认为「通知归 AVSession」自己不发 ⇒ 两边都不发通知 ⇒ 任务被判「未真正执行」⇒ 撤通知 + `HandleAppContinuousTaskStop` ⇒ 冻结。
+  - 证据：本条 §第三十一次同步 的 P0 段 + 其后「2026-10-17 P0 定性」段（含系统侧源码行号）；日志 `.700 / .712 / .787 / 13:17:27.296`；
+    `entry/src/main/ets/model/TtsController.ets`（`start()` 顺序修复 + 错误码/通知/耗时探针）
+  - 状态（2026-10-17，已关闭）：顺序修复后 `980000502` 消失；此前「约 50 s 后 `freezer:/Frozen`」在本轮完整 10 分钟复测中**未复现**。
+    `allowEnableNotification` 仍为 `false`，但播放、锁屏媒体卡与媒体键均正常 ⇒ 通知总开关不是本 P0 的必要条件。
+    10 分钟窗口内 `play para=` 从 `83` 推进到 `120`，跨章后继续到新章 `13`；cgroup 保持 `freezer:/`，无任务停止/挂起日志。
+  - 验证：`make run` → 听书 → 息屏 10 分钟 ⇒ `play para=` 持续推进、无 `HandleOnContinuousTaskStop`、锁屏媒体卡/媒体键可用
+    （本轮证据见 §第三十四次同步）；另可**不改代码**地用 `hdc shell hidumper -s 1903 -a "--get <uid>"` 读任务记录
+    （`No running continuous task` = 已取消 / `suspendState: true` = 被挂起）。
 
 ---
 

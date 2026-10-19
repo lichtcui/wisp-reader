@@ -1175,6 +1175,13 @@ export struct ReaderPage {
     return this.nightMode ? $r('app.color.reader_dim') : $r('app.color.reader_dim_day');
   }
 
+  // 抽屉内的横线 / 拖拽指示条：必须跟着阅读日夜主题走（见 BottomDrawer.lineColor）。
+  // 用全局 `divider` 会踩「系统深色 + 阅读白天」：深色资源是 #2A2A2A，画在白面板上就是一条黑线。
+  // 与 reader_bg / reader_dim 同规格：base 与 dark 两份 color.json 里是同一组值（不随系统变）。
+  private lineColor(): Resource {
+    return this.nightMode ? $r('app.color.reader_divider') : $r('app.color.reader_divider_day');
+  }
+
   // ── UI builders ───────────────────────────────────────────────
 
   @Builder
@@ -1612,6 +1619,7 @@ export struct ReaderPage {
           mode: 'overlay',
           showHeader: false,
           panelBackground: this.bgColor(),
+          lineColor: this.lineColor(),
           onClose: () => {
             this.panel = PANEL_NONE;
           }
@@ -1625,6 +1633,7 @@ export struct ReaderPage {
           mode: 'overlay',
           showHeader: false,
           panelBackground: this.bgColor(),
+          lineColor: this.lineColor(),
           onClose: () => {
             this.panel = PANEL_NONE;
           }
@@ -1639,6 +1648,7 @@ export struct ReaderPage {
         mode: 'overlay',
         showHeader: false,
         panelBackground: this.bgColor(),
+        lineColor: this.lineColor(),
         onClose: () => {
           this.panel = PANEL_NONE;
         }
@@ -1656,6 +1666,7 @@ export struct ReaderPage {
         titleColor: this.textColor(),
         iconColor: this.dimColor(),
         panelBackground: this.bgColor(),
+        lineColor: this.lineColor(),
         onClose: () => {
           this.panel = PANEL_NONE;
         }

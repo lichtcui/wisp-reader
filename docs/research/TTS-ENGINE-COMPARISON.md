@@ -259,7 +259,7 @@ sherpa 的 `InitLexicon` **保留首次出现**（另 1,376 条日文重复项�
 | 风险 | 证据 | 处置 |
 |---|---|---|
 | **客户端 60s 超时会在播放中换音色** | `RemoteTtsClient.ets` `readTimeout=60000`；`AHEAD_REMOTE=3`（`Const.ets:58`）+ 服务端 `_lock` 串行 → 第 3 个排队请求最坏 ≈87s > 60s → 触发 `fallbackToSystem()` 中途切成系统 TTS | 建议把 `readTimeout` 提到 ≥120000。**设备离线，未改 ArkTS**。换引擎后 RTF 0.576，最坏排队从 ~87s 降到 ~57s，**已回到阈值以内但无余量** |
-| App 端音色列表还是旧的 | `Const.ets` `TTS_REMOTE_VOICE_OPTIONS=[流萤,花火,卡芙卡]` | 服务端做了别名映射，App 不改也能播；待设备可用时替换为 5 个新名 |
+| App 端音色列表还是旧的 | `Const.ets` `TTS_REMOTE_VOICE_OPTIONS=[流萤,花火,卡芙卡]` | 服务端做了别名映射，App 不改也能播；待设备可用时替换为 5 个新名。**→ 2026-10-13 D17 后作废：App 不再暴露这 5 个名字（实时改系统 TTS），本行只作恢复时的参考** |
 | 段落未按长度切分 | `BookContent.ets:20` 仅按 `\n` 切行 | 服务端已按标点切句并限长，暂不动客户端 |
 | 崩铁角色音色不存在 | VITS 系无 HSR 数据 | 已改用原神音色（用户确认） |
 | **现用 804 模型有日文口音** | CER 12.62%（§10） | 待定：换 `fanchen-C`（多音色）或 `melo`（单音色最准）；换模型只动服务端 `ENGINE`/`VITS_MODEL` 环境变量，**客户端零改动** |

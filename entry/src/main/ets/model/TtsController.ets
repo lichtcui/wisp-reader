@@ -24,6 +24,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { audio } from '@kit.AudioKit';
 import { textToSpeech } from '@kit.CoreSpeechKit';
 import { avSession } from '@kit.AVSessionKit';
+import { notificationManager } from '@kit.NotificationKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { Book, BookSource, Chapter } from '../engine/types';
 import { isReadable, nextReadable, prevReadable } from '../common/ChapterUtil';
@@ -82,6 +83,8 @@ const SAMPLE_RATE_REMOTE: number = 24000;
 /** UI progress refresh cadence, and how often the AVSession/DB state is pushed. */
 const PROGRESS_TICK_MS: number = 200;
 const STATE_PUSH_MS: number = 1000;
+/** AVSession 调用超过这个耗时就在日志里点名（历史症状：服务端 `syncExecutor timeout`）。 */
+const AV_SLOW_MS: number = 300;
 
 /** One piece of audio handed to the renderer; `end` marks a paragraph boundary. */
 class RenderItem {
@@ -221,6 +224,8 @@ export class TtsController {
   private creating: boolean = false;
   private voiceSwitching: boolean = false;
   private bgRunning: boolean = false;
+  private bgListenerRegistered: boolean = false;
+  private bgProbeTimerIds: number[] = [];
   private formatLogged: boolean = false;
   private timerId: number = -1;
   private tickId: number = -1;
@@ -316,12 +321,21 @@ export class TtsController {
     this.loading = true;
     try {
       await this.ensureEngine();
+      // P0 修复（2026-10-17）：**先申请长时任务，再建/激活 AVSession**。
+      // AVSession 一旦 `activate()` 就会把自己标成 front，并向后台任务模块发起
+      // `AVSessionNotifyUpdateNotification(uid, pid, true)`，把「长时任务通知」的职责移交过去；
+      // 若那一刻应用还没有 AUDIO_PLAYBACK 长时任务，该调用直接失败
+      // （`ERR_BGTASK_OBJECT_NOT_EXIST = 980000502`，见 docs/bugfix/TASKS.md P0 条目），
+      // 而后台任务模块此后认为「通知由 AVSession 负责」也不再发自己的通知 → 两边都不发
+      // → 任务被判无效 → 退后台/息屏后被冻结。
+      await this.startBackground();
       await this.ensureSession();
       // 这里还不知道本章走哪条路（`beginFrom` 才定），先按实时采样率建；
       // 缓存章会在 `ensureRenderRate` 里重建为 24 kHz。
       await this.ensureRenderer();
     } catch (err) {
-      hilog.error(DOMAIN, TAG, 'init failed');
+      const e = err as BusinessError;
+      hilog.error(DOMAIN, TAG, 'init failed code=%{public}d msg=%{public}s', e.code, e.message);
       this.error = '听书初始化失败';
       this.loading = false;
       this.active = false;
@@ -593,7 +607,20 @@ export class TtsController {
     session.on('seek', (time: number) => {
       self.seekByTime(time);
     });
-    await session.activate();
+    try {
+      await session.activate();
+    } catch (err) {
+      const e = err as BusinessError;
+      hilog.error(DOMAIN, TAG, 'activate failed code=%{public}d msg=%{public}s', e.code, e.message);
+      throw e as Error;
+    }
+    try {
+      await session.setBackgroundPlayMode(avSession.BackgroundPlayMode.ENABLE_BACKGROUND_PLAY);
+      hilog.info(DOMAIN, TAG, 'background play mode enabled');
+    } catch (err) {
+      const e = err as BusinessError;
+      hilog.warn(DOMAIN, TAG, 'setBackgroundPlayMode failed code=%{public}d msg=%{public}s', e.code, e.message);
+    }
     try {
       const wantAgentInfo: wantAgent.WantAgentInfo = {
         wants: [{
@@ -607,9 +634,12 @@ export class TtsController {
       const launch: WantAgent = await wantAgent.getWantAgent(wantAgentInfo);
       await session.setLaunchAbility(launch);
     } catch (err) {
+      const e = err as BusinessError;
+      hilog.warn(DOMAIN, TAG, 'setLaunchAbility failed code=%{public}d msg=%{public}s', e.code, e.message);
     }
     this.session = session;
-    hilog.info(DOMAIN, TAG, 'avsession ready');
+    hilog.info(DOMAIN, TAG, 'avsession ready id=%{public}s', session.sessionId);
+    this.logNotifyState('session-ready');
   }
 
   private async startBackground(): Promise<void> {
@@ -617,6 +647,7 @@ export class TtsController {
     if (this.bgRunning || ctx === undefined) {
       return;
     }
+    this.registerContinuousTaskListeners();
     try {
       const wantAgentInfo: wantAgent.WantAgentInfo = {
         wants: [{
@@ -628,13 +659,20 @@ export class TtsController {
         wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
       };
       const agent: WantAgent = await wantAgent.getWantAgent(wantAgentInfo);
+      const t0: number = Date.now();
       await backgroundTaskManager.startBackgroundRunning(
         ctx,
         backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK,
         agent
       );
       this.bgRunning = true;
-      hilog.info(DOMAIN, TAG, 'background task started');
+      hilog.info(DOMAIN, TAG, 'background task started dt=%{public}d ms', Date.now() - t0);
+      this.logNotifyState('bg-started');
+      this.scheduleContinuousTaskProbe('bg+1s', 1000);
+      this.scheduleContinuousTaskProbe('bg+10s', 10000);
+      this.scheduleContinuousTaskProbe('bg+25s', 25000);
+      this.scheduleContinuousTaskProbe('bg+45s', 45000);
+      this.scheduleContinuousTaskProbe('bg+60s', 60000);
     } catch (err) {
       const e = err as BusinessError;
       hilog.warn(DOMAIN, TAG, 'background task failed code=%{public}d msg=%{public}s', e.code, e.message);
@@ -646,9 +684,91 @@ export class TtsController {
     if (!this.bgRunning || ctx === undefined) {
       return;
     }
+    this.clearContinuousTaskProbes();
     backgroundTaskManager.stopBackgroundRunning(ctx).catch((err: BusinessError) => {
+      hilog.warn(DOMAIN, TAG, 'stopBackground failed code=%{public}d', err.code);
     });
     this.bgRunning = false;
+  }
+
+  private registerContinuousTaskListeners(): void {
+    if (this.bgListenerRegistered) {
+      return;
+    }
+    try {
+      backgroundTaskManager.on('continuousTaskCancel', (info: backgroundTaskManager.ContinuousTaskCancelInfo): void => {
+        hilog.warn(DOMAIN, TAG, 'continuous task cancel id=%{public}d reason=%{public}d',
+          info.id, info.reason);
+      });
+      backgroundTaskManager.on('continuousTaskSuspend',
+        (info: backgroundTaskManager.ContinuousTaskSuspendInfo): void => {
+          hilog.warn(DOMAIN, TAG, 'continuous task suspend id=%{public}d state=%{public}s reason=%{public}d',
+            info.continuousTaskId, info.suspendState.toString(), info.suspendReason);
+        });
+      this.bgListenerRegistered = true;
+      hilog.info(DOMAIN, TAG, 'continuous task listeners registered');
+    } catch (err) {
+      const e = err as BusinessError;
+      hilog.warn(DOMAIN, TAG, 'continuous task listeners failed code=%{public}d msg=%{public}s',
+        e.code, e.message);
+    }
+  }
+
+  private scheduleContinuousTaskProbe(label: string, delayMs: number): void {
+    const id: number = setTimeout((): void => {
+      this.bgProbeTimerIds = this.bgProbeTimerIds.filter((timerId: number): boolean => timerId !== id);
+      this.logContinuousTaskState(label);
+    }, delayMs);
+    this.bgProbeTimerIds.push(id);
+  }
+
+  private clearContinuousTaskProbes(): void {
+    for (const id of this.bgProbeTimerIds) {
+      clearTimeout(id);
+    }
+    this.bgProbeTimerIds = [];
+  }
+
+  private logContinuousTaskState(label: string): void {
+    const ctx: common.UIAbilityContext | undefined = this.ctx;
+    if (ctx === undefined) {
+      return;
+    }
+    const renderer: audio.AudioRenderer | undefined = this.renderer;
+    const rendererState: string = renderer === undefined
+      ? 'none'
+      : renderer.state.toString();
+    const frame: number = this.framePos();
+    backgroundTaskManager.getAllContinuousTasks(ctx, true).then(
+      (tasks: backgroundTaskManager.ContinuousTaskInfo[]): void => {
+        hilog.info(DOMAIN, TAG,
+          'continuous task probe at=%{public}s count=%{public}d renderer=%{public}s frame=%{public}d playing=%{public}s',
+          label, tasks.length, rendererState, frame, this.playing.toString());
+        for (const task of tasks) {
+          hilog.info(DOMAIN, TAG,
+            'continuous task info at=%{public}s id=%{public}d modes=%{public}s sub=%{public}s suspend=%{public}s notification=%{public}d ability=%{public}s',
+            label, task.continuousTaskId, task.backgroundModes.join(','), task.backgroundSubModes.join(','),
+            task.suspendState.toString(), task.notificationId, task.abilityName);
+        }
+      }).catch((err: BusinessError) => {
+      hilog.warn(DOMAIN, TAG, 'continuous task probe failed at=%{public}s code=%{public}d msg=%{public}s',
+        label, err.code, err.message);
+    });
+  }
+
+  /**
+   * P0 探针：应用通知是否开启。
+   * AUDIO_PLAYBACK 接入 AVSession 时，后台任务模块**故意**不发自己的通知（`id -1`），
+   * 通知由 AVSession 侧的媒体通知承担；通知发不出去 ⇒ 长时任务被判无效并被停掉。
+   */
+  private logNotifyState(where: string): void {
+    try {
+      const enabled: boolean = notificationManager.isNotificationEnabledSync();
+      hilog.info(DOMAIN, TAG, 'notify enabled=%{public}s where=%{public}s', enabled.toString(), where);
+    } catch (err) {
+      const e = err as BusinessError;
+      hilog.warn(DOMAIN, TAG, 'notify state query failed code=%{public}d where=%{public}s', e.code, where);
+    }
   }
 
   // ── Content / synthesis queue ─────────────────────────────────
@@ -1515,7 +1635,14 @@ export class TtsController {
       subtitle: book.name,
       duration: this.estimateDurationMs()
     };
-    session.setAVMetadata(meta).catch((err: BusinessError) => {
+    const t0: number = Date.now();
+    session.setAVMetadata(meta).then(() => {
+      const dt: number = Date.now() - t0;
+      if (dt >= AV_SLOW_MS) {
+        hilog.warn(DOMAIN, TAG, 'setAVMetadata slow %{public}d ms', dt);
+      }
+    }).catch((err: BusinessError) => {
+      hilog.warn(DOMAIN, TAG, 'setAVMetadata failed code=%{public}d msg=%{public}s', err.code, err.message);
     });
   }
 
@@ -1533,7 +1660,15 @@ export class TtsController {
       },
       duration: this.estimateDurationMs()
     };
-    session.setAVPlaybackState(playback).catch((err: BusinessError) => {
+    const t0: number = Date.now();
+    session.setAVPlaybackState(playback).then(() => {
+      const dt: number = Date.now() - t0;
+      if (dt >= AV_SLOW_MS) {
+        hilog.warn(DOMAIN, TAG, 'setAVPlaybackState slow %{public}d ms state=%{public}d', dt, state);
+      }
+    }).catch((err: BusinessError) => {
+      hilog.warn(DOMAIN, TAG, 'setAVPlaybackState failed code=%{public}d msg=%{public}s state=%{public}d',
+        err.code, err.message, state);
     });
   }
 
