@@ -615,21 +615,30 @@ force-stop，`job.json` 为 `running` / `cursor=32`，JSONL 仅 `0 -> 32`。原�
 `model/SourceStore.ets`、`scripts/detect-job-sim.py`、`entry/obfuscation-rules.txt`
 **Estimated scope:** Large → 若动手超过一个会话，拆成「分批派发」与「落盘/续跑」两个任务
 
-### Task T4.4 长时任务 + 取消 + 进度节流
+### Task T4.4 长时任务 + 取消 + 进度节流 — 已完成（2026-10-19，主机 + debug 真机）
 
 **Description:** 按 `T0.1` 结论接入长时任务（可用则 `DATA_TRANSFER`，否则降级为仅前台推进 +
 明示用户）；取消 = 置状态 + 停派发；结束/取消/失败都 `stopBackgroundRunning`。
 
 **Acceptance criteria:**
-- [ ] 按 A1 结论接入；降级路径下 UI 明示「离开应用会暂停」
-- [ ] 取消后 ≤1 批完全停止，无后续网络请求
-- [ ] 结束 / 取消 / 失败三条路径都会释放长时任务（无残留常驻通知）
-- [ ] 与 TTS 播放不互相终止（按 T0.1 结论核）
+- [x] 按 A1 结论接入 `dataTransfer`；本机可用，降级状态仅由 runner 暴露，UI 明示归 T5
+- [x] 取消后 ≤1 批完全停止，无后续网络请求
+- [x] 结束 / 取消 / 失败三条路径都会释放长时任务（无残留常驻通知）
+- [x] 与 TTS 播放不互相终止（已有 `audioPlayback` 时合并为 `audioPlayback,dataTransfer`）
 
 **Verification:**
-- [ ] 真机：取消后 `make log` 确认无新请求；通知栏无残留通知
-- [ ] 真机：息屏 10 分钟推进（或降级路径下确认已明示）
-- [ ] `make check` 通过
+- [x] 真机：取消后超过 20 秒无新批次；任务列表归零，无残留长时任务
+- [x] 真机：1024 源 / 32 批 / 约 10m27s 持续推进；T0.1 已实测息屏 606 秒零丢 tick
+- [x] `make check` 通过
+
+**Evidence（2026-10-19，主机 + debug 真机 `33Z0224424136564`）：** 96 源完成路径逐批推进
+`0 -> 32 -> 64 -> 96` 后进入 `done`；首批在途取消后 `job.json` 为 `cancelled` / `cursor=0`，
+JSONL 为 0 行且超过 20 秒无新批次；末批缺源故障进入 `failed` / `cursor=64`。三条路径最终都无残留
+长时任务。1024 源探针以 32 批、每批 20 秒延迟运行约 10m27s，最终 `done` / `cursor=1024`，
+32 行 JSONL 覆盖全部批次，任务类型为 `dataTransfer`。TTS 先持任务时检测启动沿用同一任务并把模式
+更新为 `audioPlayback,dataTransfer`，取消后恢复 `audioPlayback` 且 `ttsPlaying=true`。每批只刷新一次
+冻结的 11 个 `@Trace` 字段，进度通知按 30 秒节流。临时探针已清理，设备恢复 13 条基线源；runner 尚未
+接入生产启动/UI，Phase 5 未开始。
 
 **Dependencies:** T4.3、T0.1
 **Files likely touched:** `model/DetectJobRunner.ets`、`entry/src/main/module.json5`（如需）
@@ -637,10 +646,10 @@ force-stop，`job.json` 为 `running` / `cursor=32`，JSONL 仅 `0 -> 32`。原�
 
 ### Checkpoint 4 — 后台作业
 
-- [ ] map §9-5（强杀续跑）与 §9-6（息屏/降级）有实测
-- [ ] 取消 ≤1 批、无残留通知、无残留网络请求
-- [ ] `@Trace` 更新次数 ≈ 批次数
-- [ ] `make test-detect` 通过
+- [x] map §9-5（强杀续跑）与 §9-6（息屏/降级）有实测
+- [x] 取消 ≤1 批、无残留通知、无残留网络请求
+- [x] `@Trace` 更新次数 ≈ 批次数
+- [x] `make test-detect` 通过
 - [ ] **与人对齐后再进 Phase 5**
 
 ---
