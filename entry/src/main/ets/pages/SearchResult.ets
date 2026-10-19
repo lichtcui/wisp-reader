@@ -37,6 +37,7 @@ import { getBooks } from '../model/ShelfRepository';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 import { PickerRow, SourceListDataSource } from '../common/SourceListDataSource';
 import { cleanAuthor, cleanChapter } from '../common/Format';
+import { ENGINE_INFO_TIMEOUT_MS } from '../common/Const';
 
 const SEARCH_TIMEOUT_MS: number = 10_000;
 /** 搜索并发上限：由 Rust `buffer_unordered` 按输入顺序调度（高置信先执行）。 */
@@ -332,7 +333,7 @@ export struct SearchResultPage {
       return;
     }
     try {
-      const info: Book = await bookEngine.bookInfo(source, item.bookUrl);
+      const info: Book = await bookEngine.bookInfo(source, item.bookUrl, ENGINE_INFO_TIMEOUT_MS);
       if (gen !== this.searchGen) {
         return;
       }

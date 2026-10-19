@@ -21,8 +21,11 @@
 | 命令 | 作用 |
 |---|---|
 | `make run` | **改完代码走这个**：编译 debug HAP → 安装 → force-stop → 启动 |
-| `make hap` / `make hap-release` | 只编译（debug / release+混淆+签名） |
+| `make hap` / `make hap-release` | 只编译（debug / release+混淆）；两者都会先跑 `native-fresh` |
+| `make app-release` | 构建唯一 Release APP；缺少独立 Release 身份时以 `PUBLICATION_BLOCKED` 阻断 |
+| `make verify-app` / `make verify-profile` | 独立校验 Release APP 签名、digest、profile 类型 / bundle / 有效期 |
 | `make rust` | 交叉编译 `.so` **并拷 `index.d.ts`** 进 `entry/` |
+| `make native-fresh` | 校验 `.so` 与 `index.d.ts` 没有落后于 Rust 源码 |
 | `make test` | 主机跑引擎单测（`cargo test`，不碰真机） |
 | `make probe` | 主机直跑引擎，不上设备：`make probe ARGS='源.json search 关键词'` |
 | `make log` | 清日志 + 抓本应用日志（按 bundle 名筛，一次性 dump） |
@@ -49,6 +52,8 @@ cp dist/arm64-v8a/liblegado_core.so ../../entry/libs/arm64-v8a/
 - `ohrs build` 会顺带生成 `dist/index.d.ts`（NAPI 类型声明，由 Rust 的 `///` doc comment 来）。
   **改接口说明改 Rust 的 `///`**，手工分步时记得一并拷贝：
   `cp rust/legado-core/dist/index.d.ts entry/src/main/cpp/types/liblegado_core/`。
+- `make hap` / `make hap-release` / `make app-release` 依赖 `make native-fresh`。若它报 `.so` 或声明落后，
+  先跑 `make rust`；不要用旧 native 产物验证 ArkTS 改动。
 
 ## 构建 HAP（= `make hap` / `make hap-release`）
 
@@ -66,15 +71,39 @@ export PATH="/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applicatio
 
 ## 签名
 
-- 由 `build-profile.json5` 的 `signingConfigs` 提供；首次需在 **DevEco Studio → File → Project Structure →
-  Signing Configs → 勾选 Automatically generate signature**（华为账号，为新 bundle 生成 profile，绑定设备 UDID）。
+- 仓库内的 `build-profile.json5` 保持 `signingConfigs: []`，不放本地路径或口令。`hvigorfile.ts` 按
+  `SOURCE_READER_SIGNING_MODE=debug|release`（默认 `debug`）从仓库外读取身份：
+
+  ```text
+  ~/.ohos/source-reader/signing.json   # chmod 600
+  { "debug": { "type": "HarmonyOS", "material": { ... } }, "release": null }
+  ```
+
+- 旧版 `build-profile.json5` 内已有本机身份时，运行 `scripts/migrate-signing.sh --force`：它在仓库外写入
+  `debug` 身份、保留 `release: null`，并把工作区的签名配置清空。不要提交迁移前的 profile。
+- 首次生成 Debug 身份仍可走 **DevEco Studio → File → Project Structure → Signing Configs → Automatically generate signature**
+  或项目已有流程；迁移后日常构建不依赖 DevEco 把凭据写回仓库。正式 Release 需单独申请 release 类型证书 / Profile，
+  填入外部 JSON 的 `release` 字段，且不能与 Debug 的 alias / 证书 / profile 相同。
 - profile 与 **bundleName + 设备 UDID** 绑定，不能用别的工程的签名。
 - **报 `unable to obtain user group`**：是 DevEco 的 GRS 请求失败（账号已登录也可能发生）。处理：
   1. 重试；
   2. `File → Invalidate Caches / Restart`；
   3. 检查 `Settings → System Settings → HTTP Proxy`（本机系统代理在 `127.0.0.1:7897`）；
   4. 确认代理未拦 `*.dbankcloud.*` / `*.huawei.com`。
-- **`build-profile.json5` 含凭据，勿提交**。初始化 git 后：`git update-index --skip-worktree build-profile.json5`。
+- **不要把证书、Profile、keystore、路径或口令写回仓库**；`release: null` 时 `make app-release` 必须失败，这是发布门禁，
+  不是构建故障。
+
+## Release 产物（`make app-release`）
+
+```bash
+make app-release     # release-preflight → assembleApp → 确认唯一 *-signed.app
+make verify-app      # hap-sign-tool verify-app + digest + release profile + bundle
+make verify-profile  # 单独复核 profile 类型、bundle、有效期与 Debug 隔离
+```
+
+- 产物固定为 `build/outputs/default/source-reader-default-signed.app`；`verify-app` 最后输出 SHA-256。
+- `verify-app` / `verify-profile` 与 `app-release` 都会先跑 `scripts/release-preflight.sh`，没有独立 Release 身份时统一输出
+  `PUBLICATION_BLOCKED`。
 
 ## 安装 / 启动 / 日志（= `make run` / `make log` / `make devices`）
 

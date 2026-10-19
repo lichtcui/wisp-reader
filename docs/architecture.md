@@ -32,14 +32,15 @@ legado-core（规则解析 / HTML·JSON 提取 / HTTP / Cookie / 限速 / 正文
 `rust/legado-core/src/lib.rs` 的 `///` doc comment 生成（`make rust` 会一并拷贝），**勿手改**。
 本文件与 [`engine.md`](./engine.md) **不再粘贴签名列表**，只写「边界契约」与「语义」。
 
-- 当前导出（10 个）：`parse` / `parseWithDiagnostics` / `fetchText` / `gateSources` / `search` /
-  `bookInfo` / `toc` / `content` / `detect` / `downloadCover`。
+- 当前导出（11 个）：`parse` / `parseWithDiagnostics` / `fetchText` / `fetchTextWithTimeout` /
+  `gateSources` / `search` / `bookInfo` / `toc` / `content` / `detect` / `downloadCover`。
 - ArkTS `engine/BookEngineNapi.ets` 实现 `IBookEngine`，把 JSON 字符串解析为类型化对象。
 - 尚未实现：`search` 的「流式渐进进度」回调（当前一次返回 + 每源超时）。
 
 要点（边界契约，改引擎时必须遵守）：
 - **粗粒度**：输入完整 JSON，返回结构化；禁止按字段跨语言回调。
-- **异步**：Rust 内跑 tokio 工作线程（`search`/`detect` 用 `buffer_unordered` 限并发 + 超时）。
+- **异步**：Rust 内跑 tokio 工作线程（`search`/`detect` 用 `buffer_unordered` 限并发；所有网络操作
+  都有整段操作超时）。
 - **二进制不过 NAPI**：封面由 Rust 写沙箱文件，返回路径，ArkTS 用 `PixelMap` 加载。
 - **逐函数语义 / 错误码 / 分页与限流规则** → [`engine.md`](./engine.md)。
 
@@ -80,7 +81,8 @@ Makefile / scripts/         命令统一入口（`make help`）/ 工具脚本（
 docs/                        plan / progress / architecture / engine / development /
                              PITFALLS / decisions；specs/ / research/ / bugfix/ / handoff/ /
                              archive/（已完结历史，**默认不读**）
-build-profile.json5          含 signingConfigs（**含凭据，勿提交**）
+hvigorfile.ts                按构建模式注入仓库外签名身份（debug / release）
+build-profile.json5          产品/SDK 配置；signingConfigs 保持空，不存凭据
 .cargo/config.toml           cargo 镜像（rsproxy）
 entry/
   libs/arm64-v8a/liblegado_core.so        native 产物
@@ -130,7 +132,7 @@ rust/legado-core/    薄 NAPI 层（cdylib），依赖 legado-engine
 | 备份恢复 / 本地书 | `pages/BackupManage.ets`、`model/LocalBook.ets` |
 | 规则调试器（已实现） | `pages/RuleDebugger.ets` |
 | 颜色 / Design Token | `src/main/resources/{base,dark}/element/color.json`；规范见 [`plan.md`](./plan.md) §2 |
-| 权限 / SDK 版本 / bundle / 混淆 | `src/main/module.json5`、`AppScope/app.json5`、`build-profile.json5`、`entry/obfuscation-rules.txt` |
+| 权限 / SDK 版本 / bundle / 混淆 / 签名注入 | `src/main/module.json5`、`AppScope/app.json5`、`build-profile.json5`、`hvigorfile.ts`、`entry/obfuscation-rules.txt`；签名材料在仓库外 `~/.ohos/source-reader/signing.json` |
 
 改完的必走闭环：`make run`（编译 → 安装 → force-stop → 启动）；Rust 侧先 `make test`。
 踩坑按症状查 [`PITFALLS.md`](./PITFALLS.md)。

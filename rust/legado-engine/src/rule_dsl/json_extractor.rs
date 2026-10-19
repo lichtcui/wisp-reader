@@ -76,6 +76,7 @@ fn extract_segment(json: &Value, tokens: &[RuleToken]) -> Vec<String> {
                 results.push(stringify_value(current));
             }
         }
+        RuleToken::Unsupported(_) => {}
         _ => {}
     }
 

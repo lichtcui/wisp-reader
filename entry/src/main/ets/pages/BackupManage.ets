@@ -4,10 +4,12 @@ import { util } from '@kit.ArkTS';
 import { Book, BookSource, ReadProgress } from '../engine/types';
 import { countRows, exportAll, initSourceStore, replaceAll } from '../model/SourceStore';
 import { migrateFromPrefsOnce } from '../model/SourceStoreMigration';
-import { getAllProgress, getBooks, initShelf, replaceShelf } from '../model/ShelfRepository';
+import { countShelfRows, getAllProgress, getBooks, initShelf, replaceShelf, ShelfCounts } from '../model/ShelfRepository';
 import { GroupTitle } from '../components/ListCells';
 
 const BACKUP_SCHEMA_VERSION: number = 1;
+const FILE_CHUNK_BYTES: number = 1024 * 1024;
+const ENCODE_CHUNK_CHARS: number = Math.floor(FILE_CHUNK_BYTES / 4);
 
 interface BackupPayload {
   schemaVersion: number;
@@ -47,8 +49,9 @@ export struct BackupManagePage {
     }
     await this.prepareSourceStore(ctx);
     this.sourceCount = (await countRows()).total;
-    this.bookCount = (await getBooks()).length;
-    this.progressCount = (await getAllProgress()).size;
+    const counts: ShelfCounts = await countShelfRows();
+    this.bookCount = counts.books;
+    this.progressCount = counts.progress;
   }
 
   private pad2(n: number): string {
@@ -79,16 +82,68 @@ export struct BackupManagePage {
     return payload;
   }
 
-  private readText(uri: string): string {
-    const file: fileIo.File = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY);
+  private async readText(uri: string): Promise<string> {
+    const file: fileIo.File = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
     try {
-      const stat: fileIo.Stat = fileIo.statSync(file.fd);
-      const buffer: ArrayBuffer = new ArrayBuffer(stat.size);
-      const read: number = fileIo.readSync(file.fd, buffer);
-      const bytes: Uint8Array = new Uint8Array(read === stat.size ? buffer : buffer.slice(0, read));
-      return util.TextDecoder.create('utf-8').decodeToString(bytes);
+      const stat: fileIo.Stat = await fileIo.stat(file.fd);
+      if (stat.size <= 0) {
+        return '';
+      }
+      const buffer: ArrayBuffer = new ArrayBuffer(FILE_CHUNK_BYTES);
+      const bytes: Uint8Array = new Uint8Array(buffer);
+      const decoder: util.TextDecoder = util.TextDecoder.create('utf-8');
+      const parts: string[] = [];
+      let total: number = 0;
+      while (total < stat.size) {
+        const length: number = Math.min(FILE_CHUNK_BYTES, stat.size - total);
+        const read: number = await fileIo.read(file.fd, buffer, { length: length });
+        if (read <= 0) {
+          throw new Error('unexpected EOF while reading backup');
+        }
+        parts.push(decoder.decodeToString(bytes.subarray(0, read), { stream: total + read < stat.size }));
+        total += read;
+      }
+      return parts.join('');
     } finally {
-      fileIo.closeSync(file);
+      await fileIo.close(file);
+    }
+  }
+
+  private async writeAll(fd: number, buffer: ArrayBuffer, length: number): Promise<void> {
+    let written: number = 0;
+    while (written < length) {
+      const source: ArrayBuffer = written === 0 ? buffer : buffer.slice(written, length);
+      const n: number = await fileIo.write(fd, source, { length: length - written });
+      if (n <= 0) {
+        throw new Error('failed to write backup');
+      }
+      written += n;
+    }
+  }
+
+  private async writeText(fd: number, text: string): Promise<void> {
+    if (text.length === 0) {
+      return;
+    }
+    const encoder: util.TextEncoder = util.TextEncoder.create('utf-8');
+    const buffer: ArrayBuffer = new ArrayBuffer(FILE_CHUNK_BYTES);
+    const bytes: Uint8Array = new Uint8Array(buffer);
+    let next: number = 0;
+    while (next < text.length) {
+      let end: number = Math.min(text.length, next + ENCODE_CHUNK_CHARS);
+      if (end < text.length && end > next) {
+        const last: number = text.charCodeAt(end - 1);
+        if (last >= 0xD800 && last <= 0xDBFF) {
+          end -= 1; // Keep surrogate pairs in the same UTF-8 chunk.
+        }
+      }
+      const encoded: util.EncodeIntoUint8ArrayInfo =
+        encoder.encodeIntoUint8Array(text.substring(next, end), bytes);
+      if (encoded.read <= 0 || encoded.written <= 0) {
+        throw new Error('failed to encode backup');
+      }
+      await this.writeAll(fd, buffer, encoded.written);
+      next += encoded.read;
     }
   }
 
@@ -108,14 +163,14 @@ export struct BackupManagePage {
       if (uris.length === 0) {
         return;
       }
-      const file: fileIo.File = fileIo.openSync(
+      const file: fileIo.File = await fileIo.open(
         uris[0],
         fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC
       );
       try {
-        fileIo.writeSync(file.fd, json);
+        await this.writeText(file.fd, json);
       } finally {
-        fileIo.closeSync(file);
+        await fileIo.close(file);
       }
       this.toast('备份已导出');
     } catch (err) {
@@ -137,7 +192,7 @@ export struct BackupManagePage {
       if (uris.length === 0) {
         return;
       }
-      const text: string = this.readText(uris[0]);
+      const text: string = await this.readText(uris[0]);
       const payload: BackupPayload = JSON.parse(text) as BackupPayload;
       if (payload === null || payload.schemaVersion !== BACKUP_SCHEMA_VERSION) {
         this.toast('备份文件版本不受支持');

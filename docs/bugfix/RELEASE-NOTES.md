@@ -105,25 +105,23 @@
 
 ---
 
-## 3. 签名审计（重要）
+## 3. 签名审计（2026-10-19 已外置）
 
-| 字段 | 状态 |
+| 字段 | 当前状态 |
 |---|---|
-| `signingConfigs` 数量 | 1（`default`，`type: HarmonyOS`） |
-| 产品绑定 | `products.default.signingConfig = default`（Debug / Release **共用同一身份**） |
-| `keyAlias` | `debugKey` |
-| 密码字段 | `keyPassword` / `storePassword` 为 86 字符 DevEco 密文（前缀 `000000`）→ `DEVECO_CIPHERTEXT_LIKELY`（非明文） |
-| 证书/Profile/keystore | 全部位于仓库**外部** `~/.ohos/config/` |
-| Profile 类型 | **`debug`**（含 `debug-info`、development-certificate；无 distribution-certificate） |
-| 仓库边界 | `.p12/.p7b/.cer/.keystore` **未被跟踪、历史中亦无**（无泄漏） |
-| 但 | `build-profile.json5` **本身被跟踪且内含本地绝对路径 + DevEco 密文口令** |
+| 仓库内 `build-profile.json5` | `signingConfigs: []`；产品不再绑定签名身份，不含路径或口令 |
+| 仓库外身份文件 | `~/.ohos/source-reader/signing.json`，权限 `600`，格式 `{ debug, release }` |
+| 构建模式注入 | `hvigorfile.ts` 按 `SOURCE_READER_SIGNING_MODE=debug|release` 选择身份 |
+| Debug | 已配置，仅用于本地开发安装 |
+| Release | `null`；`make app-release` / `make verify-*` 必须以 `PUBLICATION_BLOCKED` 阻断 |
+| 历史审计 | 2026-09-27 的产物曾由 Debug Profile 签发，且 `build-profile.json5` 内含本机路径与 DevEco 密文口令；该快照已由 `scripts/migrate-signing.sh` 机制取代 |
 
-**结论：`SIGNING_READY` 未达成（针对公开发布）。** `assembleHap/assembleApp` 成功、`verify-app` 通过，但产物由 **Debug 身份/Profile** 签发，**不得**用于正式分发或 AppGallery 上架；仅适用于本地开发安装。
+**结论：`SIGNING_READY` 仍未达成。** 当前没有独立 Release 身份，不能构建或声称已有可公开发布产物；已生成的 Debug 包不得用于正式分发或 AppGallery 上架。
 
-**建议（发布前必做）**
-1. 申请正式 Release 证书与 Profile（release 类型、distribution-certificate），新增独立 `signingConfig` 并仅绑定 `products.default` 的 Release 构建；Debug 与 Release 身份分离。
-2. 按 `docs/development.md` §签名：将 `build-profile.json5` 的本地签名差异 `git update-index --skip-worktree`，仓库保存 `signingConfigs: []` 干净版；**勿提交**含路径/口令的版本。
-3. 完成正式 Release 构建后用 `hap-sign-tool verify-app` + `verify-profile` 复核 profile 类型为 release 且 bundle 一致。
+**发布前必做**
+1. 申请 release 类型证书与 Profile（含 distribution-certificate），填入外部签名文件的 `release` 字段；不得复用 Debug 的 alias / 证书 / profile。
+2. 运行 `make app-release`，再运行 `make verify-app` / `make verify-profile`，复核 profile 类型、bundle、有效期与 SHA-256。
+3. 只有两道门禁全部通过后，才把发布状态提升为 `READY_FOR_PUBLICATION`。
 
 ---
 
@@ -203,13 +201,13 @@ release 与 debug 两个包均验证；release 包**不输出 App 自身 `hilog`
 | 代码评审（4 模块） | ✅ |
 | TASKS 逐项验收 | ✅（见 `TASKS.md` 附录） |
 | clean debug 构建 | ✅ |
-| release 构建 + SignHap + SignApp | ✅ |
+| release 构建 + SignHap + SignApp | ✅ 历史结果（仅 Debug 身份；当前 Release 身份缺失） |
 | Rust `cargo test` | ✅ 54/54 |
-| `verify-app` / `verify-profile` | ✅（身份为 debug） |
-| 签名就绪（公开发布） | ❌ Debug Profile |
+| `verify-app` / `verify-profile` | ✅ 历史结果（身份为 debug；当前门禁会阻断） |
+| 签名就绪（公开发布） | ❌ 外部 `release = null` |
 | 真机冒烟 | ✅ 已执行（见 §5） |
 | 真机跨书串扰 + 后台任务结束直接观测 | ⏭ 待联网/工具条件复验 |
-| Git 清理 | ⚠️ 已提交 `596f16a`；`build-profile.json5` 凭据边界待处理 |
+| Git 清理 | ✅ 签名材料已移出仓库；工作区 `build-profile.json5` 不再保存凭据 |
 
 **最高发布状态：`SMOKE_TESTED`（仅限内部/开发渠道；公开发布仍受 Release 签名身份阻塞，未达 `READY_FOR_PUBLICATION`）。**
 ---
@@ -748,15 +746,16 @@ TTS 侧 `model/BookContent.ets::loadChapterParagraphs` 有同型「未命中即�
 
 ### 19.3 实现与三个被改掉的设计点
 
-- 常量：`SEARCH_TIMEOUT_MS = 6000`（对齐 T-SWITCH-1 单源超时）、`BOOK_TIMEOUT_MS = 15000`、`CHECK_CONCURRENCY = 3`、`CHECK_BUDGET_MS = 90000`。
+- 常量：`SEARCH_TIMEOUT_MS = 6000`（对齐 T-SWITCH-1 单源超时）、`ENGINE_INFO_TIMEOUT_MS = 15000`、`CHECK_CONCURRENCY = 3`、`CHECK_BUDGET_MS = 90000`。
 - 返回 `ShelfUpdateOutcome { total, checked, failed, skipped, updated }`；进度回调 = 起始 `(0,N,0)` + 每本结束一次 `(done,N,failed)`（第三个参数是累计失败数，2026-10-13 收尾小迭代加的）；书架按钮显示 `shelfProgressText()`（无失败 `检查中 1/2`，有失败 `检查中 1/2 · 1 本未检查`）+ 防重入。
 - 结束 toast：`N 本有新章节` / `没有发现新章节` / `没有发现新章节，N 本未检查` / `检查失败，请检查网络或书源` / `书架里没有可检查的网络书籍` / `更新失败，请稍后重试`。
 - ① **基线比较走 `cleanChapter` 归一化**（立项时打算直接比字符串）：同一章在详情页是 `第83章 今日无事`、在搜索结果/换源是 `最新：第83章 今日无事`
   ⇒ 直接比会把**没更新**的书报成有新章。归一化后**相等但原串不同**时**静默对齐**基线（不回显「有新章」），下次比较即退化成纯字符串相等 ⇒ 幂等。
 - ② **无基线（`last_chapter_title` 为空）时不当「有新章」**，只静默写入当前值**建基线**：否则加书后第一次更新会把**整架书**报成有新章。
   保留的已知代价：加入书架后到第一次更新之间章节变过的书，基线还停在加入那天 ⇒ 会被报成有新章，写一次后即准。
-- ③ **单本超时 6s → 15s**：`bookInfo` 在 NAPI 上**没有 timeout 参数**（只有 reqwest 客户端的 15s 硬上限），故障源可能一直挂着；
-  这条 ArkTS 侧 `Promise` 竞速是它**唯一**的护栏，而一次 6s 的整链上限会让「搜索正好用满 6s」的书连 `bookInfo` 都发不出去。
+- ③ **单本超时 6s → 15s**：当时用 ArkTS `Promise` 竞速兜底；2026-10-19 已改为把
+  `ENGINE_INFO_TIMEOUT_MS` 传给 `bookInfo`，由 Rust 对整个详情操作（含重定向和解析）统一计时，
+  ArkTS 侧不再维护竞速定时器。90s 整体预算仍用于限制一轮书架更新的总时长。
 - 失败/预算语义：搜索失败 / 未命中同一本书 / `bookInfo` 失败 / 超时 / 无章节名 / 书源缺失或停用 ⇒ 计 `failed`，**不写库、不动基线、不影响其余书**；
   本地书排除（不计入 `total`）；预算耗尽而未开始的书计 `skipped`（下次点击继续）。
 
@@ -802,3 +801,75 @@ UI：仍是 13fp `text_3`、`maxLines(1)`，**未新造令牌/样式**，「更�
 - 有失败形态 `检查中 1/2 · 1 本未检查` —— 注入方式：停用 `bbiquge8` **及其同 URL 孪生 `笔趣阁8`**（该源不请求即计失败），另一本仍要走网络 ⇒ 失败数在**进行中**就上屏（这正是本迭代的目的）；注入后两个开关已还原，复检「书源（13/13 启用）」；
 - 同一注入轮 DB 无写入（全部失败 ⇒ 不该有 `upsertBook`；比对用 `shelf.db` + `-wal` 合并；**只 recv 主库会漏 WAL**）；
 - 宽度/截断：以实测字宽外推最长形态 `检查中 20/20 · 19 本未检查` ≈ 550px，可用区间 ≈ 710px（标题右缘 190 → 「更新」按钮左缘 ~900）⇒ 余量 ≈ 160px（~80vp），**不截断**；该最长形态本身未在真机出现（架上只有 2 本网络书）⇒ 仍是外推。
+
+## 20. 增量（2026-10-19）：换源当前位置兜底 + 封面加载单飞
+
+范围：`components/SourceSwitchPanel.ets`、`pages/Reader.ets`、`components/BookCover.ets`。
+验证环境：**主机侧**（`make hap` / 回归脚本 / `make check`）+ **真机部分路径**（设备 `33Z0224424136564`，
+debug HAP）；真机已覆盖书架读路径、更新检查、启动缓存裁剪与备份导入导出，其余路径见 §20.6。
+
+### 20.1 换源：当前源检索失败时仍显示「我在哪」
+
+换源抽屉原先只用候选行上的 `current` 标记当前源。若单源瞬时超时或本轮没返回当前源，抽屉里会完全没有当前位置。
+现在检索结束后若没有任何 `current` 候选，就在进度行下方固定显示当前源名 +「本轮检索未返回当前源」+「当前」：
+`currentSourceName` 由 `Reader` 传入；该行不可点击、不显示「切换」，且**不计入候选数**。检索中不插入，避免列表跳动。
+
+### 20.2 封面：并发渲染同一 URL 只下载并解码一次
+
+`BookCover` 原先只有成功的 PixelMap / 路径缓存；书架、搜索、详情同时在首帧请求同一封面时，会各自穿过空缓存并重复下载、解码。
+现在模块级 `inflightLoads` 按 `cacheDir + coverUrl` 单飞整段「下载 + 解码」，后到组件直接等待同一个 Promise；成功后共享 PixelMap LRU，
+失败后共享 `failedCache` 且任务出表。`ImageSource` 在解码完成后显式 `release()`，不再把文件句柄和解码器状态留到 GC。
+
+### 20.3 书架：一条 JOIN、按 URL 只读书源、轻量缓存进度
+
+书架刷新原先串行 `getSource()`，随后又需要先读完整投影、按 URL 选行，再按 id 批读完整规则。现在拆成三条
+更窄的查询：
+
+- `ShelfRepository.getShelfBooks()` 用一条 `books LEFT JOIN progress` 同时取书籍与当前进度，保持
+  `added_at DESC` 的展示顺序，不再分别读两张表后在内存合并。
+- `SourceStore.sourcesForUrls()` 只接收书架实际使用的 URL，去空、去重、400 个一组读取完整书源；同一 URL
+  优先最早的启用行，否则回退最早的可解析行。坏 JSON 不占位，后续候选仍可命中，结果按输入 URL 顺序返回。
+- 书架「更新」也改用同一 URL 批读入口；`CacheTrim` 只取 `book_id + chapter_index`，不再反序列化整行
+  `ReadProgress`。`getBooks()` / `getAllProgress()` 的列下标仍保持每张结果集解析一次。
+
+完整书源的 `enabled` 与 `confidence` 都由索引列覆盖 `json` 中的旧副本，避免启停后读到陈旧的 JSON 值。
+
+### 20.4 备份：文件 I/O 异步化并分块编解码
+
+`BackupManage` 的导入/导出原先使用 `openSync` / `statSync` / `readSync` / `writeSync` / `closeSync`，
+大备份会把整段文件读写压在 UI 线程。现在改用异步 API，按 1 MiB 分块读取、流式 UTF-8 解码，并用
+`TextEncoder.encodeIntoUint8Array()` 分块编码后写入；短写会循环补齐，编码边界不会拆开代理对。
+JSON 的 `stringify` / `parse` 与备份事务语义未变。
+
+### 20.5 批量写：删除、恢复、检测结果一次事务提交
+
+书架与书源管理原先还有几处「循环里逐条 await 写库」：批量删书每条开一次事务，备份恢复复用逐条
+`upsertBook` / `saveProgress`，书源页处理全部不可用源时逐行 `setEnabled` / `remove`，检测作业也按 32 条
+结果逐条 UPDATE。数据量一大，事务日志和 SQLite 往返会随行数线性膨胀。
+
+现在：
+
+- `ShelfRepository.removeBooks()` 在**一个事务**内分块删除 `books` / `progress`（每块 400 个 id），提交后
+  再清理 `lastWriteAt` 与 `ProgressOwner`；中途失败整批回滚，不会留下「书删了、进度还在」的半成品。
+- `ShelfRepository.replaceShelf()` 在**一个事务**内清空两张表并重建备份内容；进度行直接插入，保持既有的
+  RESTORE 语义（绕过 TTS 仲裁、不清 `ProgressOwner`），但不再为每行起一次自动提交。
+- `SourceStore` 新增 `setEnabledMany()` / `removeMany()`，按 400 个 id 分块、整批一个事务；新增
+  `patchDetects(DetectPatch[])`，一批检测结果共用一次 commit。单条入口仍保留给行内开关和菜单操作。
+- `SourceStore.sourcesForEngine()` 的稳定 id 批读也按 400 个 id 分块；去重后的输入顺序、缺失行跳过和
+  `confidence` 列覆盖 `json` 副本的语义不变，避免超大批次 `IN (...)` 撞 SQLite 绑定变量上限。
+- `BookSourceManage` 的「关闭 / 删除不可用源」先收集 id，再调用一次批量接口；`DetectJobRunner` 每批
+  JSONL 落盘后一次回写，进程恢复时也按完整批次回写并继续检查取消状态。
+
+### 20.6 验证边界
+
+- 主机侧已通过：`make test` 73 passed、`make test-pregen` 114 条断言、`make test-detect` 135 条断言、
+  `scripts/shelf-updater-sim.py` ALL PASS；`make native-fresh`、`make check`、`make docs-toc`、
+  `make hap` 均成功，`git diff --check` 无空白错误。构建日志中的 `createTransaction` /
+  `querySql` API 12 兼容性 warning 属于既有存储层写法；本轮没有新增 NAPI 契约或 schema 变更。
+- 真机已通过（2026-10-19，`make restart` 后取证）：书架 4 本及进度 / 章数正常；「更新」完整走到
+  `没有发现新章节，1 本未检查`；启动日志 `SourceReaderCache: trim scanned=5 freed=0 files 0 B keptRead=4`；
+  备份页显示 `13 个 / 4 本 / 9 条`，导出 33.26 KB 的 `sourcereader_backup_2026-10-19.json` 成功，
+  导入该同一份备份后计数不变，force-stop 重启后仍为 `13 / 4 / 9`、书架 4 本正常；相关日志无应用 JS
+  异常或 RDB 失败。
+- 未验证：真机上并发封面是否只出现一次 `downloadCover`、换源抽屉固定当前源行的实际排版与点击穿透，
+  以及批量删除 / 检测结果回写的事务耗时。

@@ -12,9 +12,8 @@ import {
   CACHE_TOC_QUOTA,
   CACHE_TRIM_MIN_INTERVAL_MS
 } from '../common/Const';
-import { ReadProgress } from '../engine/types';
 import { chapterDir, tocDir } from './CacheRepository';
-import { getAllProgress } from './ShelfRepository';
+import { getChapterPositions } from './ShelfRepository';
 
 /**
  * 缓存上限策略（plan §7 / T-DATA-4）。
@@ -277,7 +276,7 @@ export async function trimCaches(
   lastTrimAt = now;
   try {
     // 进度表即「已读」的判定依据（听书进度写同一张表，天然覆盖）。
-    const progress: Map<string, ReadProgress> = await getAllProgress();
+    const progress: Map<string, number> = await getChapterPositions();
     return await runTrim(ctx, progress, now);
   } catch (err) {
     // 这里刻意不用 `JSON.stringify`：本文件的 interface 从不参与 JSON 往返，保持
@@ -292,7 +291,7 @@ export async function trimCaches(
 
 async function runTrim(
   ctx: common.UIAbilityContext,
-  progress: Map<string, ReadProgress>,
+  progress: Map<string, number>,
   now: number
 ): Promise<TrimReport> {
   const report: TrimReport = { scanned: 0, freedFiles: 0, freedBytes: 0, keptRead: 0, skipped: false };
@@ -316,8 +315,8 @@ async function runTrim(
     if (meta === undefined) {
       continue;
     }
-    const p: ReadProgress | undefined = progress.get(key.bookId);
-    const read: boolean = p !== undefined && key.index <= p.chapterIndex;
+    const chapterIndex: number | undefined = progress.get(key.bookId);
+    const read: boolean = chapterIndex !== undefined && key.index <= chapterIndex;
     const guarded: boolean =
       isProtectedBook(key.bookId, now) || now - meta.mtimeMs < CACHE_FRESH_WINDOW_MS;
     const file: CacheFile = {

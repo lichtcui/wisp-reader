@@ -1,5 +1,6 @@
 import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSearchItem, BookSource, Chapter } from '../engine/types';
+import { ENGINE_INFO_TIMEOUT_MS, ENGINE_TOC_TIMEOUT_MS } from '../common/Const';
 
 /**
  * 换源预热缓存（v1.1 提速；实测数字与验收见 `docs/bugfix/TASKS.md` T-SWITCH-1）。
@@ -63,7 +64,11 @@ function fetchInfo(source: BookSource, item: BookSearchItem): Promise<Book | und
   if (running !== undefined) {
     return running;
   }
-  const task: Promise<Book | undefined> = bookEngine.bookInfo(source, item.bookUrl).then(
+  const task: Promise<Book | undefined> = bookEngine.bookInfo(
+    source,
+    item.bookUrl,
+    ENGINE_INFO_TIMEOUT_MS
+  ).then(
     (info: Book): Book | undefined => {
       infoCache.set(key, info);
       infoAt.set(key, Date.now());
@@ -95,7 +100,7 @@ async function fetchToc(source: BookSource, item: BookSearchItem): Promise<void>
   const tkey: string = key + '|' + tocUrl;
   let task: Promise<void> | undefined = tocTasks.get(tkey);
   if (task === undefined) {
-    task = bookEngine.toc(source, tocUrl).then((chapters: Chapter[]): void => {
+    task = bookEngine.toc(source, tocUrl, ENGINE_TOC_TIMEOUT_MS).then((chapters: Chapter[]): void => {
       if (chapters.length === 0) {
         return;
       }

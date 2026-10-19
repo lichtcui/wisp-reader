@@ -249,6 +249,13 @@ pub fn diagnose(rule: &str) -> Vec<Diagnostic> {
                     message: "包含 JS 规则，v1 不执行 JS 运行时".into(),
                 });
             }
+            RuleToken::Unsupported(token) => {
+                diags.push(Diagnostic {
+                    kind: "unsupported".into(),
+                    rule: rule.into(),
+                    message: format!("不支持的规则段: {token}"),
+                });
+            }
             _ => {}
         }
     }
@@ -339,5 +346,44 @@ mod tests {
         assert!(d.iter().any(|x| x.kind == "regex"), "lookbehind must be flagged");
         let d = diagnose("class.book@tag.a@href");
         assert!(d.is_empty(), "valid rule has no diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn test_diagnose_unsupported_namespace() {
+        let d = diagnose("xpath.body@text");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].kind, "unsupported");
+
+        let d = diagnose("div@xpath://p");
+        assert!(d.iter().any(|x| x.kind == "unsupported"), "{d:?}");
+    }
+
+    #[test]
+    fn test_diagnose_known_legado_gaps() {
+        for rule in ["children.div@text", "div@ownText", "div@all"] {
+            let d = diagnose(rule);
+            assert_eq!(d.len(), 1, "{rule}: {d:?}");
+            assert_eq!(d[0].kind, "unsupported", "{rule}: {d:?}");
+        }
+    }
+
+    #[test]
+    fn test_diagnose_keeps_valid_dotted_css_selectors() {
+        for rule in [
+            ".item@text",
+            "span.last@text",
+            "div#content.showtxt@text",
+            "section.toolbar@text",
+        ] {
+            let d = diagnose(rule);
+            assert!(d.is_empty(), "{rule}: {d:?}");
+        }
+    }
+
+    #[test]
+    fn test_valid_zero_results_are_not_diagnostics() {
+        let html = "<div class='present'>正文</div>";
+        assert!(extract_single(html, "html", "class.missing@text").is_empty());
+        assert!(diagnose("class.missing@text").is_empty());
     }
 }

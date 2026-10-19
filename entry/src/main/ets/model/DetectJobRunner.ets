@@ -9,9 +9,10 @@ import { bookEngine } from '../engine/BookEngineNapi';
 import { BookSource, DetectMode, DetectResult } from '../engine/types';
 import { ensureSourceStore } from './SourceStoreMigration';
 import {
+  DetectPatch,
   EngineSource,
   listRows,
-  patchDetect,
+  patchDetects,
   SourceRow,
   sourcesForEngine
 } from './SourceStore';
@@ -77,6 +78,20 @@ class DetectBackgroundLease {
     this.notificationId = notificationId;
     this.originalModes = originalModes;
   }
+}
+
+function detectPatches(results: DetectStoredResult[], at: number): DetectPatch[] {
+  const patches: DetectPatch[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const result: DetectStoredResult = results[i];
+    patches.push({
+      id: result.sourceId,
+      state: detectSourceState(result.ok, result.stage),
+      elapsedMs: result.elapsedMs,
+      at: at
+    });
+  }
+  return patches;
 }
 
 /**
@@ -453,13 +468,7 @@ export class DetectJobRunner {
       return;
     }
     this.appendBatchLine(filesDir, line);
-    for (let i = 0; i < mapped.results.length; i++) {
-      if (this.job.status !== DETECT_STATUS_RUNNING) {
-        return;
-      }
-      const result: DetectStoredResult = mapped.results[i];
-      await patchDetect(result.sourceId, detectSourceState(result.ok, result.stage), result.elapsedMs, at);
-    }
+    await patchDetects(detectPatches(mapped.results, at));
 
     if (this.job.status !== DETECT_STATUS_RUNNING) {
       return;
@@ -497,19 +506,11 @@ export class DetectJobRunner {
         return false;
       }
       for (let i = 0; i < replayed.length; i++) {
-        const line: DetectBatchLine = replayed[i];
-        for (let j = 0; j < line.results.length; j++) {
-          if (this.job.status !== DETECT_STATUS_RUNNING) {
-            return false;
-          }
-          const result: DetectStoredResult = line.results[j];
-          await patchDetect(
-            result.sourceId,
-            detectSourceState(result.ok, result.stage),
-            result.elapsedMs,
-            line.at
-          );
+        if (this.job.status !== DETECT_STATUS_RUNNING) {
+          return false;
         }
+        const line: DetectBatchLine = replayed[i];
+        await patchDetects(detectPatches(line.results, line.at));
       }
     }
     if (this.job.status !== DETECT_STATUS_RUNNING) {

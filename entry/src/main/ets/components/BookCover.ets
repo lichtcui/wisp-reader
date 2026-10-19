@@ -5,6 +5,7 @@ import { image } from '@kit.ImageKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { BookSource } from '../engine/types';
+import { ENGINE_COVER_TIMEOUT_MS } from '../common/Const';
 
 /**
  * Cover with a red-gradient fallback. The bitmap is downloaded by the Rust
@@ -20,6 +21,8 @@ const DOMAIN: number = 0x0000;
 const TAG: string = 'SourceReaderCover';
 const pixmapCache: Map<string, image.PixelMap> = new Map();
 const pathCache: Map<string, string> = new Map();
+/** Same cover visible in multiple components at once: share one download/decode. */
+const inflightLoads: Map<string, Promise<image.PixelMap | undefined>> = new Map();
 /** Cap the decoded-bitmap cache so long browsing sessions cannot grow forever. */
 const PIXMAP_LIMIT: number = 64;
 /** URLs that already failed in this session — retrying them on every re-render
@@ -51,6 +54,87 @@ function markFailed(url: string): void {
     failedCache.delete(oldest);
   }
 }
+
+function loadKeyOf(coverUrl: string, cacheDir: string): string {
+  // Rust's disk slot is keyed by cover URL alone; use the same identity here so
+  // two source objects cannot race the same file through separate loads.
+  return cacheDir + '\u0000' + coverUrl;
+}
+
+async function downloadAndDecode(
+  source: BookSource,
+  coverUrl: string,
+  cacheDir: string
+): Promise<image.PixelMap | undefined> {
+  let path: string | undefined = pathCache.get(coverUrl);
+  let src: image.ImageSource | undefined = undefined;
+  try {
+    if (path === undefined || !fileIo.accessSync(path)) {
+      path = await bookEngine.downloadCover(source, coverUrl, cacheDir, ENGINE_COVER_TIMEOUT_MS);
+      pathCache.set(coverUrl, path);
+    }
+    src = image.createImageSource(path);
+    const pixmap: image.PixelMap = await src.createPixelMap();
+    cachePixmap(coverUrl, pixmap);
+    return pixmap;
+  } catch (err) {
+    // `not_image` (the URL is a page / anti-hotlink stub), a network error or a
+    // decoder rejection. Show the fallback and do not ask again this session.
+    hilog.warn(DOMAIN, TAG, 'cover unavailable url=%{public}s err=%{public}s', coverUrl,
+      (err as BusinessError).message);
+    markFailed(coverUrl);
+    // A cached file the decoder cannot read is poison (an older build cached
+    // HTML here): drop it so the next launch re-downloads instead of failing
+    // against the same bytes on every render.
+    if (path !== undefined) {
+      pathCache.delete(coverUrl);
+      try {
+        fileIo.unlinkSync(path);
+      } catch (unlinkErr) {
+        // Already gone (e.g. the download itself failed) — nothing to clean.
+      }
+    }
+    return undefined;
+  } finally {
+    if (src !== undefined) {
+      try {
+        await src.release();
+      } catch (releaseErr) {
+        // The decoded PixelMap is independent; release failure is not a cover failure.
+      }
+    }
+  }
+}
+
+async function obtainPixmap(
+  source: BookSource,
+  coverUrl: string,
+  cacheDir: string
+): Promise<image.PixelMap | undefined> {
+  const cachedPixmap: image.PixelMap | undefined = pixmapCache.get(coverUrl);
+  if (cachedPixmap !== undefined) {
+    cachePixmap(coverUrl, cachedPixmap);
+    return cachedPixmap;
+  }
+  if (failedCache.has(coverUrl)) {
+    return undefined;
+  }
+  const key: string = loadKeyOf(coverUrl, cacheDir);
+  const running: Promise<image.PixelMap | undefined> | undefined = inflightLoads.get(key);
+  if (running !== undefined) {
+    return await running;
+  }
+  const task: Promise<image.PixelMap | undefined> = downloadAndDecode(source, coverUrl, cacheDir);
+  inflightLoads.set(key, task);
+  try {
+    return await task;
+  } finally {
+    // Successful loads are served by `pixmapCache`; a failed load must not remain
+    // stuck in the in-flight table forever.
+    inflightLoads.delete(key);
+  }
+}
+
 @ComponentV2
 export struct BookCover {
   @Param source: BookSource | undefined = undefined;
@@ -74,44 +158,7 @@ export struct BookCover {
     if (ctx === undefined || this.source === undefined || this.coverUrl.length === 0) {
       return;
     }
-    const cachedPixmap: image.PixelMap | undefined = pixmapCache.get(this.coverUrl);
-    if (cachedPixmap !== undefined) {
-      cachePixmap(this.coverUrl, cachedPixmap);
-      this.pixmap = cachedPixmap;
-      return;
-    }
-    if (failedCache.has(this.coverUrl)) {
-      return;
-    }
-    let path: string | undefined = pathCache.get(this.coverUrl);
-    try {
-      if (path === undefined || !fileIo.accessSync(path)) {
-        path = await bookEngine.downloadCover(this.source, this.coverUrl, ctx.cacheDir);
-        pathCache.set(this.coverUrl, path);
-      }
-      const src: image.ImageSource = image.createImageSource(path);
-      const pixmap: image.PixelMap = await src.createPixelMap();
-      cachePixmap(this.coverUrl, pixmap);
-      this.pixmap = pixmap;
-    } catch (err) {
-      // `not_image` (the URL is a page / anti-hotlink stub), a network error or a
-      // decoder rejection. Show the fallback and do not ask again this session.
-      hilog.warn(DOMAIN, TAG, 'cover unavailable url=%{public}s err=%{public}s', this.coverUrl,
-        (err as BusinessError).message);
-      markFailed(this.coverUrl);
-      // A cached file the decoder cannot read is poison (an older build cached
-      // HTML here): drop it so the next launch re-downloads instead of failing
-      // against the same bytes on every render.
-      if (path !== undefined) {
-        pathCache.delete(this.coverUrl);
-        try {
-          fileIo.unlinkSync(path);
-        } catch (unlinkErr) {
-          // Already gone (e.g. the download itself failed) — nothing to clean.
-        }
-      }
-      this.pixmap = undefined;
-    }
+    this.pixmap = await obtainPixmap(this.source, this.coverUrl, ctx.cacheDir);
   }
 
   build() {

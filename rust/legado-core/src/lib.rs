@@ -24,6 +24,10 @@ fn source_from_json(json: &str) -> Result<engine::types::BookSource> {
         .map_err(|e| err(format!("invalid source json: {e}")))
 }
 
+fn timeout_ms_or_default(timeout_ms: Option<u32>, default_ms: u64) -> u64 {
+    timeout_ms.map(u64::from).unwrap_or(default_ms)
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[allow(non_snake_case)]
 struct SearchOpts {
@@ -50,6 +54,18 @@ pub fn parse_with_diagnostics(content: String, content_type: String, rule: Strin
 #[napi]
 pub async fn fetch_text(url: String) -> Result<String> {
     engine::fetch_text(&url).await.map_err(err)
+}
+
+/// Fetch a URL with an optional aggregate timeout (milliseconds). Missing or
+/// out-of-range values use the engine default and are clamped there.
+#[napi]
+pub async fn fetch_text_with_timeout(url: String, timeout_ms: Option<u32>) -> Result<String> {
+    engine::fetch_text_with_timeout(
+        &url,
+        timeout_ms_or_default(timeout_ms, engine::runtime::DEFAULT_FETCH_TIMEOUT_MS),
+    )
+    .await
+    .map_err(err)
 }
 
 /// Apply the v1 import gate; returns JSON `{ total, eligible, excluded }`.
@@ -79,30 +95,56 @@ pub async fn search(
 
 /// Fetch and parse a book detail page; returns JSON `BookInfo`.
 #[napi]
-pub async fn book_info(source_json: String, book_url: String) -> Result<String> {
+pub async fn book_info(
+    source_json: String,
+    book_url: String,
+    timeout_ms: Option<u32>,
+) -> Result<String> {
     let source = source_from_json(&source_json)?;
-    let info = engine::runtime::book_info(&source, &book_url)
-        .await
-        .map_err(err)?;
+    let info = engine::runtime::book_info_with_timeout(
+        &source,
+        &book_url,
+        timeout_ms_or_default(timeout_ms, engine::runtime::DEFAULT_BOOK_INFO_TIMEOUT_MS),
+    )
+    .await
+    .map_err(err)?;
     serde_json::to_string(&info).map_err(err)
 }
 
 /// Fetch a (paginated) TOC; returns JSON `Chapter[]`.
 #[napi]
-pub async fn toc(source_json: String, toc_url: String) -> Result<String> {
+pub async fn toc(
+    source_json: String,
+    toc_url: String,
+    timeout_ms: Option<u32>,
+) -> Result<String> {
     let source = source_from_json(&source_json)?;
-    let chapters = engine::runtime::toc(&source, &toc_url).await.map_err(err)?;
+    let chapters = engine::runtime::toc_with_timeout(
+        &source,
+        &toc_url,
+        timeout_ms_or_default(timeout_ms, engine::runtime::DEFAULT_TOC_TIMEOUT_MS),
+    )
+    .await
+    .map_err(err)?;
     serde_json::to_string(&chapters).map_err(err)
 }
 
 /// Fetch a whole chapter (following `nextContentUrl`); returns JSON
 /// `{ content, nextUrl }`.
 #[napi]
-pub async fn content(source_json: String, chapter_url: String) -> Result<String> {
+pub async fn content(
+    source_json: String,
+    chapter_url: String,
+    timeout_ms: Option<u32>,
+) -> Result<String> {
     let source = source_from_json(&source_json)?;
-    let out = engine::runtime::content(&source, &chapter_url)
-        .await
-        .map_err(err)?;
+    let out = engine::runtime::content_with_timeout(
+        &source,
+        &chapter_url,
+        timeout_ms_or_default(timeout_ms, engine::runtime::DEFAULT_CONTENT_TIMEOUT_MS),
+    )
+    .await
+    .map_err(err)?;
     serde_json::to_string(&out).map_err(err)
 }
 
@@ -155,9 +197,15 @@ pub async fn download_cover(
     source_json: String,
     cover_url: String,
     dest_dir: String,
+    timeout_ms: Option<u32>,
 ) -> Result<String> {
     let source = source_from_json(&source_json)?;
-    engine::runtime::download_cover(&source, &cover_url, &dest_dir)
-        .await
-        .map_err(err)
+    engine::runtime::download_cover_with_timeout(
+        &source,
+        &cover_url,
+        &dest_dir,
+        timeout_ms_or_default(timeout_ms, engine::runtime::DEFAULT_COVER_TIMEOUT_MS),
+    )
+    .await
+    .map_err(err)
 }

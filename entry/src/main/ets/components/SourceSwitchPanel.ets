@@ -131,6 +131,7 @@ export struct SourceSwitchPanel {
   @Param runToken: number = 0;
   @Param book: Book | undefined = undefined;
   @Param currentSourceUrl: string = '';
+  @Param currentSourceName: string = '';
   @Param textColor: ResourceColor = Color.Black;
   @Param dimColor: ResourceColor = Color.Gray;
   /** 宿主正在执行切换：列表整体不可点，避免连点两次。 */
@@ -459,6 +460,14 @@ export struct SourceSwitchPanel {
     };
   }
 
+  /** 当前源若本轮没被检索到，固定补一行「我在哪」，避免抽屉里完全失去当前位置。 */
+  private showCurrentFallback(): boolean {
+    if (this.searching || this.currentSourceName.length === 0) {
+      return false;
+    }
+    return !this.rows.some((r: SwitchRow): boolean => r.current);
+  }
+
   /** 检索进度文案；候选总数不在这里（已上移到标题栏）。 */
   private progressText(): string {
     if (this.fromCache) {
@@ -512,6 +521,41 @@ export struct SourceSwitchPanel {
     .width('100%')
     .alignItems(VerticalAlign.Center)
     .padding({ top: 8, bottom: 8 })
+  }
+
+  @Builder
+  currentFallbackRow() {
+    Row() {
+      Row()
+        .width(3)
+        .height(36)
+        .borderRadius(2)
+        .backgroundColor($r('app.color.brand'))
+        .margin({ right: 8 })
+
+      Column({ space: 3 }) {
+        Text(this.currentSourceName)
+          .fontSize(15)
+          .fontColor($r('app.color.brand'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text('本轮检索未返回当前源')
+          .fontSize(12)
+          .fontColor(this.dimColor)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      Text('当前')
+        .fontSize(13)
+        .fontColor(this.dimColor)
+        .padding({ left: 10, right: 10 })
+    }
+    .width('100%')
+    .height(60)
+    .alignItems(VerticalAlign.Center)
   }
 
   @Builder
@@ -578,6 +622,10 @@ export struct SourceSwitchPanel {
       // 进度行常驻（检索完只有空文本）：避免检索结束时列表上跳约 33vp。
       // 这一行下面**不画分割线**（真机上紧贴标题栏分割线的第二条横线观感多余）。
       this.statusBar()
+
+      if (this.showCurrentFallback()) {
+        this.currentFallbackRow()
+      }
 
       if (this.rows.length === 0) {
         Column() {

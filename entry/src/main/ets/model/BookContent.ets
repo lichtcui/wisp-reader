@@ -3,6 +3,7 @@ import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSource, Chapter } from '../engine/types';
 import { getCachedChapter, putCachedChapter } from './ChapterCache';
 import { isLocalBook, loadLocalContent } from './LocalBook';
+import { ENGINE_CONTENT_TIMEOUT_MS } from '../common/Const';
 
 /**
  * Some sources render the chapter body inside a container that also carries the
@@ -64,7 +65,7 @@ export async function loadChapterParagraphs(
       return sanitizeText(cached, chapter.title);
     }
   }
-  const result = await bookEngine.content(src, chapter.url);
+  const result = await bookEngine.content(src, chapter.url, ENGINE_CONTENT_TIMEOUT_MS);
   if (ctx !== undefined) {
     putCachedChapter(ctx, book.bookId, index, chapter.url, result.content);
   }

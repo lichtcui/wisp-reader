@@ -24,6 +24,14 @@ if [ "${1:-}" = "--check" ]; then
   shift
 fi
 BAD=0
+TOC_TMP=""
+OUT_TMP=""
+
+cleanup_temps() {
+  if [ -n "$TOC_TMP" ]; then rm -f "$TOC_TMP"; fi
+  if [ -n "$OUT_TMP" ]; then rm -f "$OUT_TMP"; fi
+}
+trap cleanup_temps EXIT
 
 # 需要重建目录的文档。ARCHIVE-S3-S8.md 不在内（用手写固定索引，见下）。
 FILES=(
@@ -51,7 +59,10 @@ for f in "${FILES[@]}"; do
   fi
 
   h2="$(grep -c '^## ' "$f" || true)"
-  toc="$(mktemp)"
+  toc="$(mktemp "${f}.toc.XXXXXX")"
+  TOC_TMP="$toc"
+  out="$(mktemp "${f}.toc-out.XXXXXX")"
+  OUT_TMP="$out"
 
   # 「## 目录…」这一节自身不进目录。
   if [ "$h2" -le 30 ]; then
@@ -69,22 +80,33 @@ for f in "${FILES[@]}"; do
     /<!-- TOC:END -->/   { skip = 0; print; next }
     skip { next }
     { print }
-  ' "$f" > "$f.tmp"
+  ' "$f" > "$out"
+
+  # Never replace a document with a truncated result, even if a future edit
+  # to the extraction logic (or an interrupted run) silently loses its body.
+  begin_count="$(grep -cF '<!-- TOC:BEGIN -->' "$out" || true)"
+  end_count="$(grep -cF '<!-- TOC:END -->' "$out" || true)"
+  h2_after="$(grep -c '^## ' "$out" || true)"
+  if [ "$begin_count" != "1" ] || [ "$end_count" != "1" ] || [ "$h2_after" != "$h2" ]; then
+    echo "拒绝替换（目录生成结果不完整）: $f" >&2
+    exit 1
+  fi
 
   if [ "$CHECK" = "1" ]; then
-    if diff -u "$f" "$f.tmp" > /tmp/docs-toc-diff.txt 2>&1; then
+    if diff -u "$f" "$out" > /tmp/docs-toc-diff.txt 2>&1; then
       echo "✓ ${f}（目录最新）"
     else
       echo "✗ ${f} 目录已过期（跑 make docs-toc 重建）：" >&2
       sed -n '3,14p' /tmp/docs-toc-diff.txt >&2
       BAD=1
     fi
-    rm -f "$f.tmp"
   else
-    mv "$f.tmp" "$f"
-    rm -f "$toc"
+    mv "$out" "$f"
     echo "✓ ${f}（${n} 条）"
   fi
+  rm -f "$toc" "$out"
+  TOC_TMP=""
+  OUT_TMP=""
 done
 
 if [ "$CHECK" = "1" ] && [ "$BAD" = "0" ]; then

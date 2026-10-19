@@ -2,13 +2,13 @@
 /* eslint-disable */
 
 /** Fetch and parse a book detail page; returns JSON `BookInfo`. */
-export declare function bookInfo(sourceJson: string, bookUrl: string): Promise<string>
+export declare function bookInfo(sourceJson: string, bookUrl: string, timeoutMs?: number | undefined | null): Promise<string>
 
 /**
   * Fetch a whole chapter (following `nextContentUrl`); returns JSON
   * `{ content, nextUrl }`.
   */
-export declare function content(sourceJson: string, chapterUrl: string): Promise<string>
+export declare function content(sourceJson: string, chapterUrl: string, timeoutMs?: number | undefined | null): Promise<string>
 
 /**
   * Detect whether sources can complete a reading chain; returns JSON
@@ -32,10 +32,16 @@ export declare function detect(sourcesJson: string, optsJson: string): Promise<s
   * the call fails with `not_image` instead, so the file the decoder chokes on
   * can no longer be created or kept.
   */
-export declare function downloadCover(sourceJson: string, coverUrl: string, destDir: string): Promise<string>
+export declare function downloadCover(sourceJson: string, coverUrl: string, destDir: string, timeoutMs?: number | undefined | null): Promise<string>
 
 /** Fetch a URL over the network (async, returns a Promise in ArkTS). */
 export declare function fetchText(url: string): Promise<string>
+
+/**
+  * Fetch a URL with an optional aggregate timeout (milliseconds). Missing or
+  * out-of-range values use the engine default and are clamped there.
+  */
+export declare function fetchTextWithTimeout(url: string, timeoutMs?: number | undefined | null): Promise<string>
 
 /** Apply the v1 import gate; returns JSON `{ total, eligible, excluded }`. */
 export declare function gateSources(sourcesJson: string): string
@@ -50,5 +56,5 @@ export declare function parseWithDiagnostics(content: string, contentType: strin
 export declare function search(sourcesJson: string, keyword: string, optsJson: string): Promise<string>
 
 /** Fetch a (paginated) TOC; returns JSON `Chapter[]`. */
-export declare function toc(sourceJson: string, tocUrl: string): Promise<string>
+export declare function toc(sourceJson: string, tocUrl: string, timeoutMs?: number | undefined | null): Promise<string>
 

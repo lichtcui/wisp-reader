@@ -16,6 +16,46 @@ const CREATE_PROGRESS: string =
   'book_id TEXT PRIMARY KEY, chapter_index INTEGER, chapter_title TEXT, ' +
   'paragraph_index INTEGER, char_offset INTEGER, percent REAL, updated_at INTEGER)';
 
+/** Keep SQLite bind-variable counts below the portable 999 limit. */
+const ID_CHUNK_SIZE: number = 400;
+
+/** Lightweight counts for status surfaces; no row payloads are read. */
+export interface ShelfCounts {
+  books: number;
+  progress: number;
+}
+
+/** One shelf row plus its optional progress, read from a single LEFT JOIN. */
+export interface ShelfBookRecord {
+  book: Book;
+  progress: ReadProgress | undefined;
+}
+
+interface BookColumns {
+  bookId: number;
+  sourceUrl: number;
+  name: number;
+  author: number;
+  coverUrl: number;
+  intro: number;
+  kind: number;
+  wordCount: number;
+  status: number;
+  lastChapter: number;
+  tocUrl: number;
+  addedAt: number;
+}
+
+interface ProgressColumns {
+  bookId: number;
+  chapterIndex: number;
+  chapterTitle: number;
+  paragraphIndex: number;
+  charOffset: number;
+  percent: number;
+  updatedAt: number;
+}
+
 let store: relationalStore.RdbStore | undefined = undefined;
 /** Last progress write timestamp per book, to reject an older late write. */
 const lastWriteAt: Map<string, number> = new Map<string, number>();
@@ -38,32 +78,67 @@ function db(): relationalStore.RdbStore | undefined {
   return store;
 }
 
-function rowToBook(rs: relationalStore.ResultSet): Book {
-  const book: Book = {
-    bookId: rs.getString(rs.getColumnIndex('book_id')),
-    sourceUrl: rs.getString(rs.getColumnIndex('source_url')),
-    name: rs.getString(rs.getColumnIndex('name')),
-    author: rs.getString(rs.getColumnIndex('author')),
-    coverUrl: rs.getString(rs.getColumnIndex('cover_url')),
-    intro: rs.getString(rs.getColumnIndex('intro')),
-    kind: rs.getString(rs.getColumnIndex('kind')),
-    wordCount: rs.getString(rs.getColumnIndex('word_count')),
-    status: rs.getString(rs.getColumnIndex('status')),
-    lastChapterTitle: rs.getString(rs.getColumnIndex('last_chapter_title')),
-    tocUrl: rs.getString(rs.getColumnIndex('toc_url')),
-    inShelf: true,
-    addedAt: rs.getLong(rs.getColumnIndex('added_at'))
+function bookColumns(rs: relationalStore.ResultSet): BookColumns {
+  return {
+    bookId: rs.getColumnIndex('book_id'),
+    sourceUrl: rs.getColumnIndex('source_url'),
+    name: rs.getColumnIndex('name'),
+    author: rs.getColumnIndex('author'),
+    coverUrl: rs.getColumnIndex('cover_url'),
+    intro: rs.getColumnIndex('intro'),
+    kind: rs.getColumnIndex('kind'),
+    wordCount: rs.getColumnIndex('word_count'),
+    status: rs.getColumnIndex('status'),
+    lastChapter: rs.getColumnIndex('last_chapter_title'),
+    tocUrl: rs.getColumnIndex('toc_url'),
+    addedAt: rs.getColumnIndex('added_at')
   };
-  return book;
 }
 
-/** Insert or update a book. */
-export async function upsertBook(book: Book): Promise<void> {
-  const s: relationalStore.RdbStore | undefined = db();
-  if (s === undefined) {
-    return;
-  }
-  const values: relationalStore.ValuesBucket = {
+function readBook(rs: relationalStore.ResultSet, c: BookColumns): Book {
+  return {
+    bookId: rs.getString(c.bookId),
+    sourceUrl: rs.getString(c.sourceUrl),
+    name: rs.getString(c.name),
+    author: rs.getString(c.author),
+    coverUrl: rs.getString(c.coverUrl),
+    intro: rs.getString(c.intro),
+    kind: rs.getString(c.kind),
+    wordCount: rs.getString(c.wordCount),
+    status: rs.getString(c.status),
+    lastChapterTitle: rs.getString(c.lastChapter),
+    tocUrl: rs.getString(c.tocUrl),
+    inShelf: true,
+    addedAt: rs.getLong(c.addedAt)
+  };
+}
+
+function progressColumns(rs: relationalStore.ResultSet, prefix: string): ProgressColumns {
+  return {
+    bookId: rs.getColumnIndex(prefix + 'book_id'),
+    chapterIndex: rs.getColumnIndex(prefix + 'chapter_index'),
+    chapterTitle: rs.getColumnIndex(prefix + 'chapter_title'),
+    paragraphIndex: rs.getColumnIndex(prefix + 'paragraph_index'),
+    charOffset: rs.getColumnIndex(prefix + 'char_offset'),
+    percent: rs.getColumnIndex(prefix + 'percent'),
+    updatedAt: rs.getColumnIndex(prefix + 'updated_at')
+  };
+}
+
+function readProgress(rs: relationalStore.ResultSet, c: ProgressColumns): ReadProgress {
+  return {
+    bookId: rs.getString(c.bookId),
+    chapterIndex: rs.getLong(c.chapterIndex),
+    chapterTitle: rs.getString(c.chapterTitle),
+    paragraphIndex: rs.getLong(c.paragraphIndex),
+    charOffset: rs.getLong(c.charOffset),
+    percent: rs.getDouble(c.percent),
+    updatedAt: rs.getLong(c.updatedAt)
+  };
+}
+
+function bookValues(book: Book): relationalStore.ValuesBucket {
+  return {
     'book_id': book.bookId,
     'source_url': book.sourceUrl,
     'name': book.name,
@@ -77,7 +152,27 @@ export async function upsertBook(book: Book): Promise<void> {
     'toc_url': book.tocUrl,
     'added_at': book.addedAt > 0 ? book.addedAt : Date.now()
   };
-  await s.insert('books', values, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
+}
+
+function progressValues(progress: ReadProgress, updatedAt: number): relationalStore.ValuesBucket {
+  return {
+    'book_id': progress.bookId,
+    'chapter_index': progress.chapterIndex,
+    'chapter_title': progress.chapterTitle,
+    'paragraph_index': progress.paragraphIndex,
+    'char_offset': progress.charOffset,
+    'percent': progress.percent,
+    'updated_at': updatedAt
+  };
+}
+
+/** Insert or update a book. */
+export async function upsertBook(book: Book): Promise<void> {
+  const s: relationalStore.RdbStore | undefined = db();
+  if (s === undefined) {
+    return;
+  }
+  await s.insert('books', bookValues(book), relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
 }
 
 /**
@@ -96,9 +191,37 @@ export async function removeBooks(bookIds: string[]): Promise<void> {
   if (s === undefined || bookIds.length === 0) {
     return;
   }
+  const unique: string[] = [];
+  const seen: Set<string> = new Set<string>();
   for (const bookId of bookIds) {
-    await s.executeSql('DELETE FROM books WHERE book_id = ?', [bookId]);
-    await s.executeSql('DELETE FROM progress WHERE book_id = ?', [bookId]);
+    if (bookId.length > 0 && !seen.has(bookId)) {
+      seen.add(bookId);
+      unique.push(bookId);
+    }
+  }
+  if (unique.length === 0) {
+    return;
+  }
+  const tx: relationalStore.Transaction = await s.createTransaction();
+  try {
+    for (let start: number = 0; start < unique.length; start += ID_CHUNK_SIZE) {
+      const chunk: string[] = unique.slice(start, start + ID_CHUNK_SIZE);
+      const holes: string[] = [];
+      const args: relationalStore.ValueType[] = [];
+      for (const bookId of chunk) {
+        holes.push('?');
+        args.push(bookId);
+      }
+      const where: string = ' WHERE book_id IN (' + holes.join(', ') + ')';
+      await tx.execute('DELETE FROM books' + where, args);
+      await tx.execute('DELETE FROM progress' + where, args);
+    }
+    await tx.commit();
+  } catch (err) {
+    await tx.rollback();
+    throw err as Error;
+  }
+  for (const bookId of unique) {
     lastWriteAt.delete(bookId);
     forgetProgressOwner(bookId);
   }
@@ -117,28 +240,62 @@ export async function removeBooks(bookIds: string[]): Promise<void> {
  * progress row with an older `updatedAt` is silently dropped.
  *
  * The `ProgressOwner` claim is deliberately **not** cleared: a restore must not
- * hijack a live listening session. Writing as `ProgressWriter.RESTORE` bypasses
- * the arbitration instead, and if the restored book happens to be playing, the
- * audio clock overwrites the restored (stale) row on its next tick — which is the
- * intended outcome.
+ * hijack a live listening session. The transaction writes progress rows directly
+ * instead of going through `saveProgress()`, so the restore bypasses arbitration;
+ * if the restored book happens to be playing, the audio clock overwrites the
+ * restored (stale) row on its next tick, which is the intended outcome.
  *
- * Callers must validate the payload **before** calling this: the delete is
- * already applied when the first insert runs.
+ * Callers still validate the whole payload before calling this so a malformed
+ * backup never reaches the DB. The transaction itself is all-or-nothing.
  */
 export async function replaceShelf(books: Book[], progress: ReadProgress[]): Promise<void> {
   const s: relationalStore.RdbStore | undefined = db();
   if (s === undefined) {
     return;
   }
-  await s.executeSql('DELETE FROM books');
-  await s.executeSql('DELETE FROM progress');
+  const restoredAt: Map<string, number> = new Map<string, number>();
+  const tx: relationalStore.Transaction = await s.createTransaction();
+  try {
+    await tx.execute('DELETE FROM books');
+    await tx.execute('DELETE FROM progress');
+    for (const book of books) {
+      await tx.insert('books', bookValues(book), relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
+    }
+    for (const row of progress) {
+      const updatedAt: number = row.updatedAt > 0 ? row.updatedAt : Date.now();
+      await tx.insert('progress', progressValues(row, updatedAt),
+        relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
+      restoredAt.set(row.bookId, updatedAt);
+    }
+    await tx.commit();
+  } catch (err) {
+    await tx.rollback();
+    throw err as Error;
+  }
   lastWriteAt.clear();
-  for (const b of books) {
-    await upsertBook(b);
+  restoredAt.forEach((updatedAt: number, bookId: string): void => {
+    lastWriteAt.set(bookId, updatedAt);
+  });
+}
+
+/** Row counts for status screens; avoids deserializing every book/progress row just to take a length. */
+export async function countShelfRows(): Promise<ShelfCounts> {
+  const empty: ShelfCounts = { books: 0, progress: 0 };
+  const s: relationalStore.RdbStore | undefined = db();
+  if (s === undefined) {
+    return empty;
   }
-  for (const p of progress) {
-    await saveProgress(p, ProgressWriter.RESTORE);
+  const rs: relationalStore.ResultSet = await s.querySql(
+    'SELECT (SELECT COUNT(*) FROM books) AS books_n, ' +
+    '(SELECT COUNT(*) FROM progress) AS progress_n'
+  );
+  const counts: ShelfCounts = empty;
+  if (rs.goToNextRow()) {
+    counts.books = rs.getLong(rs.getColumnIndex('books_n'));
+    counts.progress = rs.getLong(rs.getColumnIndex('progress_n'));
   }
+  rs.close();
+  return counts;
 }
 
 export async function getBooks(): Promise<Book[]> {
@@ -147,9 +304,35 @@ export async function getBooks(): Promise<Book[]> {
     return [];
   }
   const rs: relationalStore.ResultSet = await s.querySql('SELECT * FROM books ORDER BY added_at DESC');
+  const c: BookColumns = bookColumns(rs);
   const out: Book[] = [];
   while (rs.goToNextRow()) {
-    out.push(rowToBook(rs));
+    out.push(readBook(rs, c));
+  }
+  rs.close();
+  return out;
+}
+
+/** Shelf snapshot in display order; one query fetches books and their progress. */
+export async function getShelfBooks(): Promise<ShelfBookRecord[]> {
+  const s: relationalStore.RdbStore | undefined = db();
+  if (s === undefined) {
+    return [];
+  }
+  const rs: relationalStore.ResultSet = await s.querySql(
+    'SELECT b.*, p.book_id AS p_book_id, p.chapter_index AS p_chapter_index, ' +
+      'p.chapter_title AS p_chapter_title, p.paragraph_index AS p_paragraph_index, ' +
+      'p.char_offset AS p_char_offset, p.percent AS p_percent, p.updated_at AS p_updated_at ' +
+      'FROM books b LEFT JOIN progress p ON p.book_id = b.book_id ORDER BY b.added_at DESC'
+  );
+  const cBook: BookColumns = bookColumns(rs);
+  const cProgress: ProgressColumns = progressColumns(rs, 'p_');
+  const out: ShelfBookRecord[] = [];
+  while (rs.goToNextRow()) {
+    const progress: ReadProgress | undefined = rs.isColumnNull(cProgress.bookId)
+      ? undefined
+      : readProgress(rs, cProgress);
+    out.push({ book: readBook(rs, cBook), progress: progress });
   }
   rs.close();
   return out;
@@ -192,16 +375,7 @@ export async function saveProgress(p: ReadProgress, writer: ProgressWriter): Pro
     return;
   }
   lastWriteAt.set(p.bookId, incoming);
-  const values: relationalStore.ValuesBucket = {
-    'book_id': p.bookId,
-    'chapter_index': p.chapterIndex,
-    'chapter_title': p.chapterTitle,
-    'paragraph_index': p.paragraphIndex,
-    'char_offset': p.charOffset,
-    'percent': p.percent,
-    'updated_at': incoming
-  };
-  await s.insert('progress', values, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
+  await s.insert('progress', progressValues(p, incoming), relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
 }
 
 /** Batch-read every progress row, keyed by bookId (avoids the per-book fanout). */
@@ -212,17 +386,27 @@ export async function getAllProgress(): Promise<Map<string, ReadProgress>> {
     return out;
   }
   const rs: relationalStore.ResultSet = await s.querySql('SELECT * FROM progress');
+  const c: ProgressColumns = progressColumns(rs, '');
   while (rs.goToNextRow()) {
-    const p: ReadProgress = {
-      bookId: rs.getString(rs.getColumnIndex('book_id')),
-      chapterIndex: rs.getLong(rs.getColumnIndex('chapter_index')),
-      chapterTitle: rs.getString(rs.getColumnIndex('chapter_title')),
-      paragraphIndex: rs.getLong(rs.getColumnIndex('paragraph_index')),
-      charOffset: rs.getLong(rs.getColumnIndex('char_offset')),
-      percent: rs.getDouble(rs.getColumnIndex('percent')),
-      updatedAt: rs.getLong(rs.getColumnIndex('updated_at'))
-    };
+    const p: ReadProgress = readProgress(rs, c);
     out.set(p.bookId, p);
+  }
+  rs.close();
+  return out;
+}
+
+/** Cache trimming only compares chapter indices; avoid loading titles/offsets for every row. */
+export async function getChapterPositions(): Promise<Map<string, number>> {
+  const out: Map<string, number> = new Map<string, number>();
+  const s: relationalStore.RdbStore | undefined = db();
+  if (s === undefined) {
+    return out;
+  }
+  const rs: relationalStore.ResultSet = await s.querySql('SELECT book_id, chapter_index FROM progress');
+  const cBookId: number = rs.getColumnIndex('book_id');
+  const cChapterIndex: number = rs.getColumnIndex('chapter_index');
+  while (rs.goToNextRow()) {
+    out.set(rs.getString(cBookId), rs.getLong(cChapterIndex));
   }
   rs.close();
   return out;
@@ -237,15 +421,7 @@ export async function getProgress(bookId: string): Promise<ReadProgress | undefi
     await s.querySql('SELECT * FROM progress WHERE book_id = ?', [bookId]);
   let p: ReadProgress | undefined = undefined;
   if (rs.goToNextRow()) {
-    p = {
-      bookId: rs.getString(rs.getColumnIndex('book_id')),
-      chapterIndex: rs.getLong(rs.getColumnIndex('chapter_index')),
-      chapterTitle: rs.getString(rs.getColumnIndex('chapter_title')),
-      paragraphIndex: rs.getLong(rs.getColumnIndex('paragraph_index')),
-      charOffset: rs.getLong(rs.getColumnIndex('char_offset')),
-      percent: rs.getDouble(rs.getColumnIndex('percent')),
-      updatedAt: rs.getLong(rs.getColumnIndex('updated_at'))
-    };
+    p = readProgress(rs, progressColumns(rs, ''));
   }
   rs.close();
   return p;

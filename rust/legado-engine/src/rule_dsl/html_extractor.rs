@@ -159,7 +159,8 @@ fn extract_segment(html: &str, tokens: &[RuleToken]) -> Vec<String> {
             RuleToken::JsonPath(_)
             | RuleToken::DataPath(_)
             | RuleToken::JsBlock(_)
-            | RuleToken::JsTransform(_) => {
+            | RuleToken::JsTransform(_)
+            | RuleToken::Unsupported(_) => {
                 return Vec::new();
             }
 

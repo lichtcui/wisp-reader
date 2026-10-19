@@ -3,7 +3,7 @@ import {
   content as nativeContent,
   detect as nativeDetect,
   downloadCover as nativeDownloadCover,
-  fetchText as nativeFetchText,
+  fetchTextWithTimeout as nativeFetchTextWithTimeout,
   gateSources as nativeGate,
   parse as nativeParse,
   parseWithDiagnostics as nativeParseWithDiagnostics,
@@ -21,7 +21,22 @@ import {
   ParseOutput
 } from './types';
 import { ContentResult, IBookEngine, SearchOptions, SearchResult } from './IBookEngine';
-import { DETECT_CONCURRENCY } from '../common/Const';
+import {
+  DETECT_CONCURRENCY,
+  ENGINE_CONTENT_TIMEOUT_MS,
+  ENGINE_COVER_TIMEOUT_MS,
+  ENGINE_FETCH_TIMEOUT_MS,
+  ENGINE_INFO_TIMEOUT_MS,
+  ENGINE_TOC_TIMEOUT_MS
+} from '../common/Const';
+
+const MIN_OPERATION_TIMEOUT_MS: number = 3_000;
+const MAX_OPERATION_TIMEOUT_MS: number = 120_000;
+
+/** Match the Rust clamp so cache keys treat equivalent budgets as identical. */
+function normalizeTimeout(timeoutMs: number): number {
+  return Math.min(Math.max(Math.round(timeoutMs), MIN_OPERATION_TIMEOUT_MS), MAX_OPERATION_TIMEOUT_MS);
+}
 
 /**
  * `IBookEngine` implementation backed by the Rust engine (`liblegado_core.so`).
@@ -40,8 +55,12 @@ export class BookEngineNapi implements IBookEngine {
     return JSON.parse(raw) as SearchResult;
   }
 
-  async bookInfo(source: BookSource, bookUrl: string): Promise<Book> {
-    const raw: string = await nativeBookInfo(JSON.stringify(source), bookUrl);
+  async bookInfo(source: BookSource, bookUrl: string, timeoutMs: number = ENGINE_INFO_TIMEOUT_MS): Promise<Book> {
+    const raw: string = await nativeBookInfo(
+      JSON.stringify(source),
+      bookUrl,
+      normalizeTimeout(timeoutMs)
+    );
     const info: BookInfo = JSON.parse(raw) as BookInfo;
     const book: Book = {
       bookId: info.sourceUrl + '|' + info.bookUrl,
@@ -61,18 +80,27 @@ export class BookEngineNapi implements IBookEngine {
     return book;
   }
 
-  async toc(source: BookSource, tocUrl: string): Promise<Chapter[]> {
-    const raw: string = await nativeToc(JSON.stringify(source), tocUrl);
+  async toc(source: BookSource, tocUrl: string, timeoutMs: number = ENGINE_TOC_TIMEOUT_MS): Promise<Chapter[]> {
+    const raw: string = await nativeToc(
+      JSON.stringify(source),
+      tocUrl,
+      normalizeTimeout(timeoutMs)
+    );
     return JSON.parse(raw) as Chapter[];
   }
 
-  async content(source: BookSource, chapterUrl: string): Promise<ContentResult> {
-    const key: string = source.bookSourceUrl + '|' + chapterUrl;
+  async content(
+    source: BookSource,
+    chapterUrl: string,
+    timeoutMs: number = ENGINE_CONTENT_TIMEOUT_MS
+  ): Promise<ContentResult> {
+    const budget: number = normalizeTimeout(timeoutMs);
+    const key: string = source.bookSourceUrl + '|' + chapterUrl + '|' + budget.toString();
     const pending: Promise<ContentResult> | undefined = this.inFlight.get(key);
     if (pending !== undefined) {
       return pending;
     }
-    const task: Promise<ContentResult> = nativeContent(JSON.stringify(source), chapterUrl)
+    const task: Promise<ContentResult> = nativeContent(JSON.stringify(source), chapterUrl, budget)
       .then((raw: string): ContentResult => JSON.parse(raw) as ContentResult)
       .finally((): void => {
         this.inFlight.delete(key);
@@ -101,13 +129,23 @@ export class BookEngineNapi implements IBookEngine {
   }
 
   /** Download a cover into the app sandbox cache dir; returns the file path. */
-  async downloadCover(source: BookSource, coverUrl: string, destDir: string): Promise<string> {
-    return nativeDownloadCover(JSON.stringify(source), coverUrl, destDir);
+  async downloadCover(
+    source: BookSource,
+    coverUrl: string,
+    destDir: string,
+    timeoutMs: number = ENGINE_COVER_TIMEOUT_MS
+  ): Promise<string> {
+    return nativeDownloadCover(
+      JSON.stringify(source),
+      coverUrl,
+      destDir,
+      normalizeTimeout(timeoutMs)
+    );
   }
 
   /** Fetch a URL as text (used for importing a source list from a link). */
-  async fetchText(url: string): Promise<string> {
-    return nativeFetchText(url);
+  async fetchText(url: string, timeoutMs: number = ENGINE_FETCH_TIMEOUT_MS): Promise<string> {
+    return nativeFetchTextWithTimeout(url, normalizeTimeout(timeoutMs));
   }
 
   parse(content: string, contentType: string, rule: string): string[] {

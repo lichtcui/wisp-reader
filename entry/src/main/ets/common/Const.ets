@@ -189,6 +189,17 @@ export const DETECT_BATCH_SIZE: number = 32;
 /** Incremental detection skips enabled sources checked within this window. */
 export const DETECT_INCREMENTAL_WINDOW_MS: number = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * Aggregate budgets for one engine operation. Rust clamps callers to
+ * [3s, 120s]; these values are the product-level defaults shared by every UI
+ * entry that fetches a source page.
+ */
+export const ENGINE_INFO_TIMEOUT_MS: number = 15_000;
+export const ENGINE_FETCH_TIMEOUT_MS: number = 15_000;
+export const ENGINE_COVER_TIMEOUT_MS: number = 15_000;
+export const ENGINE_TOC_TIMEOUT_MS: number = 45_000;
+export const ENGINE_CONTENT_TIMEOUT_MS: number = 45_000;
+
 export const CONTENT_MAX_WIDTH: number = 600;
 export const PAGE_H_PADDING: number = 16;
 

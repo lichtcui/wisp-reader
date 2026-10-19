@@ -30,12 +30,19 @@ for f in "${consumers[@]}"; do
     echo "ERROR: $f uses the legacy preferences-backed source API" >&2
     fail=1
   fi
-  if ! rg -q '\blistRows\s*\(' "$f"; then
-    echo "ERROR: $f must read the SourceRow projection via listRows()" >&2
-    fail=1
-  fi
   if ! rg -q '\bensureSourceStore\s*\(' "$f"; then
     echo "ERROR: $f must initialize the shared SourceStore before reading it" >&2
+    fail=1
+  fi
+done
+
+# Full lists still need the lightweight SourceRow projection.
+for f in \
+  entry/src/main/ets/pages/SearchResult.ets \
+  entry/src/main/ets/components/SourceSwitchPanel.ets \
+  entry/src/main/ets/pages/BookSourceManage.ets; do
+  if ! rg -q '\blistRows\s*\(' "$f"; then
+    echo "ERROR: $f must read the SourceRow projection via listRows()" >&2
     fail=1
   fi
 done
@@ -45,6 +52,16 @@ done
 for f in "${consumers[@]:0:4}"; do
   if rg -q '\ballForEngine\s*\(' "$f"; then
     echo "ERROR: $f must not materialize every BookSource on the read path" >&2
+    fail=1
+  fi
+done
+
+# Shelf refresh and update checks only need the distinct source URLs used by books.
+for f in \
+  entry/src/main/ets/pages/Index.ets \
+  entry/src/main/ets/pages/Shelf.ets; do
+  if ! rg -q '\bsourcesForUrls\s*\(' "$f"; then
+    echo "ERROR: $f must batch-load only shelf URLs with sourcesForUrls()" >&2
     fail=1
   fi
 done
@@ -100,4 +117,4 @@ done
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
-echo "source consumers: ok (projection reads, lazy full-source loads)"
+echo "source consumers: ok (projection reads, batched full-source loads)"

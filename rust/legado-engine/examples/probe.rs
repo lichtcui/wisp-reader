@@ -17,7 +17,7 @@
 //!   --index N        用第 N 个源（默认 0，供 info/toc/content 这类单源命令用）
 //!   --limit N        样本条数上限（默认 5）
 //!   --concurrency N  搜索并发（默认 8）
-//!   --timeout MS     单请求超时毫秒（默认 10000；detect 按 mode 用 8000 / 45000）
+//!   --timeout MS     单操作超时毫秒（默认 10000；detect 按 mode 用 8000 / 45000）
 //!   --mode MODE      detect 档位：probe 或 full（默认 full，旧命令不变）
 //!   --json           直接 dump 完整 JSON（默认只打印摘要，免得刷爆上下文）
 //!
@@ -163,7 +163,7 @@ async fn main() -> ExitCode {
         "toc" => cmd_toc(&sources, rest.first(), &opts).await,
         "content" => cmd_content(&sources, rest.first(), &opts).await,
         "detect" => cmd_detect(&sources, rest.first(), &opts).await,
-        "fetch" => cmd_fetch(rest.first()).await,
+        "fetch" => cmd_fetch(rest.first(), &opts).await,
         "parse" => cmd_parse(&rest),
         other => Err(format!("未知命令 `{other}`")),
     };
@@ -261,7 +261,7 @@ async fn cmd_info(
 ) -> Result<(), String> {
     let url = url.ok_or("用法：info <bookUrl>")?;
     let src = one(sources, opts)?;
-    let info = runtime::book_info(src, url).await?;
+    let info = runtime::book_info_with_timeout(src, url, opts.timeout_ms).await?;
     if opts.json {
         dump(&info);
         return Ok(());
@@ -283,7 +283,7 @@ async fn cmd_toc(
 ) -> Result<(), String> {
     let url = url.ok_or("用法：toc <tocUrl>")?;
     let src = one(sources, opts)?;
-    let chapters = runtime::toc(src, url).await?;
+    let chapters = runtime::toc_with_timeout(src, url, opts.timeout_ms).await?;
     if opts.json {
         dump(&chapters);
         return Ok(());
@@ -318,7 +318,7 @@ async fn cmd_content(
 ) -> Result<(), String> {
     let url = url.ok_or("用法：content <chapterUrl>")?;
     let src = one(sources, opts)?;
-    let out = runtime::content(src, url).await?;
+    let out = runtime::content_with_timeout(src, url, opts.timeout_ms).await?;
     if opts.json {
         dump(&out);
         return Ok(());
@@ -372,9 +372,9 @@ async fn cmd_detect(
     Ok(())
 }
 
-async fn cmd_fetch(url: Option<&String>) -> Result<(), String> {
+async fn cmd_fetch(url: Option<&String>, opts: &Opts) -> Result<(), String> {
     let url = url.ok_or("用法：fetch <url>")?;
-    let body = legado_engine::fetch_text(url).await?;
+    let body = legado_engine::fetch_text_with_timeout(url, opts.timeout_ms).await?;
     println!("抓取：{} 字", body.chars().count());
     println!("  开头：{}", head(&body, 300));
     Ok(())

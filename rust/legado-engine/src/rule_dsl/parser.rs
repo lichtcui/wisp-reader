@@ -66,6 +66,8 @@ pub enum RuleToken {
     TagShort(String),
     /// `@js:code`
     JsTransform(String),
+    /// A locator or annotation namespace this engine does not implement.
+    Unsupported(String),
     /// Unknown — forward compat
     Unknown(String),
 }
@@ -263,6 +265,8 @@ fn parse_locator(s: &str) -> RuleToken {
         // "." is the "match everything" rule — keep the whole-content
         // fallback semantics of the HTML extractor.
         RuleToken::Unknown(s.to_string())
+    } else if looks_like_explicit_namespace(s) {
+        RuleToken::Unsupported(s.to_string())
     } else {
         // A bare token like `a`, `li`, `div` is a CSS tag selector in Legado.
         // Previously parsed as Unknown, which the HTML extractor ignored and
@@ -270,6 +274,21 @@ fn parse_locator(s: &str) -> RuleToken {
         // extracted garbage. Map bare tokens to TagName so real extraction works.
         RuleToken::TagName(s.to_string())
     }
+}
+
+/// Legado locator namespaces that this engine deliberately rejects.
+///
+/// Dotted tokens are otherwise valid CSS (`span.last`, `p.title`), so treating
+/// every `tag.class` as an unknown namespace would break bundled sources.
+const UNSUPPORTED_LOCATOR_NAMESPACES: &[&str] = &["xpath.", "children."];
+
+/// Detect only explicit legacy namespaces known to require a different engine.
+/// Raw CSS selectors (`.item`, `#list`, `span.last`, `div#content.showtxt`)
+/// stay supported.
+fn looks_like_explicit_namespace(s: &str) -> bool {
+    UNSUPPORTED_LOCATOR_NAMESPACES
+        .iter()
+        .any(|prefix| s.starts_with(prefix))
 }
 
 fn parse_annotation(s: &str) -> RuleToken {
@@ -293,6 +312,10 @@ fn parse_annotation(s: &str) -> RuleToken {
                 RuleToken::TagName(rest.to_string())
             } else if let Some(rest) = s.strip_prefix("js:") {
                 RuleToken::JsTransform(rest.to_string())
+            } else if s == "ownText" || s == "all" {
+                RuleToken::Unsupported(format!("@{s}"))
+            } else if s.contains(':') || looks_like_explicit_namespace(s) {
+                RuleToken::Unsupported(format!("@{s}"))
             } else {
                 // Bare element/tag like @a, @li, @div
                 RuleToken::TagShort(s.to_string())
@@ -457,5 +480,55 @@ mod tests {
         // extractor keeps its historical "return the whole content" behaviour.
         let t = tokenize(".");
         assert_eq!(t, vec![RuleToken::Unknown(".".into())]);
+    }
+
+    #[test]
+    fn test_unknown_namespace_is_unsupported() {
+        assert_eq!(
+            tokenize("xpath.body@text")[0],
+            RuleToken::Unsupported("xpath.body".into())
+        );
+        assert_eq!(
+            tokenize("children.div@text")[0],
+            RuleToken::Unsupported("children.div".into())
+        );
+        assert_eq!(
+            tokenize("div@xpath://p")[1],
+            RuleToken::Unsupported("@xpath://p".into())
+        );
+        assert_eq!(
+            tokenize("div@xpath.body")[1],
+            RuleToken::Unsupported("@xpath.body".into())
+        );
+        assert_eq!(
+            tokenize("div@ownText")[1],
+            RuleToken::Unsupported("@ownText".into())
+        );
+        assert_eq!(
+            tokenize("div@all")[1],
+            RuleToken::Unsupported("@all".into())
+        );
+    }
+
+    #[test]
+    fn test_raw_css_selectors_stay_supported() {
+        assert_eq!(tokenize(".item@text")[0], RuleToken::TagName(".item".into()));
+        assert_eq!(tokenize("#list@a@href")[0], RuleToken::TagName("#list".into()));
+        assert_eq!(
+            tokenize("div#content.showtxt@text")[0],
+            RuleToken::TagName("div#content.showtxt".into())
+        );
+        assert_eq!(
+            tokenize("span.last@text")[0],
+            RuleToken::TagName("span.last".into())
+        );
+        assert_eq!(
+            tokenize("span.last.1@text"),
+            vec![
+                RuleToken::TagName("span.last".into()),
+                RuleToken::Index(1),
+                RuleToken::Text,
+            ]
+        );
     }
 }

@@ -16,7 +16,7 @@
 覆盖：计数（checked/failed/skipped/updated）、本地书排除、基线前移与「等价对齐」不误报、
       幂等（第二次点击 0 新章 + 0 写库）、并发上限 3、进度回调序列（含进行中失败数
       `failed` 累计值与 `shelfProgressText()` 三种文案形态）、预算耗尽、书源缺失、
-      单本 15s 超时护栏（16s 卡死的书不影响其余书）。**未覆盖**：真机网络/真书/UI。
+      搜索 6s / 详情 15s 预算传入引擎（超时仍按单本失败隔离）。**未覆盖**：真机网络/真书/UI。
 """
 import os, re, shutil, subprocess, sys
 
@@ -33,17 +33,21 @@ interface Book { bookId: string; sourceUrl: string; name: string; author: string
 interface BookSearchItem { name: string; author: string; bookUrl: string; lastChapter: string; }
 interface SearchResult { items: BookSearchItem[]; }
 
-interface Scenario { lastChapterTitle?: string; failSearch?: boolean; failInfo?: boolean; delayMs?: number; }
+interface Scenario { lastChapterTitle?: string; failSearch?: boolean; failInfo?: boolean; timeout?: boolean; delayMs?: number; }
+const ENGINE_INFO_TIMEOUT_MS: number = 15000;
 let scenario: Record<string, Scenario> = {};
 let inFlight: number = 0;
 let maxInFlight: number = 0;
 let writes: string[] = [];
 let progress: string[] = [];
+let searchTimeouts: number[] = [];
+let infoTimeouts: number[] = [];
 const sleep = (ms: number): Promise<void> => new Promise<void>((r) => setTimeout(r, ms));
 
 const bookEngine = {
-  async search(_s: BookSource[], keyword: string, _o: { timeoutMs: number; concurrency: number }): Promise<SearchResult> {
+  async search(_s: BookSource[], keyword: string, opts: { timeoutMs: number; concurrency: number }): Promise<SearchResult> {
     const sc = scenario[keyword];
+    searchTimeouts.push(opts.timeoutMs);
     inFlight = inFlight + 1;
     if (inFlight > maxInFlight) { maxInFlight = inFlight; }
     await sleep(sc === undefined || sc.delayMs === undefined ? 0 : sc.delayMs);
@@ -52,11 +56,13 @@ const bookEngine = {
     return { items: [{ name: keyword, author: '作者：烽火戏诸侯', bookUrl: 'u:' + keyword,
       lastChapter: sc === undefined || sc.lastChapterTitle === undefined ? '' : sc.lastChapterTitle }] };
   },
-  async bookInfo(_s: BookSource, bookUrl: string): Promise<Book> {
+  async bookInfo(_s: BookSource, bookUrl: string, timeoutMs: number): Promise<Book> {
     const name = bookUrl.substring(2);
     const sc = scenario[name];
+    infoTimeouts.push(timeoutMs);
     await sleep(sc === undefined || sc.delayMs === undefined ? 0 : sc.delayMs);
     if (sc !== undefined && sc.failInfo === true) { throw new Error('info failed'); }
+    if (sc !== undefined && sc.timeout === true) { throw new Error('timeout'); }
     return { bookId: name, sourceUrl: 'http://s', name: name, author: '烽火戏诸侯',
       lastChapterTitle: sc === undefined || sc.lastChapterTitle === undefined ? '' : sc.lastChapterTitle };
   }
@@ -163,10 +169,12 @@ async function main(): Promise<void> {
   check('失败书之后每条进度都带未检查数', midProgress,
     ['检查中 0/2', '检查中 1/2 · 1 本未检查', '检查中 2/2 · 1 本未检查']);
 
-  // 单本超时护栏：一本 16s 不返回（> BOOK_TIMEOUT_MS = 15s），其余照常
+  // 引擎超时预算：搜索/详情各自拿到产品默认值；详情失败只影响该本。
+  searchTimeouts = [];
+  infoTimeouts = [];
   scenario = {
-    '剑来': { lastChapterTitle: '第84章 明日无风', delayMs: 16000 },
-    '雪中': { lastChapterTitle: '第83章 今日无事', delayMs: 10 }
+    '剑来': { timeout: true, delayMs: 20 },
+    '雪中': { lastChapterTitle: '第83章 今日无事', delayMs: 20 }
   };
   writes = [];
   const t0: number = Date.now();
@@ -177,7 +185,9 @@ async function main(): Promise<void> {
   check('超时书不影响其余书', slow.checked, 1);
   check('超时书不报新章', slow.updated.length, 0);
   check('超时书不写库、原文相同的书也不写库', writes.length, 0);
-  check('15s 护栏触发（14s < elapsed < 15.9s）', elapsed > 14000 && elapsed < 15900, true);
+  check('搜索预算 6s', searchTimeouts, [6000, 6000]);
+  check('详情预算 15s', infoTimeouts, [15000, 15000]);
+  check('失败隔离不等待整体预算', elapsed < 5000, true);
   console.log('   elapsed=' + elapsed + 'ms');
 
   console.log(failures === 0 ? 'ALL PASS' : 'FAILURES: ' + failures);

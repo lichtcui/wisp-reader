@@ -15,11 +15,7 @@ cd "$ROOT"
 DEVECO="${DEVECO:-/Applications/DevEco-Studio.app}"
 HDC="${HDC:-$DEVECO/Contents/sdk/default/openharmony/toolchains/hdc}"
 BUNDLE="${BUNDLE:-com.lichtcui.sourcereader}"
-SO=entry/libs/arm64-v8a/liblegado_core.so
-DTS=entry/src/main/cpp/types/liblegado_core/index.d.ts
-DIST_DTS=rust/legado-core/dist/index.d.ts
 HAP=entry/build/default/outputs/default/entry-default-signed.hap
-LIB_RS=rust/legado-core/src/lib.rs
 
 FAIL=0
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
@@ -32,27 +28,10 @@ newer_than() { # newer_than <参考文件> <找什么…>
 }
 
 echo "── Rust 引擎产物 ────────────────────────────────"
-
-if [ ! -f "$SO" ]; then
-  bad "$SO 不存在 → make rust"
+if native_msg="$(scripts/check-native-fresh.sh 2>&1)"; then
+  ok "$native_msg"
 else
-  # 只看会影响 .so 的源码（src/**），examples/、tests/、benches/ 不影响引擎产物。
-  stale="$(newer_than "$SO" rust -name '*.rs' -path '*/src/*' -not -path '*/target/*' -not -path '*/dist/*')"
-  if [ -n "$stale" ]; then
-    bad "$SO 落后于源码（如 ${stale}）→ make rust（否则真机跑的是旧引擎）"
-  else
-    ok "$SO 比全部 rust/*/src/**/*.rs 新（$(stat -f '%Sm' -t '%m-%d %H:%M' "$SO")）"
-  fi
-fi
-
-if [ ! -f "$DTS" ]; then
-  bad "$DTS 不存在 → make rust"
-elif [ -f "$LIB_RS" ] && [ "$LIB_RS" -nt "$DTS" ]; then
-  bad "$DTS 落后于 ${LIB_RS}（NAPI 契约真源）→ make rust"
-elif [ -f "$DIST_DTS" ] && ! cmp -s "$DIST_DTS" "$DTS"; then
-  bad "$DTS 与 $DIST_DTS 内容不一致 → make rust（勿手改 entry 侧）"
-else
-  ok "$DTS 与 Rust 契约同步"
+  bad "$native_msg"
 fi
 
 echo "── ArkTS 产物 ──────────────────────────────────"

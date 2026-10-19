@@ -92,6 +92,7 @@ export interface SourceFilter {
 export interface SourceCounts { total: number; enabled: number }
 export interface UpsertResult { added: number; updated: number }
 export interface ConfidenceUpdate { url: string; name: string; confidence: number }
+export interface DetectPatch { id: number; state: string; elapsedMs: number; at: number }
 
 initSourceStore(ctx: common.UIAbilityContext): Promise<void>      // 建表建索引，幂等
 /** 首次启动把 preferences 的 book_sources_v1 迁入；幂等，旧键保留作回退。 */
@@ -101,14 +102,19 @@ migrateFromPrefsOnce(ctx: common.UIAbilityContext): Promise<MigrateResult>
 listRows(filter?: SourceFilter): Promise<SourceRow[]>          // 全量投影，见 §内存策略
 countRows(filter?: SourceFilter): Promise<SourceCounts>
 getSource(id: number): Promise<BookSource | undefined>         // 解析 json 列
+sourcesForEngine(ids: number[]): Promise<EngineSource[]>       // 稳定 id 批读；400 个 id 一组，按输入顺序返回
+sourcesForUrls(urls: string[]): Promise<Map<string, BookSource>> // 书架 URL 批读；去重、400 组、按输入顺序返回
 allForEngine(filter?: SourceFilter): Promise<BookSource[]>     // 送 NAPI，按批调用
                                // 筛选在 SQL 侧做（避免为「仅未测 420 条」解析 3000 条 json）
 exportAll(): Promise<BookSource[]>                             // 备份导出，保持既有格式
 
 // 写（单行/单事务，不做全量重写）
 setEnabled(id: number, on: boolean): Promise<void>
+setEnabledMany(ids: number[], on: boolean): Promise<void>       // 单事务；按 400 个 id 分块 UPDATE
 remove(id: number): Promise<void>
+removeMany(ids: number[]): Promise<void>                       // 单事务；按 400 个 id 分块 DELETE
 patchDetect(id: number, state: string, elapsedMs: number, at: number): Promise<void>
+patchDetects(updates: DetectPatch[]): Promise<void>            // 单事务；一批检测结果一次提交
 patchConfidence(id: number, value: number): Promise<void>
 patchConfidences(updates: ConfidenceUpdate[]): Promise<void>     // 单事务，按 (url, name) 只更新 confidence 列
 upsertMany(list: BookSource[]): Promise<UpsertResult>           // 单事务，自然键命中即原地更新
@@ -121,14 +127,24 @@ applyStoredConfidence(sources: BookSource[], rows: SourceRow[]): void
 
 **三条实现约定（T1.1–T1.3 落地时定，写路径改动必须遵守）：**
 
-- **`confidence` 列是权威**：`patchConfidence` 只 `UPDATE` 列，不重写 `json`（否则每改一次置信度就
-  整条序列化）。因此凡从 `json` 读出 `BookSource` 的路径（`getSource` / `allForEngine` / `exportAll`）
-  一律用列值覆盖 `confidence`；缺省存 `NULL`（= 从未调整过），导出时该字段照旧省略，与既有备份逐字段一致。
+- **`enabled` / `confidence` 列是权威**：启停与置信度写路径只 `UPDATE` 索引列，不重写 `json`（否则每次
+  切换或调权都要整条序列化）。因此凡从 `json` 读出 `BookSource` 的路径（`getSource` / `sourcesForEngine` /
+  `sourcesForUrls` / `allForEngine` / `exportAll`）一律用列值覆盖这两个字段；`confidence` 缺省存 `NULL`
+  （= 从未调整过），导出时该字段照旧省略，与既有备份逐字段一致。
 - **重复导入更新 `grp` / `enabled` / `json`，保留 `id` / `sort_order` / `confidence` / 检测列**：
   再次导入同一份文件不能把用户已调整的置信度与稳定 `id` 冲掉（`id` 是列表 key，漂了就是第二次 T-SRC-1），
   也不能把「已检测」退回「未测」。
 - **置信度变更不重写 `json`**：搜索结束后调用方只收集发生变化的自然键 → `patchConfidences()` 单事务
   更新列；读取完整 `BookSource` 的消费点必须用投影列覆盖旧副本。
+- **批量写边界**：`setEnabledMany` / `removeMany` 的 id 先去非法值、去重，再以 400 个为一组拼
+  `IN (...)`（低于 SQLite 常见的 999 个绑定变量上限）；整批仍由一个事务提交。`patchDetects()` 的
+  每条 UPDATE 使用自己的结果时间戳，但整批共用一次 commit。单条入口保留给行内开关 / 菜单操作，
+  页面级「全部不可用」与检测作业不得退化为逐行 await。
+- **按 id 批读边界**：`sourcesForEngine()` 对输入 id 去非法值、去重后以 400 个为一组查询；结果按去重后的
+  输入顺序返回，缺失或 JSON 损坏的行跳过。这样检测续跑、书架装配在超大批次下也不会撞 SQLite 绑定变量上限。
+- **按 URL 批读边界**：`sourcesForUrls()` 对书架实际使用的 URL 去空、去重后以 400 个为一组查询完整规则，
+  结果只包含输入顺序可命中的 URL。同 URL 孪生源优先取最早的启用行；没有可解析的启用行时，回退到最早的
+  可解析行。坏 JSON 不会提前占位，后续候选仍可被选中；缺失与全坏 URL 直接省略。
 
 **内存策略（明确的门槛）：** 3000 条投影 ≈ 0.5 MB 量级，可全量驻内存，搜索/筛选在内存完成（最快、
 无往返）。**超过 2 万条再改为 SQL 分页查询**——这条门槛写死在这里，免得以后争论。

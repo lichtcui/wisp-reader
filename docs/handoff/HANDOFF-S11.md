@@ -143,13 +143,13 @@
    归一化后「相等但原串不同」时**静默对齐基线**（不回显有新章）⇒ 下次比较退化成正字符串相等，幂等成立。
 2. **无基线（`last_chapter_title` 为空）时静默建基线、不报新章**（草稿二选一里的「首轮只提示不落标」同样不落标，但没有基线 ⇒ 每次点都重复误报，更糟）。
    保留的已知代价：加入书架后到第一次更新之间章节变过的书会被报成有新章，写一次后即准。
-3. **单本超时 6s → 15s**（草稿 §3.2 写 6s）：`bookInfo` 在 NAPI 上**没有 timeout 参数**，而它是两次请求里的第二次 ⇒ 6s 的整链上限会让「搜索正好用满 6s」的书连 `bookInfo` 都发不出去；15s 也正好是 reqwest 客户端的硬上限。
-   附带记录：本仓**只有 `search` / `detect` 接受 `timeoutMs`**，`bookInfo` / `toc` / `content` / `downloadCover` / `fetchText` 都没有 —— 新加链路必须自己在 ArkTS 侧用 `Promise` 竞速兜底（已记入 [`../PITFALLS.md`](../PITFALLS.md)）。
+3. **单本超时 6s → 15s**（草稿 §3.2 写 6s）：1 次搜索加 1 次详情，6s 的整链上限会让「搜索正好用满 6s」的书连 `bookInfo` 都发不出去。
+   2026-10-19 后 `bookInfo` 已接受 `timeoutMs`，`ShelfUpdater` 直接传 `ENGINE_INFO_TIMEOUT_MS = 15s`；Rust 对整个详情操作统一计时，ArkTS 不再用 `Promise` 竞速。其他取页接口同样接受整段操作预算，见 [`../PITFALLS.md`](../PITFALLS.md)。
 
 ### 7.3 验证（主机侧 + 真机全部完成）
 
-- `python3 scripts/shelf-updater-sim.py`（新）：从**真源码机械切片**（`Format.ets` 的 `stripLabel`/`cleanAuthor`/`cleanChapter` + `ShelfUpdater.ets` 去掉 `import` 的全文）+ 只打桩 3 个外部依赖 → `tsc` + `node`，**27 条断言 `ALL PASS`**
-  （计数 / 本地书排除 / 基线前移 / 等价对齐不误报 / 幂等 / 并发上限 3 / 进度序列 / 预算耗尽 / 书源缺失 / **单本 15s 超时护栏 15002ms**）。以后改 `ShelfUpdater.ets` 直接重跑即可。
+- `python3 scripts/shelf-updater-sim.py`：从**真源码机械切片**（`Format.ets` 的 `stripLabel`/`cleanAuthor`/`cleanChapter` + `ShelfUpdater.ets` 去掉 `import` 的全文）+ 只打桩 3 个外部依赖 → `tsc` + `node`，**30 条断言 `ALL PASS`**
+  （计数 / 本地书排除 / 基线前移 / 等价对齐不误报 / 幂等 / 并发上限 3 / 进度序列 / 预算耗尽 / 书源缺失 / **搜索 6s 与详情 15s 预算实际传入引擎**）。以后改 `ShelfUpdater.ets` 直接重跑即可。
 - `make hap` 通过（`make doctor`：signed HAP 晚于全部 ets 源）；`make check` 全绿。
 - **真机（2026-10-13 · 设备 `33Z0224424136564` · debug · `make run` 闭环，12 项全过）**：`检查中 0/2` → `1/2`；**`total = 2`**（本地书《大唐》排除）；toast `没有发现新章节，1 本未检查`（《天堂向左》源已失效 ⇒ 计 `failed`、基线保持空、不影响《剑来》）；**全程 `shelf.db` 逐列零写入**；连点两次只跑一轮；再点幂等；编辑态顶栏 `"text":"更新"` 计数 0；
   失败注入（停用 `bbiquge8` **及其同 URL 孪生** `笔趣阁8`）⇒ toast `检查失败，请检查网络或书源`，停用源即时失败、不崩不写库，验完两个开关已恢复启用并复跑一致。

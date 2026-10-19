@@ -1,3 +1,29 @@
+> **2026-10-19 第三十六次同步**：㊱ **主机侧读路径与备份 I/O 优化（设备 `33Z0224424136564` 真机部分已验）** ——
+> `ShelfRepository.getShelfBooks()` 用一条 `books LEFT JOIN progress` 返回书架快照；`CacheTrim` 改读
+> `getChapterPositions()`，只取 `book_id + chapter_index`。`SourceStore.sourcesForUrls()` 只按书架 URL
+> 去空去重后 400 个一组读取完整源，按输入顺序返回；同 URL 优先最早启用行、否则最早可解析行，坏 JSON
+> 不提前占位。完整读统一用 `enabled` / `confidence` 索引列覆盖 JSON 旧副本。`BackupManage` 导入导出
+> 改为异步文件 API + 1 MiB 分块，流式 UTF-8 解码、`encodeIntoUint8Array()` 编码并处理短写与代理对边界。
+> 静态守卫补上 URL 批读、400 分块、`enabled` 覆盖和备份同步 I/O 禁用检查。
+> **主机侧收尾通过**：`make test` 73 passed、`make test-pregen` 114 条、`make test-detect` 135 条、
+> `scripts/shelf-updater-sim.py` ALL PASS、`make native-fresh` / `make check` / `make docs-toc` /
+> `make hap` 全绿，`git diff --check` 无空白错误。
+> **真机补充**：书架 4 本及进度 / 章数正常；「更新」完整走到 `没有发现新章节，1 本未检查`；启动日志
+> `SourceReaderCache: trim scanned=5 freed=0 files 0 B keptRead=4`；备份页显示 `13 个 / 4 本 / 9 条`，
+> 导出 `sourcereader_backup_2026-10-19.json`（33.26 KB）成功，导入该同一份备份后计数不变，
+> force-stop 重启后仍为 `13 / 4 / 9`、书架 4 本正常；相关日志无应用 JS 异常或 RDB 失败。
+> 未验：并发封面单飞、换源抽屉固定行的实际排版 / 点击穿透、批量删除耗时、检测结果批量回写耗时。
+>
+> **2026-10-19 第三十五次同步**：㉟ **主机侧批量写优化（设备未连接，真机待补）** ——
+> `ShelfRepository.removeBooks()` / `replaceShelf()` 改为单事务；`SourceStore` 新增
+> `setEnabledMany()` / `removeMany()` / `patchDetects()`（400 id 分块，一批一次 commit）；
+> 书源页「关闭 / 删除不可用源」与检测作业的批次回写不再逐行 await。
+> 另将 `sourcesForEngine()` 的稳定 id 批读按 400 个一组分块，避免大批次 `IN (...)` 触发 SQLite
+> 绑定变量上限；结果仍按去重后的输入 id 顺序返回，缺失 / 坏 JSON 行保持跳过语义。
+> **主机侧收尾通过**：`make test` 73 passed、`make test-pregen` 114 条、`make test-detect` 135 条、
+> `scripts/shelf-updater-sim.py` ALL PASS、`make native-fresh` / `make check` / `make docs-toc` /
+> `make hap` 全绿，`git diff --check` 无空白错误；真机事务行为与耗时仍待设备连接后补验。
+>
 > **2026-10-17 第三十四次同步**：㉞ **T-CROSS-4 真机 10 分钟验收通过（P0 关闭）** ——
 > 设备 `33Z0224424136564`、debug 包、PID `62344`，《剑来》第十三章系统 TTS 实时路线。亮屏基线约 1 分 40 秒正常；
 > `17:22:19` 息屏，`17:22:21` 记录 `Ability onBackground` + `TTSStateObserver--OnPageHide`。其后 `play para=` 持续推进：
@@ -201,7 +227,7 @@
 >
 > **2026-10-13 第二十二次同步**：㉒ **T-SHELF-7（P2）书架「更新」代码已落地**（新 `model/ShelfUpdater.ets` + 书架顶栏入口，按方案 ① 零 schema 改动）。
 > 与立项方案不同的三个设计点（均为复核/实测后改，理由写在条目里）：**基线比较走 `cleanChapter` 归一化**（同一章在详情页 `第83章 今日无事`、搜索结果里 `最新：第83章 今日无事` ⇒ 直接比字符串会把没更新的书报成有新章）、
-> **无基线时静默建基线**（没有可比对的信息时报「有新章」是纯误报）、**单本超时 6s → 15s**（`bookInfo` 在 NAPI 上**没有 timeout 参数**，只有 reqwest 客户端 15s 硬上限 ⇒ 这条 ArkTS 侧竞速是它唯一护栏，必须容得下 search + bookInfo 两次请求）。
+> **无基线时静默建基线**（没有可比对的信息时报「有新章」是纯误报）、**单本超时 6s → 15s**（当时 `bookInfo` 没有独立预算，只能容下 search + bookInfo 两次请求；2026-10-19 已改由引擎整段超时接管，见本项「实现」③）。
 > 主机侧新增 `scripts/shelf-updater-sim.py`：从**真源码机械切片** + 只打桩 3 个外部依赖（引擎/DB/本地书判定）→ `tsc` + `node`，**27 条断言全通过**（含并发上限 3 / 预算耗尽 / 单本 15s 超时护栏 15002ms）。
 > ⚠️ 本节当时的「真机验收未做」**已由同日 ㉓ 关闭**（条目已置 `[x]`，证据见该条目「验证」③④）；本节其余结论（三个设计点 + 主机仿真）仍然有效。
 >
@@ -431,7 +457,7 @@
     每本书 = **2 请求**（`books` 表没有 `bookUrl`，`bookId` 是 `computeBookId` 哈希不可逆，`tocUrl` 在 7/13 个内置源里指的是目录页 ≠ 详情页）：
     `bookEngine.search([source], book.name, {timeoutMs: 6000, concurrency: 1})` → 复用换源的 `isSameBook` 命中拿 `item.bookUrl` → `bookInfo(source, bookUrl)`；
     章节名取详情页优先、回落搜索结果 `item.lastChapter`（与换源同口径）；与基线不同 ⇒ 记「有新章」+ `upsertBook` **前移基线**，相同 ⇒ 只计数。
-    常量：`SEARCH_TIMEOUT_MS = 6000`（与 T-SWITCH-1 单源超时对齐）、`BOOK_TIMEOUT_MS = 15000`、`CHECK_CONCURRENCY = 3`、`CHECK_BUDGET_MS = 90000`；
+    常量：`SEARCH_TIMEOUT_MS = 6000`（与 T-SWITCH-1 单源超时对齐）、`ENGINE_INFO_TIMEOUT_MS = 15000`、`CHECK_CONCURRENCY = 3`、`CHECK_BUDGET_MS = 90000`；
     返回 `ShelfUpdateOutcome { total, checked, failed, skipped, updated: Book[] }`，进度回调 = 起始 `(0,N,0)` + 每本结束一次 `(done,N,failed)`（第三个参数是**累计**失败数，2026-10-13 收尾小迭代加的，供进行中文案）。
     UI：入口 `shelfUpdateAction()`（`@Builder` **0 参数直读 `@Local`**，与 `deleteAction()` 同形——本文件 §5.3：`@Builder` 传 2+ 参数不动态刷新）插在 `shelfNormalHeader()` 的 `Blank()` 与 `MoreMenuButton` 之间（编辑态不显示）；
     「更新」用 `brand` 令牌 + 44 热区 + `accessibilityText`，进行中显示 `shelfProgressText(done,total,failed)`（无失败 `检查中 1/2`，有失败 `检查中 1/2 · 1 本未检查`，无网络书 `检查中…`；实现放在 `ShelfUpdater.ets` 的**导出纯函数**里，好让主机仿真能断言字符串）并防重入；结束 toast：`N 本有新章节` / `没有发现新章节` / `没有发现新章节，N 本未检查` / `检查失败，请检查网络或书源` / `书架里没有可检查的网络书籍` / `更新失败，请稍后重试`。
@@ -440,8 +466,9 @@
        直接比会把**没更新**的书报成有新章；归一化后**相等但原串不同**时**静默对齐**基线（不回显「有新章」），让下次比较退化成纯字符串相等 ⇒ 幂等。
     ② **无基线（`last_chapter_title` 为空）时不当「有新章」**，而是静默写入当前值**建基线**：否则加书后第一次更新会把**整架书**报成有新章（立项时想的「首轮只提示不落标」同样不落标，但没有基线 ⇒ 每次点击都重复误报，更糟）。
        **保留的已知代价**：加入书架后到第一次更新之间章节变过的书，基线还停在加入那天 ⇒ 会被报成有新章，写一次后即准。
-    ③ **单本超时 6s → 15s**：`bookInfo` 在 NAPI 上**没有 timeout 参数**（只有 reqwest 客户端的 15s 硬上限），故障源可能一直挂着 ⇒ 这条 ArkTS 侧 `Promise` 竞速是它**唯一**的护栏；
-       而一次 6s 的整链上限会让「搜索正好用满 6s」的书连 `bookInfo` 都发不出去。搜索那一步另有 6s 超时参数（Rust 侧 clamp 到 [3s, 20s]）。
+    ③ **单本超时 6s → 15s**：原先 ArkTS 侧用 `Promise` 竞速兜底；2026-10-19 起 `bookInfo` 接受
+       `timeoutMs`，`ShelfUpdater` 直接传 `ENGINE_INFO_TIMEOUT_MS = 15s`，由 Rust 对整个详情操作统一计时，
+       不再维护竞速定时器。搜索那一步另有 6s 源级预算（Rust 侧 clamp 到 [3s, 20s]）；整轮仍保留 90s 预算。
     **未动的**：不加 `book_url` 列（方案 ②：幂等 ALTER + 3 个写入点 + 存量回填，且 `initShelf` 没有 migration 机制），继续复用 `books.last_chapter_title` 当基线（它只在「加入书架」与「换源」时写入、Reader 的后台重爬不写、全仓无 UI 读它）。
   - **失败语义**：搜索失败 / 没匹配到同一本书 / `bookInfo` 失败 / 单本超时 / 结果无章节名 / 书源缺失或停用 ⇒ 一律计 `failed`，**不写库、不动基线、不影响其余书**；本地书直接排除（不计入 `total`）；
     整体预算耗尽而未开始的书计 `skipped`（不改基线，下次点击继续）。`updated === 0 && checked === 0`（且 `total > 0`）才提示「检查失败」。
@@ -451,7 +478,7 @@
        + `model/ShelfUpdater.ets` 去掉 `import` 行的**全文**）+ 只打桩 3 个外部依赖（`bookEngine` / `upsertBook` / `isLocalBook`）→ DevEco 自带 `tsc` 编 JS → `node` 跑断言。
        **被测的是真编排 + 真 `chapterKey`**，没有重写被验逻辑。**断言全通过**（`ALL PASS` / exit 0）：计数（`total`/`checked`/`failed`/`skipped`/`updated`）、本地书排除、基线前移、
        **等价对齐不误报**、**幂等**（连点第二次 0 新章 + 0 写库）、并发上限 ≤ 3（打桩计数 `maxInFlight`）、进度序列（首尾 `0/N`→`N/N`、条数 = N+1）、预算耗尽（deadline 在过去 ⇒ 全部 `skipped`、0 请求 0 写库）、
-       书源缺失/停用（`failed`、0 写库）、**单本 15s 超时护栏**（一本打桩 16s 不返回 ⇒ 该本 `failed`、其余书 `checked`、整体 **15002ms** 返回）。样本字符串取自 `make probe` 真实输出（`第83章 今日无事` vs `最新：第83章 今日无事`）。
+       书源缺失/停用（`failed`、0 写库）、**搜索 6s / 详情 15s 预算确实传入引擎**（引擎超时仍按单本失败处理，其余书不受影响）。样本字符串取自 `make probe` 真实输出（`第83章 今日无事` vs `最新：第83章 今日无事`）。
        **计数（2026-10-13 收尾小迭代后）**：**30 条**（旧的「27 条」是文档笔误，改前实测 25 条）—— 新增 4 条 `shelfProgressText` 文案形态 + 1 条「失败数必须在**进行中**就上报」的确定性序列（一本搜索 0ms 即败、一本 150ms 才回 ⇒ 期望序列 `检查中 0/2` → `检查中 1/2 · 1 本未检查` → `检查中 2/2 · 1 本未检查`）。
        复跑：`python3 scripts/shelf-updater-sim.py`。
     ② **构建/门禁（已做）**：`make hap` 通过（`make doctor` 显示 signed HAP 10-13 09:25 晚于全部 ets 源）+ `make check` 全绿（TOC / 相对链接 / 混淆 keep：145 名字覆盖全部 JSON 字段，无遗漏；本轮未新增跨 NAPI 或落盘 JSON 字段）。
@@ -583,8 +610,12 @@
     - 切换耗时：预热命中 **≤1s**（原链路 `bookInfo` 1.1s + 目录 5.9s = 7s）；`bbiquge8 ↔ 小说` 往返切换后书架进度 `104章/1308章` 未丢。
     - 留一条未解释的观测（不阻塞收尾）：曾有一次从 `bbiquge8` 切到 `小说` 后重开抽屉，7 行**全无「当前」标记**（`currentSourceUrl` 不匹配任何行 URL）；
       随后三次复现（含再切 `悠久小说` / 切回 `bbiquge8`）都正常、日志逐行 `eq=Y`，故本轮按一次性现象记录，复现时再看 `SourceSwitchPanel` 的 `@Monitor('runToken')` 与 `@Param currentSourceUrl` 的时序。
-  - **后续可选（未开工）**：当前源若本轮检索未命中（例：一次真机运行里 `bbiquge8` 单源瞬时超时，而主机 `probe` 同刻正常），抽屉里就不显示「我现在在哪」——
-    可考虑给当前源固定补一行占位（不可点，只标当前）。
+  - **后续可选（2026-10-19 已实现，主机侧待真机）**：当前源若本轮检索未命中（例：一次真机运行里 `bbiquge8` 单源瞬时超时，而主机 `probe` 同刻正常），
+    抽屉会在检索结束后固定补一行「当前源名 + 本轮检索未返回当前源 + 当前」（不可点）。该行只在没有 `current` 候选时出现，
+    **不计入候选数、不显示「切换」**；`currentSourceName` 为空或仍在检索时不占位。
+  - **加载优化（2026-10-19 已实现，主机侧待真机）**：书架刷新与「更新」原先逐书源串行 `getSource()`；现按去重后的
+    书源 id 一次调用 `sourcesForEngine(ids)`，并把 `getBooks()` / `getAllProgress()` 的列下标解析移出逐行循环。
+    同 URL 孪生源继续优先取启用行，书架条目与返回顺序不变。
 
 ## 听书（Listening / TTS）
 
@@ -688,18 +719,29 @@
   - 验证：导入两条同 URL 不同名的书源 → 列表显示两行、各自可启停/删除。**2026-10-07 release 真机复验通过**：同 URL 两条（`bbiquge8` / `笔趣阁8`）分别渲染，列表头计数与备份 JSON 逐条对账一致（[`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §9）（原先记「待补」是设备离线时快照，已更正）。
   - 残留语义（非缺陷）：一键「关闭/删除全部不可用」仍按 `bookSourceUrl` 聚合，同 URL 的两条会一起处理。
   - 证据：`pages/BookSourceManage.ets:65-70,175-198,343-386`、`model/SourceRepository.ets:39-47`
-- [ ] **T-SRC-3（P2）规则调试器：未支持的前缀 / 后缀没有任何诊断（静默失败）**：`diagnose` 只校验 CSS 语法 / 正则编译 / JS 规则，对**未实现的 Legado 前缀与尾缀**（`children.`、`ownText`、`all`、任意未知 `xxx.`）以及「整条规则 0 结果」不发任何提示 —— T-READ-4（`text.` 前缀静态下降 = 8/13 源目录缺章）就藏在这里。
+- [x] **T-SRC-3（P2）规则调试器：未支持的前缀 / 后缀没有任何诊断（静默失败）**：`diagnose` 曾只校验 CSS 语法 / 正则编译 / JS 规则，对**已确认未实现的 Legado 前缀与尾缀**（`xpath.`、`children.`、`ownText`、`all`）不发提示 —— T-READ-4（`text.` 前缀静态下降 = 8/13 源目录缺章）就藏在这里。
+  - 状态（2026-10-19）：**已实现，主机侧验证通过**。`children.` 与 `xpath.` 作为显式未支持 locator namespace；`@ownText`、`@all` 作为显式未支持 annotation，均产生 `kind: "unsupported"` 诊断。
+  - 边界：**不把任意 `tag.class` 一律当未知 namespace**（`span.last`、`div#content.showtxt`、`.item` 等都是合法 CSS）；未知写法若 CSS 本身非法，仍由 CSS 诊断兜底。合法但 0 结果仍不报错。
+  - 回归：`make test` **73 passed, 0 failed**；新增 `test_diagnose_known_legado_gaps` 与 `test_diagnose_keeps_valid_dotted_css_selectors`，另保留 `valid-zero-results` 用例。
   - 本轮（2026-10-11）`probe parse` 实测矩阵（text/html，同一份 bbiquge8 目录页 HTML）：`class.ptm-list-view-cell@tag.a@text` = 50 结果/无诊断（正常）；`@css:div.nope@text` = 0 结果/无诊断（合法选择器未命中，**不应报错**）；`class.not-exist-xyz@text` = 0 结果/无诊断（同上）；`css.#no-such-id@text` = **有**诊断 `CSS 选择器解析失败`（因为合法写法是 `@css:`，`css.` 是未知前缀，恰好因 CSS 解析失败才被抓到）；修复前的 `text.下一页@href` = **0 结果 + 无诊断**（静默）。
-  - 建议修法（未做）：`diagnose` 先对第一段前缀做白名单校验（`class.` / `id.` / `tag.` / `text.` / `@css:` / `$.` / `data.` / `<js>`），命中未知前缀发 `kind: "rule"` 告警；`@` 尾缀同理（`text` / `textNodes` / `href` / `src` / `html` / `@css:` / `js:` / `JSon:` / `tag.` / 裸标签）。**不**对「0 结果」告警（选择器合法但未命中是正常情况）。
+  - 修法（已实施）：已知 Legacy namespace / annotation 在 parser 层标成 `RuleToken::Unsupported`，由 `diagnose` 统一输出；**不**对「0 结果」告警（选择器合法但未命中是正常情况）。
   - 数据面已核对（主机侧）：`pages/RuleDebugger.ets:46` 调 `bookEngine.parseWithDiagnostics` → Rust `parse_with_diagnostics` ⇒ 与 `make probe ARGS='… parse <ct> <rule>'` **同一条链路**；仅 UI 渲染未验（设备离线）。
   - 证据：`rust/legado-engine/src/rule_dsl/mod.rs`（`diagnose`）、`pages/RuleDebugger.ets:46`
 - [x] **T-SRC-2 检测并发/超时**：确认 `detect`（并发 4）无源级串扰，`busy` 态防重入。
   - 证据：`pages/BookSourceManage.ets:200-222`
+- [x] **书源管理批量操作不再逐行提交（2026-10-19，主机侧）**：关闭不可用源、删除不可用源原先在循环里
+  逐条 `await setEnabled()` / `remove()`；现在先收集稳定 id，再分别走 `setEnabledMany()` / `removeMany()`。
+  两个函数内部去重非法 id、每 400 个一组 `IN (...)`，整批共用一个事务；行内单条开关仍走单行接口。
+  - 证据：`pages/BookSourceManage.ets`（`disableUnavailable` / `deleteUnavailable`）、`model/SourceStore.ets`
+  - 检测作业：`DetectJobRunner.runBatch()` 每批 JSONL append 后一次 `patchDetects()`；`recoverRunning()`
+    每个重放批次一次事务回写，批次间仍检查取消状态。
 
 ## 数据管理（缓存 / 备份，M6）
 
 - [x] **T-DATA-1（R4/R5）封面缓存读穿**：`BookCover.load` 先查 `ctx.cacheDir/cover_{hash}` 是否已存在（或加内存 PixelMap 缓存），避免重复下载。
   - 证据：`components/BookCover.ets:22-39`、`rust/legado-engine/src/runtime.rs:653-658`
+  - 2026-10-19 补强：模块级 `inflightLoads` 按 `cacheDir + coverUrl` 单飞**整段下载 + 解码**，同一封面同时出现在书架 / 搜索 / 详情时只执行一次；
+    成功结果进入既有 PixelMap LRU，失败仍进入 `failedCache` 且任务落定即出表。主机侧编译通过，真机并发渲染待验。
 - [x] **T-DATA-2（R5）清理缓存页实现**：统计并清理 `filesDir/chapters`、`filesDir/local`（可选）、`ctx.cacheDir/cover_*`；设置页用 `formatBytes` 展示真实占用。
   - 证据：`pages/Settings.ets:82-86`、`common/Format.ets:48-61`、`pages/Index.ets:62-64`
 - [x] **T-DATA-3（R5）备份/恢复**：导出 JSON（书源 + 书架 + 进度，带 `schemaVersion`）并支持导入恢复。
@@ -743,6 +785,11 @@
     书源无需改动（`saveSources` 走 `putString` 整体替换，本来就是覆盖语义）；文案保留「覆盖」并补明「备份中不存在的书源、书籍与进度将被删除」，恢复后 toast 带实际计数。
   - **真机证据（2026-10-07，debug 包，`make run`，设备 `33Z0224424136564`）**：13 源 / 3 本 / 7 条 → 导入「1 书 1 进度」fixture → **1 本 / 1 条**（修复前会保持 3 / 7）；`aa force-stop` 重启后仍 1 本 / 1 条（确认落盘）；同会话内先导入 `updatedAt = now+1 天`（书架 6章/300章）再导入旧时间戳 fixture → 书架回到 **1章/50章**（证明 `lastWriteAt.clear()` 生效，否则该写会被拒绝）；0 条 JS 错误。验证后已导回全量备份，设备状态复原，fixture 已删。
   - **更正原「顺带发现」**：孤儿进度行**不能**做全局 GC。`BookDetail` 的「立即阅读」不要求已上架（`pages/BookDetail.ets:233` 常驻可点），`Reader.persistProgress()` 会为**未上架**的书写进度 → 「`progress` 有行而 `books` 无行」有合法来源；`DELETE FROM progress WHERE book_id NOT IN books` 会删掉用户真实阅读位置。改真覆盖后 DB 与备份已自洽，无需 GC。
+  - **2026-10-19 事务收尾**：`replaceShelf()` 的清表与全量重建现共用一个事务，任何一行写入失败都回滚；
+    进度行仍直接插入以保持 RESTORE 语义。`removeBooks()` 同样改为单事务分块删除 `books` / `progress`，
+    提交后才清 `lastWriteAt` / `ProgressOwner`。设备连接后需抽查导入失败回滚与批量删书耗时。
+    主机侧 `make test` 73 passed、`make test-pregen` 114 条、`make test-detect` 135 条、
+    `scripts/shelf-updater-sim.py` ALL PASS，`make native-fresh` / `make check` / `make hap` 通过。
   - 证据：`model/ShelfRepository.ets`（`replaceShelf`）、`pages/BackupManage.ets`（`doImport` / `confirmImport` 文案）
 
 ---

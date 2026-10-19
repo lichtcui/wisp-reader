@@ -5,6 +5,7 @@ import { cleanChapter } from '../common/Format';
 import { isSameBook } from './SourceSwitch';
 import { upsertBook } from './ShelfRepository';
 import { isLocalBook } from './LocalBook';
+import { ENGINE_INFO_TIMEOUT_MS } from '../common/Const';
 
 /**
  * 书架「更新」：批量检查在架书籍有没有新章（T-SHELF-7，决策见 `docs/handoff/HANDOFF-S11.md` §1）。
@@ -34,14 +35,6 @@ import { isLocalBook } from './LocalBook';
 
 /** 单源搜索超时（Rust 侧会 clamp 到 [3s, 20s]）。 */
 const SEARCH_TIMEOUT_MS: number = 6_000;
-/**
- * 单本总超时（search + bookInfo 两次请求）。
- *
- * 比 HANDOFF 草稿的「单本 6s」宽：一次 6s 的整链上限会让「搜索正好用满 6s」的书
- * 连 `bookInfo` 都发不出去 —— 而 `bookInfo` 在 Rust 侧没有独立超时参数（只有 reqwest
- * 客户端的 15s 硬上限），所以这条 ArkTS 侧竞速是它唯一的护栏，必须容得下两次请求。
- */
-const BOOK_TIMEOUT_MS: number = 15_000;
 /** 并发书数：串行太慢（20 本 × 3–5s），再高会跟用户正在进行的阅读/听书抢带宽。 */
 const CHECK_CONCURRENCY: number = 3;
 /** 整体预算：到点即停，剩余书计入 `skipped`（不许把入口挂死）。 */
@@ -115,32 +108,6 @@ function pickSameBook(book: Book, items: BookSearchItem[]): BookSearchItem | und
   return undefined;
 }
 
-/** 给一个 Promise 加超时（超时即 reject；被竞赛掉的请求由引擎自己收尾）。 */
-function withTimeout<T>(task: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve: (value: T) => void, reject: (reason: Error) => void): void => {
-    let settled: boolean = false;
-    const timer: number = setTimeout((): void => {
-      if (!settled) {
-        settled = true;
-        reject(new Error('timeout'));
-      }
-    }, ms);
-    task.then((value: T): void => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        resolve(value);
-      }
-    }, (err: Error): void => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        reject(err);
-      }
-    });
-  });
-}
-
 /** 拿到最新的章节名：详情页优先，回落到搜索结果（与 `SourceSwitch` 同口径）。 */
 function latestTitle(info: Book, item: BookSearchItem): string {
   if (info.lastChapterTitle.trim().length > 0) {
@@ -164,7 +131,7 @@ async function probeBook(book: Book, source: BookSource): Promise<number> {
   if (hit === undefined) {
     return PROBE_FAILED;
   }
-  const info: Book = await bookEngine.bookInfo(source, hit.bookUrl);
+  const info: Book = await bookEngine.bookInfo(source, hit.bookUrl, ENGINE_INFO_TIMEOUT_MS);
   const latest: string = latestTitle(info, hit);
   if (latest.length === 0) {
     return PROBE_FAILED;
@@ -231,7 +198,7 @@ export async function checkShelfUpdates(
       let result: number = PROBE_FAILED;
       if (source !== undefined && source.enabled !== false) {
         try {
-          result = await withTimeout(probeBook(book, source), BOOK_TIMEOUT_MS);
+          result = await probeBook(book, source);
         } catch (err) {
           result = PROBE_FAILED;
         }

@@ -9,6 +9,7 @@ import { deleteBookToc, putCachedToc } from './TocCache';
 import { takePrefetchedInfo, takePrefetchedToc } from './SourcePrefetch';
 import { isLocalBook } from './LocalBook';
 import { TtsController } from './TtsController';
+import { ENGINE_INFO_TIMEOUT_MS, ENGINE_TOC_TIMEOUT_MS } from '../common/Const';
 
 /**
  * 换源（v1.1 新增，决策见 `docs/decisions.md` D16；原 D11 把换源列为 v1 不做）。
@@ -178,13 +179,15 @@ export async function switchSource(
   }
   // 抽屉里的预热（`SourcePrefetch`）命中就直接用：详情 1.1s / 目录 5.9s 已在用户点「切换」前跑完。
   const warmedInfo: Book | undefined = takePrefetchedInfo(target.bookSourceUrl, item.bookUrl);
-  const info: Book = warmedInfo !== undefined ? warmedInfo : await bookEngine.bookInfo(target, item.bookUrl);
+  const info: Book = warmedInfo !== undefined
+    ? warmedInfo
+    : await bookEngine.bookInfo(target, item.bookUrl, ENGINE_INFO_TIMEOUT_MS);
   const tocUrl: string = info.tocUrl.length > 0 ? info.tocUrl : item.bookUrl;
   const warmedChapters: Chapter[] | undefined =
     takePrefetchedToc(target.bookSourceUrl, item.bookUrl, tocUrl);
   const chapters: Chapter[] = warmedChapters !== undefined && warmedChapters.length > 0
     ? warmedChapters
-    : await bookEngine.toc(target, tocUrl);
+    : await bookEngine.toc(target, tocUrl, ENGINE_TOC_TIMEOUT_MS);
   if (chapters.length === 0) {
     throw new Error('该源目录为空');
   }

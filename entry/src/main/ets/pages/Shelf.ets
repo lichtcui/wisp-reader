@@ -1,13 +1,11 @@
 import { common } from '@kit.AbilityKit';
-import BuildProfile from 'BuildProfile';
 import { BookCover } from '../components/BookCover';
 import { EmptyView } from '../components/EmptyView';
 import { Book, BookSource, ReadProgress } from '../engine/types';
-import { getAllProgress, getBooks, initShelf } from '../model/ShelfRepository';
+import { getShelfBooks, initShelf, ShelfBookRecord } from '../model/ShelfRepository';
 import { ShelfEditState } from '../model/ShelfEditState';
-import { getSource, listRows, preferredRowsByUrl, SourceRow } from '../model/SourceStore';
+import { sourcesForUrls } from '../model/SourceStore';
 import { ensureSourceStore } from '../model/SourceStoreMigration';
-import { t16MarkerPhase } from '../model/SourceStoreBench';
 import { isLocalBook, localSource } from '../model/LocalBook';
 import { deriveTotalChapters, shelfProgressText } from '../common/Format';
 import { TtsController } from '../model/TtsController';
@@ -50,38 +48,22 @@ export struct ShelfPage {
     if (ctx === undefined) {
       return;
     }
-    if (BuildProfile.DEBUG && t16MarkerPhase(ctx) === 'seeded') {
-      return;
-    }
     await initShelf(ctx);
     await ensureSourceStore(ctx);
-    const books: Book[] = await getBooks();
-    const rows: SourceRow[] = await listRows();
-    const byUrl: Map<string, SourceRow> = preferredRowsByUrl(rows);
-    const needed: Map<number, SourceRow> = new Map<number, SourceRow>();
-    for (const book of books) {
-      const row: SourceRow | undefined = byUrl.get(book.sourceUrl);
-      if (row !== undefined) {
-        needed.set(row.id, row);
-      }
+    const records: ShelfBookRecord[] = await getShelfBooks();
+    const urls: string[] = [];
+    for (const record of records) {
+      urls.push(record.book.sourceUrl);
     }
-    const loaded: Map<number, BookSource> = new Map<number, BookSource>();
-    for (const row of needed.values()) {
-      const source: BookSource | undefined = await getSource(row.id);
-      if (source !== undefined) {
-        loaded.set(row.id, source);
-      }
-    }
-    const progressMap: Map<string, ReadProgress> = await getAllProgress();
+    const byUrl: Map<string, BookSource> = await sourcesForUrls(urls);
     const entries: ShelfBookItem[] = [];
-    for (const book of books) {
-      const progress: ReadProgress | undefined = progressMap.get(book.bookId);
-      const row: SourceRow | undefined = byUrl.get(book.sourceUrl);
-      let source: BookSource | undefined = row === undefined ? undefined : loaded.get(row.id);
+    for (const record of records) {
+      const book: Book = record.book;
+      let source: BookSource | undefined = byUrl.get(book.sourceUrl);
       if (source === undefined && isLocalBook(book)) {
         source = localSource();
       }
-      entries.push({ book: book, source: source, progress: progress });
+      entries.push({ book: book, source: source, progress: record.progress });
     }
     if (gen !== this.reloadGen) {
       return; // 已被更新的刷新取代，丢弃本次结果

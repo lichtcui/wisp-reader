@@ -29,6 +29,15 @@ pub fn parse_with_diagnostics(content: &str, content_type: &str, rule: &str) -> 
 
 /// Fetch a URL as text using a throwaway source (no cookies/rate limit).
 pub async fn fetch_text(url: &str) -> Result<String, String> {
+    fetch_text_with_timeout(url, runtime::DEFAULT_FETCH_TIMEOUT_MS).await
+}
+
+/// Fetch a URL as text with an aggregate timeout around the whole request.
+pub async fn fetch_text_with_timeout(url: &str, timeout_ms: u64) -> Result<String, String> {
+    runtime::with_operation_timeout(timeout_ms, fetch_text_inner(url)).await
+}
+
+async fn fetch_text_inner(url: &str) -> Result<String, String> {
     let source = types::BookSource {
         bookSourceUrl: url.to_string(),
         ..Default::default()

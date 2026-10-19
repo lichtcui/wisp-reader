@@ -39,9 +39,12 @@ rust/
 
 要点：
 
-- 10 个导出：`parse` / `parseWithDiagnostics` / `fetchText` / `gateSources` / `search` /
-  `bookInfo` / `toc` / `content` / `detect` / `downloadCover`；参数与返回类型看 `index.d.ts`。
+- 11 个导出：`parse` / `parseWithDiagnostics` / `fetchText` / `fetchTextWithTimeout` /
+  `gateSources` / `search` / `bookInfo` / `toc` / `content` / `detect` / `downloadCover`；
+  参数与返回类型看 `index.d.ts`。
 - **粗粒度 JSON 进出**；失败以 NAPI error（reject）返回 `reason` key，ArkTS 侧 `FailReason` 文案映射。
+- **整段操作预算**：详情、目录、正文、封面和直接抓取都接受 `timeoutMs`，覆盖该操作的全部请求、
+  重定向、翻页与解析；Rust 统一 clamp 到 [3s, 120s]。
 - `search`：按源并发（默认 8）+ 每源超时（默认 10s），返回每源 `SourceStatus`（ok/count/error/elapsedMs）。
 - `toc`：内部走 `nextTocUrl` 分页（上限 50、自引用防环）+ 卷 `isVolume` 跳过。
 - `content`：内部走 `nextContentUrl` 翻页（上限 30、自引用防环）拼成**整章**。
@@ -66,7 +69,9 @@ rust/
 
 - **搜索提取器扩展**：`extract_search_items` 现已返回 8 字段（name/author/bookUrl/coverUrl/intro/kind/wordCount/lastChapter）。
 - **`@js:` L1 丢 keyword**（原实现只取路径不拼关键词）已在 `resolve_js_l1` 修复。
-- **诊断**：`diagnose` 收集 regex 编译失败（Java lookaround）、CSS 解析失败、JS 规则，随 `parseWithDiagnostics` 返回。
+- **诊断**：`diagnose` 收集 regex 编译失败（Java lookaround）、CSS 解析失败、JS 规则，以及显式未实现的
+  `xpath.` / `children.` / `@ownText` / `@all` 规则段，随 `parseWithDiagnostics` 返回。合法但未命中的 CSS 仍返回
+  0 结果且不报诊断。
 - **安全红线**：`danger_accept_invalid_certs` 已移除；每源独立 `Client`（Cookie 隔离，上限 64 后整体回收）+ `concurrentRate` 限速。
 - **`text.关键字` 文本定位器**（2026-10-11 修）：DSL 曾只认 `class.` / `id.` / `tag.`，`text.下一页@href` 被当成 CSS 选择器 →
   **0 结果且无诊断**（静默失败）→ 目录/正文翻页在第一页后停止（《剑来》目录 50 条 vs 实际 1308 章；8/13 内置源命中）。

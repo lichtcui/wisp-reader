@@ -13,12 +13,15 @@ SDK      := $(DEVECO)/Contents/sdk
 NDK_HOME := $(SDK)/default/openharmony
 HDC      := $(NDK_HOME)/toolchains/hdc
 HVIGORW  := $(DEVECO)/Contents/tools/hvigor/bin/hvigorw
+JAVA     := $(DEVECO)/Contents/jbr/Contents/Home/bin/java
 
 BUNDLE   := com.lichtcui.sourcereader
 ABILITY  := EntryAbility
 HAP      := entry/build/default/outputs/default/entry-default-signed.hap
 SO       := entry/libs/arm64-v8a/liblegado_core.so
 DTS      := entry/src/main/cpp/types/liblegado_core/index.d.ts
+APP      := build/outputs/default/source-reader-default-signed.app
+SIGN_TOOL := $(NDK_HOME)/toolchains/lib/hap-sign-tool.jar
 # hvigorw 依赖 DevEco 自带的 node/ohpm，必须在 PATH 里（否则报找不到 node）。
 export DEVECO_SDK_HOME := $(SDK)
 export OHOS_NDK_HOME   := $(NDK_HOME)
@@ -30,7 +33,7 @@ export PATH := $(DEVECO)/Contents/tools/node/bin:$(DEVECO)/Contents/tools/ohpm/b
 DAEMON_FLAG := $(if $(NO_DAEMON),--no-daemon,)
 
 .DEFAULT_GOAL := help
-.PHONY: help rust test test-pregen test-detect probe hap hap-release daemon-status daemon-stop install restart run run-release log devices doctor check docs-toc
+.PHONY: help rust test test-pregen test-detect probe native-fresh hap hap-release app-release verify-app verify-profile daemon-status daemon-stop install restart run run-release log devices doctor check docs-toc
 
 help: ## 显示所有可用命令
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -58,11 +61,23 @@ test-detect: ## 主机上跑检测作业状态机与 fingerprint 契约测试（
 
 ## ── HAP ─────────────────────────────────────────────────────────────────────
 
-hap: ## 编译 debug HAP（NO_DAEMON=1 可关 daemon）
-	$(HVIGORW) assembleHap --mode module -p product=default -p buildMode=debug $(DAEMON_FLAG)
+native-fresh: ## 校验 Rust .so 与 NAPI 声明没有落后于源码
+	@scripts/check-native-fresh.sh
 
-hap-release: ## 编译 release HAP（含混淆 + 签名）
-	$(HVIGORW) assembleHap --mode module -p product=default -p buildMode=release $(DAEMON_FLAG)
+hap: native-fresh ## 编译 debug HAP（NO_DAEMON=1 可关 daemon）
+	SOURCE_READER_SIGNING_MODE=debug $(HVIGORW) assembleHap --mode module -p product=default -p buildMode=debug $(DAEMON_FLAG)
+
+hap-release: native-fresh ## 编译 release HAP（含混淆 + 独立签名）
+	SOURCE_READER_SIGNING_MODE=release $(HVIGORW) assembleHap --mode module -p product=default -p buildMode=release $(DAEMON_FLAG)
+
+app-release: native-fresh ## 构建唯一 Release APP（缺少 Release 身份时阻断）
+	HVIGORW=$(HVIGORW) scripts/build-release-app.sh
+
+verify-app: ## 独立校验 Release APP 签名、profile、bundle 并输出 SHA-256
+	DEVECO_SDK_HOME=$(SDK) JAVA=$(JAVA) SIGN_TOOL=$(SIGN_TOOL) BUNDLE=$(BUNDLE) APP_PATH=$(APP) scripts/verify-release-app.sh app
+
+verify-profile: ## 独立校验 APP 内 Release profile（bundle / 有效期 / Debug 隔离）
+	DEVECO_SDK_HOME=$(SDK) JAVA=$(JAVA) SIGN_TOOL=$(SIGN_TOOL) BUNDLE=$(BUNDLE) APP_PATH=$(APP) scripts/verify-release-app.sh profile
 
 daemon-status: ## 查看本项目 hvigor 常驻进程状态
 	$(HVIGORW) --status-daemon

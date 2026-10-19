@@ -16,6 +16,7 @@
 // ──────────────────────────────────────────────────────────────────────
 
 use std::collections::hash_map::DefaultHasher;
+use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
@@ -26,6 +27,39 @@ use crate::rule_dsl;
 use crate::search_url::{self, page_headers, resolve_url, source_headers, RequestSpec};
 use crate::status::FailReason;
 use crate::types::*;
+
+pub const DEFAULT_FETCH_TIMEOUT_MS: u64 = 15_000;
+pub const DEFAULT_BOOK_INFO_TIMEOUT_MS: u64 = 15_000;
+pub const DEFAULT_TOC_TIMEOUT_MS: u64 = 45_000;
+pub const DEFAULT_CONTENT_TIMEOUT_MS: u64 = 45_000;
+pub const DEFAULT_COVER_TIMEOUT_MS: u64 = 15_000;
+
+const MIN_OPERATION_TIMEOUT_MS: u64 = 3_000;
+const MAX_OPERATION_TIMEOUT_MS: u64 = 120_000;
+
+/// Clamp an operation budget to the range the UI can reason about. The lower
+/// bound avoids aborting a healthy but slow DNS/TLS handshake; the upper bound
+/// keeps a single source from pinning a user action for minutes.
+pub fn operation_budget(timeout_ms: u64) -> Duration {
+    Duration::from_millis(
+        timeout_ms.clamp(MIN_OPERATION_TIMEOUT_MS, MAX_OPERATION_TIMEOUT_MS),
+    )
+}
+
+/// Apply one timeout to a complete operation (all pages / redirects / parsing),
+/// not just one HTTP request.
+pub(crate) async fn with_operation_timeout<T, F>(
+    timeout_ms: u64,
+    task: F,
+) -> Result<T, String>
+where
+    F: Future<Output = Result<T, String>>,
+{
+    match tokio::time::timeout(operation_budget(timeout_ms), task).await {
+        Ok(result) => result,
+        Err(_) => Err(FailReason::Timeout.as_str().to_string()),
+    }
+}
 
 fn ct_of(result: &FetchResult) -> &'static str {
     if result.content_type.contains("json") {
@@ -224,6 +258,18 @@ async fn search_one(client: &SourceClient, source: &BookSource, keyword: &str) -
 // ── Book info ─────────────────────────────────────────────────
 
 pub async fn book_info(source: &BookSource, book_url: &str) -> Result<BookInfo, String> {
+    book_info_with_timeout(source, book_url, DEFAULT_BOOK_INFO_TIMEOUT_MS).await
+}
+
+pub async fn book_info_with_timeout(
+    source: &BookSource,
+    book_url: &str,
+    timeout_ms: u64,
+) -> Result<BookInfo, String> {
+    with_operation_timeout(timeout_ms, book_info_inner(source, book_url)).await
+}
+
+async fn book_info_inner(source: &BookSource, book_url: &str) -> Result<BookInfo, String> {
     let client = engine().client_for(source);
     let headers = source_headers(source);
     let result = client
@@ -273,6 +319,18 @@ pub async fn book_info(source: &BookSource, book_url: &str) -> Result<BookInfo, 
 // ── TOC ───────────────────────────────────────────────────────
 
 pub async fn toc(source: &BookSource, toc_url: &str) -> Result<Vec<Chapter>, String> {
+    toc_with_timeout(source, toc_url, DEFAULT_TOC_TIMEOUT_MS).await
+}
+
+pub async fn toc_with_timeout(
+    source: &BookSource,
+    toc_url: &str,
+    timeout_ms: u64,
+) -> Result<Vec<Chapter>, String> {
+    with_operation_timeout(timeout_ms, toc_inner(source, toc_url)).await
+}
+
+async fn toc_inner(source: &BookSource, toc_url: &str) -> Result<Vec<Chapter>, String> {
     const MAX_TOC_PAGES: usize = 50;
     let client = engine().client_for(source);
     let src_headers = source_headers(source);
@@ -353,6 +411,18 @@ pub async fn toc(source: &BookSource, toc_url: &str) -> Result<Vec<Chapter>, Str
 // ── Content ───────────────────────────────────────────────────
 
 pub async fn content(source: &BookSource, chapter_url: &str) -> Result<ContentResult, String> {
+    content_with_timeout(source, chapter_url, DEFAULT_CONTENT_TIMEOUT_MS).await
+}
+
+pub async fn content_with_timeout(
+    source: &BookSource,
+    chapter_url: &str,
+    timeout_ms: u64,
+) -> Result<ContentResult, String> {
+    with_operation_timeout(timeout_ms, content_inner(source, chapter_url)).await
+}
+
+async fn content_inner(source: &BookSource, chapter_url: &str) -> Result<ContentResult, String> {
     const MAX_PAGES: usize = 30;
     let client = engine().client_for(source);
     let src_headers = source_headers(source);
@@ -854,6 +924,33 @@ pub async fn download_cover(
     cover_url: &str,
     dest_dir: &str,
 ) -> Result<String, String> {
+    download_cover_with_timeout(
+        source,
+        cover_url,
+        dest_dir,
+        DEFAULT_COVER_TIMEOUT_MS,
+    )
+    .await
+}
+
+pub async fn download_cover_with_timeout(
+    source: &BookSource,
+    cover_url: &str,
+    dest_dir: &str,
+    timeout_ms: u64,
+) -> Result<String, String> {
+    with_operation_timeout(
+        timeout_ms,
+        download_cover_inner(source, cover_url, dest_dir),
+    )
+    .await
+}
+
+async fn download_cover_inner(
+    source: &BookSource,
+    cover_url: &str,
+    dest_dir: &str,
+) -> Result<String, String> {
     let path = cover_cache_path(dest_dir, cover_url);
 
     if std::path::Path::new(&path).exists() && cached_cover_is_usable(&path) {
@@ -982,6 +1079,9 @@ mod tests {
                     .next()
                     .unwrap_or("/")
                     .to_string();
+                if path.starts_with("/slow/") {
+                    std::thread::sleep(Duration::from_millis(4_000));
+                }
                 let body = if path.starts_with("/search") {
                     DETECT_SEARCH_HTML.to_string()
                 } else if path == "/book/1" {
@@ -1062,6 +1162,27 @@ mod tests {
         // Unknown binary container: only an explicit `image/*` lets it through.
         assert!(!looks_like_image(b"ZZZZ\x01\x02", "application/octet-stream"));
         assert!(looks_like_image(b"ZZZZ\x01\x02", "image/avif"));
+    }
+
+    #[test]
+    fn test_operation_budget_clamps_both_ends() {
+        assert_eq!(operation_budget(0), Duration::from_millis(3_000));
+        assert_eq!(operation_budget(120_000), Duration::from_millis(120_000));
+        assert_eq!(operation_budget(999_999), Duration::from_millis(120_000));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_book_info_operation_timeout_is_whole_call() {
+        let (base, _hits, _h) = mock_server();
+        let source = sample_source(&base);
+        let started = std::time::Instant::now();
+
+        let err = book_info_with_timeout(&source, &format!("{base}/slow/book"), 1)
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, FailReason::Timeout.as_str());
+        assert!(started.elapsed() >= Duration::from_millis(2_900));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

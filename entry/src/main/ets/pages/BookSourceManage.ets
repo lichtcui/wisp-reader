@@ -10,8 +10,10 @@ import {
   getSource,
   listRows,
   remove,
+  removeMany,
   replaceAll,
   setEnabled,
+  setEnabledMany,
   SourceRow,
   upsertMany
 } from '../model/SourceStore';
@@ -37,7 +39,7 @@ import {
 } from '../components/SourceDetailPanel';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
-import { DEFAULT_DETECT_KEYWORD } from '../common/Const';
+import { DEFAULT_DETECT_KEYWORD, ENGINE_FETCH_TIMEOUT_MS } from '../common/Const';
 import {
   DETECT_BACKGROUND_INACTIVE,
   DetectJobRunner
@@ -609,7 +611,7 @@ export struct BookSourceManagePage {
     }
     this.busy = true;
     try {
-      const text: string = await bookEngine.fetchText(url);
+      const text: string = await bookEngine.fetchText(url, ENGINE_FETCH_TIMEOUT_MS);
       await this.importText(text);
       this.showUrl = false;
       this.urlInput = '';
@@ -1086,12 +1088,14 @@ export struct BookSourceManagePage {
     let changed: number = 0;
     try {
       await ensureSourceStore(ctx);
+      const idsToDisable: number[] = [];
       for (const row of this.rows) {
         if (ids.has(row.id) && row.detectState === 'unavailable' && row.enabled) {
-          await setEnabled(row.id, false);
-          changed += 1;
+          idsToDisable.push(row.id);
         }
       }
+      changed = idsToDisable.length;
+      await setEnabledMany(idsToDisable, false);
       await this.reload();
     } catch (err) {
       this.summary = '关闭不可用源失败';
@@ -1137,12 +1141,14 @@ export struct BookSourceManagePage {
     let removed: number = 0;
     try {
       await ensureSourceStore(ctx);
+      const idsToRemove: number[] = [];
       for (const row of this.rows) {
         if (ids.has(row.id) && row.detectState === 'unavailable') {
-          await remove(row.id);
-          removed += 1;
+          idsToRemove.push(row.id);
         }
       }
+      removed = idsToRemove.length;
+      await removeMany(idsToRemove);
       await this.reload();
     } catch (err) {
       this.summary = '删除不可用源失败';

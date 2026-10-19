@@ -4,19 +4,20 @@
  *
  * 三条要点（改本文件前先读 spec §关键设计决策）：
  * 1. **索引列 + `json` 列**：可查询项建列，完整书源存 `json`。列表 / 筛选只 SELECT 索引列，
- *    **不碰 `json`**——3000 行投影不解析 JSON 正是本模块存在的理由；只有送引擎（`allForEngine`）
- *    与备份导出（`exportAll`）才读 `json`。
+ *    **不碰 `json`**——3000 行投影不解析 JSON 正是本模块存在的理由；只有确实需要完整规则的
+ *    单条 / 批量读、送引擎与备份导出才读 `json`。
  * 2. **自然键 `(url, name)` 唯一**：同 URL 不同名的两条必须各自独立（T-SRC-1 的教训）。
  *    重复导入走 `UPDATE` 原地更新，`id` 不变——`id` 是列表 key，漂了就是第二次 T-SRC-1。
- * 3. **`confidence` 列是权威**：`patchConfidence` 只写列、不重写 `json`（否则每改一次置信度就要
- *    整条序列化）。因此读到 `json` 里的书源后一律用列值覆盖 `confidence`：`json` 里那份可能已过期，
- *    spec §决策 2 明确接受了这份冗余。
+ * 3. **`enabled` / `confidence` 列是权威**：`patchConfidence` 只写列、不重写 `json`（否则每改一次
+ *    置信度就要整条序列化），启停也只改索引列。因此读到 `json` 里的书源后一律用列值覆盖这两个字段：
+ *    `json` 里那份可能已过期，spec §决策 2 明确接受了这份冗余。
  *
  * 成员索引：
  *   建表 / `initSourceStore` / `db()`
  *   投影与筛选：`SourceRow`（**冻结形状**）、`SourceFilter`、`listRows`、`countRows`
- *   完整读：`getSource`、`sourcesForEngine`、`allForEngine`、`exportAll`
- *   写：`setEnabled`、`remove`、`patchDetect`、`patchConfidence`、`patchConfidences`、
+ *   完整读：`getSource`、`sourcesForEngine`、`sourcesForUrls`、`allForEngine`、`exportAll`
+ *   写：`setEnabled`、`setEnabledMany`、`remove`、`removeMany`、`patchDetect`、`patchDetects`、
+ *      `patchConfidence`、`patchConfidences`、
  *      `upsertMany`、`replaceAll`
  */
 import { relationalStore } from '@kit.ArkData';
@@ -37,6 +38,32 @@ export {
 const DOMAIN: number = 0x0000;
 const TAG: string = 'SourceStore';
 const DB_NAME: string = 'sources.db';
+/** Keep SQLite bind-variable counts below the portable 999 limit. */
+const ID_CHUNK_SIZE: number = 400;
+
+function uniquePositiveIds(ids: number[]): number[] {
+  const unique: number[] = [];
+  const seen: Set<number> = new Set<number>();
+  for (const id of ids) {
+    if (Number.isInteger(id) && id > 0 && !seen.has(id)) {
+      seen.add(id);
+      unique.push(id);
+    }
+  }
+  return unique;
+}
+
+function uniqueUrls(urls: string[]): string[] {
+  const unique: string[] = [];
+  const seen: Set<string> = new Set<string>();
+  for (const url of urls) {
+    if (url.length > 0 && !seen.has(url)) {
+      seen.add(url);
+      unique.push(url);
+    }
+  }
+  return unique;
+}
 
 /** `grp` 而非 `group`（SQL 保留字）；`sort_order` = 导入顺序，列表的稳定排序基准。 */
 const CREATE_TABLE: string =
@@ -54,8 +81,8 @@ const CREATE_ENABLED_INDEX: string = 'CREATE INDEX IF NOT EXISTS idx_sources_ena
 const ROW_COLS: string =
   'id, name, url, grp, enabled, confidence, last_detect_state, last_detect_at, respond_time';
 
-/** `json` + `confidence`：需要完整书源的读路径（送引擎 / 导出）。 */
-const FULL_COLS: string = 'json, confidence';
+/** 完整书源所需的列；`enabled` / `confidence` 都是权威索引列，覆盖 JSON 里的旧副本。 */
+const FULL_COLS: string = 'enabled, json, confidence';
 
 let store: relationalStore.RdbStore | undefined = undefined;
 /** 并发初始化护栏：两个调用方同一帧里 init 时共用一个 open（否则会开两次库）。 */
@@ -142,6 +169,14 @@ export interface ConfidenceUpdate {
   url: string;
   name: string;
   confidence: number;
+}
+
+/** One detect-result column update; the batch shares a single transaction. */
+export interface DetectPatch {
+  id: number;
+  state: string;
+  elapsedMs: number;
+  at: number;
 }
 
 /** One detect batch entry: stable DB id paired with the complete source JSON. */
@@ -320,7 +355,12 @@ export async function getSource(id: number): Promise<BookSource | undefined> {
     await s.querySql('SELECT ' + FULL_COLS + ' FROM sources WHERE id = ?', [id]);
   let out: BookSource | undefined = undefined;
   if (rs.goToNextRow()) {
-    out = parseSource(rs, rs.getColumnIndex('json'), rs.getColumnIndex('confidence'));
+    out = parseSource(
+      rs,
+      rs.getColumnIndex('json'),
+      rs.getColumnIndex('confidence'),
+      rs.getColumnIndex('enabled')
+    );
   }
   rs.close();
   return out;
@@ -339,8 +379,9 @@ async function readSources(filter?: SourceFilter): Promise<BookSource[]> {
   const rs: relationalStore.ResultSet = await s.querySql(sql, args);
   const cJson: number = rs.getColumnIndex('json');
   const cConf: number = rs.getColumnIndex('confidence');
+  const cEnabled: number = rs.getColumnIndex('enabled');
   while (rs.goToNextRow()) {
-    const src: BookSource | undefined = parseSource(rs, cJson, cConf);
+    const src: BookSource | undefined = parseSource(rs, cJson, cConf, cEnabled);
     if (src !== undefined) {
       out.push(src);
     }
@@ -349,13 +390,19 @@ async function readSources(filter?: SourceFilter): Promise<BookSource[]> {
   return out;
 }
 
-/** 解析一行 `json` 并用权威的 `confidence` 列覆盖（见文件头要点 3）。坏行跳过，不拖垮整批。 */
-function parseSource(rs: relationalStore.ResultSet, cJson: number, cConf: number): BookSource | undefined {
+/** 解析一行 `json`，并用权威的 `enabled` / `confidence` 列覆盖旧副本。坏行跳过，不拖垮整批。 */
+function parseSource(
+  rs: relationalStore.ResultSet,
+  cJson: number,
+  cConf: number,
+  cEnabled: number
+): BookSource | undefined {
   try {
     const src: BookSource = JSON.parse(rs.getString(cJson)) as BookSource;
     if (src === undefined) {
       return undefined;
     }
+    src.enabled = rs.getLong(cEnabled) !== 0;
     if (!rs.isColumnNull(cConf)) {
       src.confidence = rs.getLong(cConf);
     }
@@ -380,44 +427,97 @@ export function allForEngine(filter?: SourceFilter): Promise<BookSource[]> {
  * are omitted so the runner can fail the batch instead of silently advancing.
  */
 export async function sourcesForEngine(ids: number[]): Promise<EngineSource[]> {
-  const unique: number[] = [];
-  const seen: Set<number> = new Set<number>();
-  for (const id of ids) {
-    if (Number.isInteger(id) && id > 0 && !seen.has(id)) {
-      seen.add(id);
-      unique.push(id);
-    }
-  }
+  const unique: number[] = uniquePositiveIds(ids);
   const s: relationalStore.RdbStore | undefined = db();
   if (s === undefined || unique.length === 0) {
     return [];
   }
-  const args: relationalStore.ValueType[] = [];
-  const holes: string[] = [];
-  for (const id of unique) {
-    holes.push('?');
-    args.push(id);
-  }
   const found: Map<number, BookSource> = new Map<number, BookSource>();
-  const rs: relationalStore.ResultSet = await s.querySql(
-    'SELECT id, ' + FULL_COLS + ' FROM sources WHERE id IN (' + holes.join(', ') + ')',
-    args
-  );
-  const cId: number = rs.getColumnIndex('id');
-  const cJson: number = rs.getColumnIndex('json');
-  const cConf: number = rs.getColumnIndex('confidence');
-  while (rs.goToNextRow()) {
-    const source: BookSource | undefined = parseSource(rs, cJson, cConf);
-    if (source !== undefined) {
-      found.set(rs.getLong(cId), source);
+  for (let start: number = 0; start < unique.length; start += ID_CHUNK_SIZE) {
+    const chunk: number[] = unique.slice(start, start + ID_CHUNK_SIZE);
+    const args: relationalStore.ValueType[] = [];
+    const holes: string[] = [];
+    for (const id of chunk) {
+      holes.push('?');
+      args.push(id);
     }
+    const rs: relationalStore.ResultSet = await s.querySql(
+      'SELECT id, ' + FULL_COLS + ' FROM sources WHERE id IN (' + holes.join(', ') + ')',
+      args
+    );
+    const cId: number = rs.getColumnIndex('id');
+    const cJson: number = rs.getColumnIndex('json');
+    const cConf: number = rs.getColumnIndex('confidence');
+    const cEnabled: number = rs.getColumnIndex('enabled');
+    while (rs.goToNextRow()) {
+      const source: BookSource | undefined = parseSource(rs, cJson, cConf, cEnabled);
+      if (source !== undefined) {
+        found.set(rs.getLong(cId), source);
+      }
+    }
+    rs.close();
   }
-  rs.close();
   const out: EngineSource[] = [];
   for (const id of unique) {
     const source: BookSource | undefined = found.get(id);
     if (source !== undefined) {
       out.push(new EngineSource(id, source));
+    }
+  }
+  return out;
+}
+
+/**
+ * Load complete sources for shelf URLs only. Duplicate URLs are collapsed with the same
+ * preference as `preferredRowsByUrl()`: the earliest enabled row, otherwise the earliest row.
+ * Results keep the input URL order so callers can assemble shelf entries without a second sort.
+ */
+export async function sourcesForUrls(urls: string[]): Promise<Map<string, BookSource>> {
+  const unique: string[] = uniqueUrls(urls);
+  const out: Map<string, BookSource> = new Map<string, BookSource>();
+  const s: relationalStore.RdbStore | undefined = db();
+  if (s === undefined || unique.length === 0) {
+    return out;
+  }
+  const found: Map<string, BookSource> = new Map<string, BookSource>();
+  const selectedEnabled: Map<string, boolean> = new Map<string, boolean>();
+  for (let start: number = 0; start < unique.length; start += ID_CHUNK_SIZE) {
+    const chunk: string[] = unique.slice(start, start + ID_CHUNK_SIZE);
+    const args: relationalStore.ValueType[] = [];
+    const holes: string[] = [];
+    for (const url of chunk) {
+      holes.push('?');
+      args.push(url);
+    }
+    const rs: relationalStore.ResultSet = await s.querySql(
+      'SELECT url, ' + FULL_COLS + ' FROM sources WHERE url IN (' + holes.join(', ') + ') ' +
+        'ORDER BY sort_order, id',
+      args
+    );
+    const cUrl: number = rs.getColumnIndex('url');
+    const cJson: number = rs.getColumnIndex('json');
+    const cConf: number = rs.getColumnIndex('confidence');
+    const cEnabled: number = rs.getColumnIndex('enabled');
+    while (rs.goToNextRow()) {
+      const url: string = rs.getString(cUrl);
+      const enabled: boolean = rs.getLong(cEnabled) !== 0;
+      const currentEnabled: boolean | undefined = selectedEnabled.get(url);
+      if (currentEnabled === true || (currentEnabled === false && !enabled)) {
+        continue;
+      }
+      const source: BookSource | undefined = parseSource(rs, cJson, cConf, cEnabled);
+      if (source === undefined) {
+        continue;
+      }
+      selectedEnabled.set(url, enabled);
+      found.set(url, source);
+    }
+    rs.close();
+  }
+  for (const url of unique) {
+    const source: BookSource | undefined = found.get(url);
+    if (source !== undefined) {
+      out.set(url, source);
     }
   }
   return out;
@@ -439,6 +539,32 @@ export async function setEnabled(id: number, on: boolean): Promise<void> {
   await s.execute('UPDATE sources SET enabled = ? WHERE id = ?', [on ? 1 : 0, id]);
 }
 
+/** Bulk enable/disable in one transaction; the detect UI uses this for all unavailable rows. */
+export async function setEnabledMany(ids: number[], on: boolean): Promise<void> {
+  const s: relationalStore.RdbStore | undefined = db();
+  const unique: number[] = uniquePositiveIds(ids);
+  if (s === undefined || unique.length === 0) {
+    return;
+  }
+  const tx: relationalStore.Transaction = await s.createTransaction();
+  try {
+    for (let start: number = 0; start < unique.length; start += ID_CHUNK_SIZE) {
+      const chunk: number[] = unique.slice(start, start + ID_CHUNK_SIZE);
+      const holes: string[] = [];
+      const args: relationalStore.ValueType[] = [on ? 1 : 0];
+      for (const id of chunk) {
+        holes.push('?');
+        args.push(id);
+      }
+      await tx.execute('UPDATE sources SET enabled = ? WHERE id IN (' + holes.join(', ') + ')', args);
+    }
+    await tx.commit();
+  } catch (err) {
+    await tx.rollback();
+    throw err as Error;
+  }
+}
+
 /** 删除单条。**单行 DELETE**：同 URL 不同名的另一条不受影响（T-SRC-1 回归）。 */
 export async function remove(id: number): Promise<void> {
   const s: relationalStore.RdbStore | undefined = db();
@@ -448,8 +574,34 @@ export async function remove(id: number): Promise<void> {
   await s.execute('DELETE FROM sources WHERE id = ?', [id]);
 }
 
+/** Bulk delete in one transaction; natural-key uniqueness is irrelevant to id-based cleanup. */
+export async function removeMany(ids: number[]): Promise<void> {
+  const s: relationalStore.RdbStore | undefined = db();
+  const unique: number[] = uniquePositiveIds(ids);
+  if (s === undefined || unique.length === 0) {
+    return;
+  }
+  const tx: relationalStore.Transaction = await s.createTransaction();
+  try {
+    for (let start: number = 0; start < unique.length; start += ID_CHUNK_SIZE) {
+      const chunk: number[] = unique.slice(start, start + ID_CHUNK_SIZE);
+      const holes: string[] = [];
+      const args: relationalStore.ValueType[] = [];
+      for (const id of chunk) {
+        holes.push('?');
+        args.push(id);
+      }
+      await tx.execute('DELETE FROM sources WHERE id IN (' + holes.join(', ') + ')', args);
+    }
+    await tx.commit();
+  } catch (err) {
+    await tx.rollback();
+    throw err as Error;
+  }
+}
+
 /**
- * 回写一次检测结果（`detect-job` 每源一次，故必须是单行 UPDATE）。
+ * 回写单条检测结果。批处理路径使用 `patchDetects()`，一次事务提交整批。
  * `at` 由调用方给（同一批共用一个时间戳，便于「上次检测时间」口径一致）。
  */
 export async function patchDetect(id: number, state: string, elapsedMs: number, at: number): Promise<void> {
@@ -461,6 +613,27 @@ export async function patchDetect(id: number, state: string, elapsedMs: number, 
     'UPDATE sources SET last_detect_state = ?, respond_time = ?, last_detect_at = ? WHERE id = ?',
     [state, elapsedMs, at, id]
   );
+}
+
+/** Apply one detect batch with a single commit instead of one autocommit per source. */
+export async function patchDetects(updates: DetectPatch[]): Promise<void> {
+  const s: relationalStore.RdbStore | undefined = db();
+  if (s === undefined || updates.length === 0) {
+    return;
+  }
+  const tx: relationalStore.Transaction = await s.createTransaction();
+  try {
+    for (const update of updates) {
+      await tx.execute(
+        'UPDATE sources SET last_detect_state = ?, respond_time = ?, last_detect_at = ? WHERE id = ?',
+        [update.state, update.elapsedMs, update.at, update.id]
+      );
+    }
+    await tx.commit();
+  } catch (err) {
+    await tx.rollback();
+    throw err as Error;
+  }
 }
 
 /** 回写置信度。只写列，不动 `json`（权威列，见文件头要点 3）。 */

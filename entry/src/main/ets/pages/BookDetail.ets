@@ -2,6 +2,7 @@ import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSearchItem, BookSource } from '../engine/types';
 import { BookCover } from '../components/BookCover';
 import { computeBookId } from '../common/Format';
+import { ENGINE_INFO_TIMEOUT_MS } from '../common/Const';
 import { isInShelf, upsertBook } from '../model/ShelfRepository';
 import { AppBackButton } from '../ui/common/AppBackButton';
 
@@ -30,7 +31,7 @@ export struct BookDetailPage {
     }
     if (it !== undefined) {
       try {
-        const info: Book = await bookEngine.bookInfo(src, it.bookUrl);
+        const info: Book = await bookEngine.bookInfo(src, it.bookUrl, ENGINE_INFO_TIMEOUT_MS);
         info.bookId = computeBookId(src.bookSourceUrl, it.bookUrl);
         info.intro = info.intro.length > 0 ? info.intro : it.intro;
         info.coverUrl = info.coverUrl.length > 0 ? info.coverUrl : it.coverUrl;

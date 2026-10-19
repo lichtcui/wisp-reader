@@ -18,6 +18,9 @@ function kindLabel(kind: string): string {
   if (kind === 'js') {
     return 'JS';
   }
+  if (kind === 'unsupported') {
+    return '不支持';
+  }
   return kind.length > 0 ? kind : '未知';
 }
 

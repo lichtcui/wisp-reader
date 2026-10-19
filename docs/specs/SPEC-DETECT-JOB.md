@@ -25,10 +25,16 @@ Commands / Project Structure / Code Style / Testing Strategy / Boundaries 见 ma
 ArkTS: 取一批 32 源（source-store 投影 → 完整 JSON）
       → bookEngine.detect(batch, { mode })      // 引擎：一次调用一个集合，无状态
       → 结果 append 到 results.jsonl            // 追加写，不重写
-      → patchDetect(逐条单行 UPDATE)            // source-store 单行写
+      → patchDetects(batch)                     // source-store 一批一次事务提交
       → 更新 job.json + 刷一次 @Trace 进度
       → 下一批
 ```
+
+**检测结果回写（T5 收尾，2026-10-19）：** 一批 32 条结果先追加一行 JSONL，再调用
+`patchDetects()` 在**一个事务**里更新这 32 行的 `last_detect_state` / `respond_time` /
+`last_detect_at`。禁止恢复成每源一次 `patchDetect()`（32 次 autocommit + 32 次事务日志）。
+进程恢复时按 JSONL 中的**每个完整批次**各提交一次事务；取消状态在每个批次前后检查，已取消则
+不再继续回写后续批次。
 
 **2. 取消。** 取消 = 置状态为 `cancelled` 并停止派发下一批。**当前批在途的最多 32 源会在 ≤ 单批超时
 （L1 约 8 s 量级）内自然收尾**，不需要 Rust 侧取消原语。这是分批路线换来的最大简化——值得写下来，
@@ -62,7 +68,8 @@ idle ──start──> running ──批循环耗尽──> done
 **启动与恢复（T5 已接入）：** 书源页首次 `reload()` 后调用一次 `DetectJobRunner.restore(ctx)`。
 fingerprint 匹配的 `running` 作业自动对账并续跑；`done` / `cancelled` / `failed` 只恢复展示。
 跨进程恢复的 `cancelled` / `failed` 没有运行时 `sourceIds`，不得伪造「继续」；只有当前进程内仍持有
-冻结源集合的终态作业才允许显式续跑。
+冻结源集合的终态作业才允许显式续跑。恢复重放 JSONL 时同样走批量事务；batch 之间保留取消检查，
+避免用户取消后仍把整份历史结果写回数据库。
 
 **T4.1 冻结的状态语义（2026-10-18）：** `start` 在 running 时拒绝；`failed` / `cancelled` 仅在
 fingerprint 相同时从原 `cursor` 继续；`done` 或 fingerprint 变化时建立新一轮并从 0 开始。

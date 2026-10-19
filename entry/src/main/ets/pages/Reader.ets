@@ -26,6 +26,8 @@ import { ChapterDataSource } from '../common/ChapterDataSource';
 import { BookCover } from '../components/BookCover';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 import {
+  ENGINE_CONTENT_TIMEOUT_MS,
+  ENGINE_TOC_TIMEOUT_MS,
   KEY_READER_FONT_SIZE,
   KEY_READER_LINE_HEIGHT,
   KEY_READER_NIGHT,
@@ -253,7 +255,7 @@ export struct ReaderPage {
         return cached.chapters;
       }
     }
-    const chapters: Chapter[] = await bookEngine.toc(src, book.tocUrl);
+    const chapters: Chapter[] = await bookEngine.toc(src, book.tocUrl, ENGINE_TOC_TIMEOUT_MS);
     if (ctx !== undefined) {
       putCachedToc(ctx, book.bookId, book.tocUrl, chapters);
     }
@@ -279,7 +281,7 @@ export struct ReaderPage {
   private async refreshToc(src: BookSource, book: Book, session: number): Promise<void> {
     let chapters: Chapter[] = [];
     try {
-      chapters = await bookEngine.toc(src, book.tocUrl);
+      chapters = await bookEngine.toc(src, book.tocUrl, ENGINE_TOC_TIMEOUT_MS);
     } catch (err) {
       // 静默（只记一条日志）：缓存目录继续用，下次打开再试。
       hilog.warn(DOMAIN, TAG, 'toc refresh failed: %{public}s', (err as BusinessError).message);
@@ -434,7 +436,7 @@ export struct ReaderPage {
     chapter: Chapter,
     index: number
   ): Promise<string> {
-    const result = await bookEngine.content(src, chapter.url);
+    const result = await bookEngine.content(src, chapter.url, ENGINE_CONTENT_TIMEOUT_MS);
     if (ctx !== undefined) {
       putCachedChapter(ctx, book.bookId, index, chapter.url, result.content);
     }
@@ -1675,6 +1677,9 @@ export struct ReaderPage {
           runToken: this.sourcePanelToken,
           book: this.book,
           currentSourceUrl: this.source !== undefined ? this.source.bookSourceUrl : '',
+          currentSourceName: this.source !== undefined
+            ? (this.source.bookSourceName.length > 0 ? this.source.bookSourceName : this.source.bookSourceUrl)
+            : '',
           textColor: this.textColor(),
           dimColor: this.dimColor(),
           busy: this.switching,
