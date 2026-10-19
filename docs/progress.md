@@ -215,12 +215,14 @@ Checkpoint 2 除“与人对齐后再进 Phase 4”外已通过。Phase 3 的 `T
   证据与判据 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-CROSS-4（本轮见 §第三十四次同步）
 - **T0.1 探针已清理（2026-10-15）**：`model/BackgroundProbe.ets` 删除 + `Settings.ets` 顶部 TEMP 组移除
   （`Settings.ets` 已回到与 HEAD 一致；`make hap` ✓、真机 `make run` 后设置页无残留）
-- **下一步**：T5.1–T5.4 已完成，代码、debug 真机、release 与备份兼容回归均已通过。
+- **Checkpoint 5 已关闭（2026-10-19）**：T5.1–T5.4 已完成，代码、debug 真机、release 与备份兼容回归均已通过。
   生产页面已接入 `DetectJobRunner`（首次 reload 后 restore、跨段作业条、启动/取消/续跑）；三态布局、
   离页返回、直接取消、增量/全量 `8s vs 12s`、无结果/超时不清理及 3000 行 `LazyForEach` 均有证据。
   `make test` 65 passed、`make test-detect` 135 条断言通过、`make check` 与 `make run-release` 通过；
   map §9 十条判据已逐条写入 `BOOKSOURCE-REVAMP-TODO.md` 的 Checkpoint 5。
-  现在只差 Checkpoint 5 的人工验收，未获确认前不宣布整个书源改造完成。Checkpoint 3 与 T2.3 均已完成，不重跑。
+  用户已确认 25/25 项人工验收通过：严格判定 23 项通过，第 18、25 项作为已接受的残余风险条件通过；
+  第 10、16 项按现有真机证据通过。设备包内容已提交为 `119182f`，不能表述为纯 `aa8b9fd` 包。
+  Checkpoint 3 与 T2.3 均已完成，本轮未重跑 T1–T5、`make test` 或 `make run-release`。
   T1.6 残留风险是 16 ms 阈值对首次写调度较敏感（前一轮首样本 `20 ms`，稳态中位 `1–2 ms`）。
   P0 T-CROSS-4 已关闭；剩余小项是预生成 `failed=10` 的独立排查，不阻塞书源改造。
 - 已定：预检 `ok` 为「预检通过（未验证）」、完整 `ok` 为「可用」；恢复内置为**替换**。

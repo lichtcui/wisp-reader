@@ -704,7 +704,8 @@ JSONL 为 0 行且超过 20 秒无新批次；末批缺源故障进入 `failed` 
 **状态（2026-10-19）：** `T5.1`–`T5.4` 已完成。检测段与跨段作业条已接入 `DetectJobRunner` 的
 restore / monitor / launch / cancel / resume；debug 真机完成三态、取消/续跑、离页返回、增量/全量
 耗时对照与 3000 行结果面验证，备份兼容和 release 门禁通过。Checkpoint 5 的技术判据已收齐，
-仅剩与人对齐验收。
+并已通过与人对齐验收。用户确认 25/25 项人工验收通过：严格判定 23 项通过，第 18、25 项作为
+已接受的残余风险条件通过；第 10、16 项按现有真机证据通过。
 
 ### Task T5.1 `DetectPanel.ets` 检测段 — 已完成（2026-10-19）
 
@@ -726,9 +727,9 @@ restore / monitor / launch / cancel / resume；debug 真机完成三态、取消
 **Evidence（2026-10-19，debug 真机 `33Z0224424136564`）：**运行中、完成、取消三态分别见
 [running-full](/private/tmp/t5-final-running-full-20261019-1.json)、
 [done](/private/tmp/t5-final-done-20261019-1.json)、
-[cancelled](/private/tmp/t5-final-cancelled-20261019-1.json)；取消按钮反馈与落定见
-[cancel-same-process](/private/tmp/t5-final-cancel-same-process-20261019-1.json)、
-[cancel-settled](/private/tmp/t5-final-cancel-settled-20261019-1.json)，继续后见
+[cancelled](/private/tmp/t5-final-cancelled-20261019-1.json)；取消按钮即时反馈见
+[bar-stop](/tmp/cp5-stop2-2-bar2.txt)，作业条运行态与随后自然完成另见
+[job-return](/tmp/cp5-final2-job-return.json)、[job-after](/tmp/cp5-final2-job-after.json)，继续后见
 [resumed](/private/tmp/t5-final-resumed-20261019-1.json)。无结果筛选布局见
 [noresult](/private/tmp/t5-final-noresult-20261019-1.json)，结果面只有「关闭不可用 / 删除不可用」，
 没有针对无结果或超时的批量入口；批量动作均带条数与二次确认，执行集合只取 `unavailable`。
@@ -757,9 +758,12 @@ Checkpoint 3 的滚动回调帧距 p50 `8 ms` / p95 `9 ms` / max `24 ms`，未�
 **Evidence（2026-10-19，debug 真机 `33Z0224424136564`）：**生产页面在首次 `reload()` 后调用
 `runner.restore()`，并持续订阅 `runner.updatedAt` / `runner.status`。切到检测段后作业条仍在见
 [cross-segment](/private/tmp/t5-final-cross-segment-20261019-1.json)；返回书架/列表页再进入书源页，
-运行中进度与取消按钮仍在见 [return-running](/private/tmp/t5-final-return-running-20261019-1.json)。
-运行中可直接从作业条取消，`cancel-same-process` 显示「正在停止…」，`cancel-settled` 显示
-「已取消 · 已测 N / N」，无需先进入检测段。
+作业条显示 `0/13 · 完整检测`、进度和可点击的「取消」，见
+[return-running](/tmp/cp5-final2-return.json)；同轮作业状态此时为
+[running](/tmp/cp5-final2-job-return.json)（`done=0`、`cursor=0`），随后自然完成为
+[done](/tmp/cp5-final2-job-after.json)（`done=13`、`cursor=13`）。运行中可直接从作业条点「取消」，
+按钮即时进入「正在停止…」，见 [bar-stop](/tmp/cp5-stop2-2-bar2.txt)；本轮不把这次随后完成的运行
+表述为「已取消」终态。
 
 **Dependencies:** T5.1
 **Files likely touched:** `components/DetectPanel.ets`、`pages/BookSourceManage.ets`
@@ -804,7 +808,7 @@ Checkpoint 3 的滚动回调帧距 p50 `8 ms` / p95 `9 ms` / max `24 ms`，未�
 **Verification:**
 - [x] `make check` / `make test` / `make run-release` 全通过
 - [x] 逐条核对 map §9，把证据链接写进本文件 Checkpoint 5
-- [ ] **与人对齐验收后再宣布完成**
+- [x] **与人对齐验收后再宣布完成**（2026-10-19 用户确认）
 
 **Evidence（2026-10-19，release 真机 `33Z0224424136564`）：**判定口径只在「判定说明」展开后显示；
 `probe` 的 `ok` 为「预检通过（未验证）」，只有 `full` 的 `ok` 为「可用」。
@@ -826,7 +830,11 @@ Checkpoint 3 的滚动回调帧距 p50 `8 ms` / p95 `9 ms` / max `24 ms`，未�
 - [x] map §9 十条判据逐条有实测证据
 - [x] `make check` / `make test` / `make run-release` 全通过
 - [x] 备份兼容回归通过
-- [ ] **与人对齐验收**
+- [x] **与人对齐验收**
+
+**人工验收结论（2026-10-19）：** 25/25 项通过。严格判定 23 项通过；第 18、25 项作为已接受的
+残余风险条件通过；第 10、16 项按现有真机证据通过。设备包内容已提交为 `119182f`，验收结论不得
+表述为纯 `aa8b9fd` 包。
 
 **map §9 逐条证据（2026-10-19）：**
 
