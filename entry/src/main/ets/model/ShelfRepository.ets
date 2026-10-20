@@ -57,13 +57,25 @@ interface ProgressColumns {
 }
 
 let store: relationalStore.RdbStore | undefined = undefined;
+/** 并发初始化护栏：Ability 与页面同帧调用时共用一个 open，失败后允许重试。 */
+let opening: Promise<void> | undefined = undefined;
 /** Last progress write timestamp per book, to reject an older late write. */
 const lastWriteAt: Map<string, number> = new Map<string, number>();
 
-export async function initShelf(ctx: common.UIAbilityContext): Promise<void> {
+export function initShelf(ctx: common.UIAbilityContext): Promise<void> {
   if (store !== undefined) {
-    return;
+    return Promise.resolve();
   }
+  if (opening === undefined) {
+    opening = openShelf(ctx).catch((err: Error): Promise<void> => {
+      opening = undefined;
+      throw err;
+    });
+  }
+  return opening;
+}
+
+async function openShelf(ctx: common.UIAbilityContext): Promise<void> {
   const config: relationalStore.StoreConfig = {
     name: DB_NAME,
     securityLevel: relationalStore.SecurityLevel.S1
