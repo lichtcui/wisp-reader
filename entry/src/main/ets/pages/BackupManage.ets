@@ -4,25 +4,28 @@ import { fileIo, picker } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { util } from '@kit.ArkTS';
 import { Book, BookSource, ReadProgress } from '../engine/types';
-import { countRows, exportAll, initSourceStore, replaceAll } from '../model/SourceStore';
+import { countRows, exportAll, initSourceStore } from '../model/SourceStore';
 import { migrateFromPrefsOnce } from '../model/SourceStoreMigration';
-import { countShelfRows, getAllProgress, getBooks, initShelf, replaceShelf, ShelfCounts } from '../model/ShelfRepository';
+import { countShelfRows, getAllProgress, getBooks, initShelf, ShelfCounts } from '../model/ShelfRepository';
+import {
+  applyRestorePayload,
+  BACKUP_SCHEMA_VERSION,
+  BackupPayload,
+  BackupValidationError,
+  createRestoreJournal,
+  hasPendingRestore,
+  parseBackupPayload,
+  readUtf8Text,
+  recoverPendingRestore,
+  RestoreRecoveryResult
+} from '../model/BackupRecovery';
 import { GroupTitle } from '../components/ListCells';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'SourceReaderBackup';
-const BACKUP_SCHEMA_VERSION: number = 1;
 const FILE_CHUNK_BYTES: number = 1024 * 1024;
 const ENCODE_CHUNK_CHARS: number = Math.floor(FILE_CHUNK_BYTES / 4);
 const BACKUP_TEMP_SUFFIX: string = '.tmp';
-
-interface BackupPayload {
-  schemaVersion: number;
-  exportedAt: number;
-  sources: BookSource[];
-  books: Book[];
-  progress: ReadProgress[];
-}
 
 /** Reuse the encoder and byte buffer across every fragment of one export. */
 class BackupWriter {
@@ -76,9 +79,11 @@ export struct BackupManagePage {
   @Local sourceCount: number = 0;
   @Local bookCount: number = 0;
   @Local progressCount: number = 0;
+  @Local busy: boolean = false;
+  @Local importDialogOpen: boolean = false;
 
   aboutToAppear(): void {
-    this.reload();
+    this.startup();
   }
 
   private ctx(): common.UIAbilityContext | undefined {
@@ -94,12 +99,35 @@ export struct BackupManagePage {
     await migrateFromPrefsOnce(ctx);
   }
 
-  private async reload(): Promise<void> {
-    const ctx: common.UIAbilityContext | undefined = this.ctx();
-    if (ctx === undefined) {
+  private async recoverThenReload(ctx: common.UIAbilityContext): Promise<void> {
+    await recoverPendingRestore(ctx);
+    await this.reloadData(ctx);
+  }
+
+  private async startup(): Promise<void> {
+    if (this.busy) {
       return;
     }
+    this.busy = true;
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (ctx === undefined) {
+      this.busy = false;
+      return;
+    }
+    try {
+      await this.recoverThenReload(ctx);
+    } catch (err) {
+      const e: Error = err as Error;
+      hilog.error(DOMAIN, TAG, 'startup recovery failed msg=%{public}s', e.message);
+      this.toast('上次恢复未完成，旧数据恢复失败，请重启应用重试');
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private async reloadData(ctx: common.UIAbilityContext): Promise<void> {
     await this.prepareSourceStore(ctx);
+    await initShelf(ctx);
     this.sourceCount = (await countRows()).total;
     const counts: ShelfCounts = await countShelfRows();
     this.bookCount = counts.books;
@@ -113,33 +141,6 @@ export struct BackupManagePage {
   private dateStr(): string {
     const d: Date = new Date();
     return d.getFullYear().toString() + '-' + this.pad2(d.getMonth() + 1) + '-' + this.pad2(d.getDate());
-  }
-
-  private async readText(uri: string): Promise<string> {
-    const file: fileIo.File = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
-    try {
-      const stat: fileIo.Stat = await fileIo.stat(file.fd);
-      if (stat.size <= 0) {
-        return '';
-      }
-      const buffer: ArrayBuffer = new ArrayBuffer(FILE_CHUNK_BYTES);
-      const bytes: Uint8Array = new Uint8Array(buffer);
-      const decoder: util.TextDecoder = util.TextDecoder.create('utf-8');
-      const parts: string[] = [];
-      let total: number = 0;
-      while (total < stat.size) {
-        const length: number = Math.min(FILE_CHUNK_BYTES, stat.size - total);
-        const read: number = await fileIo.read(file.fd, buffer, { length: length });
-        if (read <= 0) {
-          throw new Error('unexpected EOF while reading backup');
-        }
-        parts.push(decoder.decodeToString(bytes.subarray(0, read), { stream: total + read < stat.size }));
-        total += read;
-      }
-      return parts.join('');
-    } finally {
-      await fileIo.close(file);
-    }
   }
 
   private async writeJsonArray<T>(
@@ -161,6 +162,7 @@ export struct BackupManagePage {
   /** Write each row while it is hot; the full backup never exists as one string. */
   private async writeBackup(writer: BackupWriter, ctx: common.UIAbilityContext): Promise<void> {
     await this.prepareSourceStore(ctx);
+    await initShelf(ctx);
     await writer.writeText(
       '{\n  "schemaVersion": ' + BACKUP_SCHEMA_VERSION.toString() +
         ',\n  "exportedAt": ' + Date.now().toString() + ',\n'
@@ -179,13 +181,18 @@ export struct BackupManagePage {
   }
 
   private async doExport(): Promise<void> {
+    if (this.busy) {
+      return;
+    }
     const ctx: common.UIAbilityContext | undefined = this.ctx();
     if (ctx === undefined) {
       return;
     }
+    this.busy = true;
     let tempPath: string = '';
     let tempCreated: boolean = false;
     try {
+      await recoverPendingRestore(ctx);
       const savePicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(ctx);
       const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
       options.newFileNames = ['sourcereader_backup_' + this.dateStr() + '.json'];
@@ -220,7 +227,11 @@ export struct BackupManagePage {
     } catch (err) {
       const e: BusinessError = err as BusinessError;
       hilog.error(DOMAIN, TAG, 'export failed code=%{public}d msg=%{public}s', e.code, e.message);
-      this.toast('导出失败');
+      if (hasPendingRestore(ctx)) {
+        this.toast('导出失败：上次恢复未完成，请重启应用重试');
+      } else {
+        this.toast('导出失败');
+      }
     } finally {
       if (tempCreated) {
         try {
@@ -231,14 +242,36 @@ export struct BackupManagePage {
             e.code, e.message);
         }
       }
+      this.busy = false;
     }
   }
 
+  private validationToast(err: Error): boolean {
+    const e: BackupValidationError = err as BackupValidationError;
+    if (e.name !== 'BackupValidationError') {
+      return false;
+    }
+    if (e.kind === 'version') {
+      this.toast('备份文件版本不受支持');
+    } else if (e.kind === 'incomplete') {
+      this.toast('备份内容不完整');
+    } else {
+      this.toast('导入失败：文件无效或格式错误');
+    }
+    return true;
+  }
+
   private async doImport(): Promise<void> {
+    if (this.busy) {
+      return;
+    }
     const ctx: common.UIAbilityContext | undefined = this.ctx();
     if (ctx === undefined) {
       return;
     }
+    this.busy = true;
+    let stage: string = 'picker';
+    let journalCreated: boolean = false;
     try {
       const viewPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(ctx);
       const options: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
@@ -248,49 +281,88 @@ export struct BackupManagePage {
       if (uris.length === 0) {
         return;
       }
-      const text: string = await this.readText(uris[0]);
-      const payload: BackupPayload = JSON.parse(text) as BackupPayload;
-      if (payload === null || payload.schemaVersion !== BACKUP_SCHEMA_VERSION) {
-        this.toast('备份文件版本不受支持');
-        return;
-      }
-      const sources: BookSource[] = payload.sources;
-      const books: Book[] = payload.books;
-      const progress: ReadProgress[] = payload.progress;
-      if (!Array.isArray(sources) || !Array.isArray(books) || !Array.isArray(progress)) {
-        this.toast('备份内容不完整');
-        return;
-      }
+      stage = 'read';
+      const text: string = await readUtf8Text(uris[0]);
+      stage = 'validate';
+      // Complete validation happens before any RDB is opened or changed.
+      const payload: BackupPayload = parseBackupPayload(text);
+      stage = 'recover-existing';
+      await recoverPendingRestore(ctx);
+      stage = 'prepare';
       await this.prepareSourceStore(ctx);
       await initShelf(ctx);
-      // 备份恢复是全量覆盖，不能走 upsert，否则会保留备份中不存在的书源。
-      await replaceAll(sources);
-      await replaceShelf(books, progress);
-      await this.reload();
-      this.toast('已恢复：书源 ' + this.sourceCount + ' / 书架 ' + this.bookCount + ' / 进度 ' + this.progressCount);
+      stage = 'journal';
+      await createRestoreJournal(ctx);
+      journalCreated = true;
+      stage = 'apply';
+      const restored: RestoreRecoveryResult = await applyRestorePayload(ctx, payload);
+      try {
+        await this.reloadData(ctx);
+      } catch (err) {
+        const e: Error = err as Error;
+        hilog.warn(DOMAIN, TAG, 'post-import reload failed msg=%{public}s', e.message);
+        this.sourceCount = restored.sources;
+        this.bookCount = restored.books;
+        this.progressCount = restored.progress;
+      }
+      this.toast('已恢复：书源 ' + restored.sources + ' / 书架 ' + restored.books +
+        ' / 进度 ' + restored.progress);
     } catch (err) {
-      const e: BusinessError = err as BusinessError;
-      hilog.error(DOMAIN, TAG, 'import failed code=%{public}d msg=%{public}s', e.code, e.message);
+      const e: Error = err as Error;
+      hilog.error(DOMAIN, TAG, 'import %{public}s failed msg=%{public}s', stage, e.message);
+      if (this.validationToast(e)) {
+        return;
+      }
+      if (journalCreated || hasPendingRestore(ctx)) {
+        try {
+          const recovered: RestoreRecoveryResult = await recoverPendingRestore(ctx);
+          if (recovered.status !== 'restored') {
+            throw new Error('restore journal is missing after import failure');
+          }
+          this.toast('导入失败，当前数据已恢复');
+        } catch (recoveryErr) {
+          const re: Error = recoveryErr as Error;
+          hilog.error(DOMAIN, TAG, 'import rollback failed msg=%{public}s', re.message);
+          this.toast('导入失败：旧数据恢复失败，请重启应用重试');
+        }
+        return;
+      }
+      if (hasPendingRestore(ctx)) {
+        this.toast('导入失败：上次恢复未完成，请重启应用重试');
+        return;
+      }
       this.toast('导入失败：文件无效或格式错误');
+    } finally {
+      this.busy = false;
     }
   }
 
   private confirmImport(): void {
+    if (this.busy || this.importDialogOpen) {
+      return;
+    }
+    this.importDialogOpen = true;
     this.getUIContext().showAlertDialog({
       title: '确认恢复备份',
       message: '将用备份文件全量覆盖当前书源、书架与阅读进度：现有数据会被清除，' +
         '备份中不存在的书源、书籍与进度不会被保留。是否继续？',
       autoCancel: true,
+      onWillDismiss: (action: DismissDialogAction) => {
+        this.importDialogOpen = false;
+        action.dismiss();
+      },
       primaryButton: {
         value: '取消',
         fontColor: $r('app.color.text_2'),
         action: () => {
+          this.importDialogOpen = false;
         }
       },
       secondaryButton: {
         value: '恢复',
         fontColor: $r('app.color.brand'),
         action: () => {
+          this.importDialogOpen = false;
           this.doImport();
         }
       }
@@ -353,6 +425,7 @@ export struct BackupManagePage {
               .fontColor($r('app.color.brand'))
               .backgroundColor($r('app.color.bg_pill'))
               .borderRadius(24)
+              .enabled(!this.busy)
               .onClick(() => {
                 this.doExport();
               })
@@ -363,6 +436,7 @@ export struct BackupManagePage {
               .fontColor($r('app.color.on_brand'))
               .backgroundColor($r('app.color.brand'))
               .borderRadius(24)
+              .enabled(!this.busy)
               .onClick(() => {
                 this.confirmImport();
               })
