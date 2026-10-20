@@ -1,5 +1,7 @@
 import { common } from '@kit.AbilityKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo, picker } from '@kit.CoreFileKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { util } from '@kit.ArkTS';
 import { Book, BookSource, ReadProgress } from '../engine/types';
 import { countRows, exportAll, initSourceStore, replaceAll } from '../model/SourceStore';
@@ -7,9 +9,12 @@ import { migrateFromPrefsOnce } from '../model/SourceStoreMigration';
 import { countShelfRows, getAllProgress, getBooks, initShelf, replaceShelf, ShelfCounts } from '../model/ShelfRepository';
 import { GroupTitle } from '../components/ListCells';
 
+const DOMAIN: number = 0x0000;
+const TAG: string = 'SourceReaderBackup';
 const BACKUP_SCHEMA_VERSION: number = 1;
 const FILE_CHUNK_BYTES: number = 1024 * 1024;
 const ENCODE_CHUNK_CHARS: number = Math.floor(FILE_CHUNK_BYTES / 4);
+const BACKUP_TEMP_SUFFIX: string = '.tmp';
 
 interface BackupPayload {
   schemaVersion: number;
@@ -17,6 +22,53 @@ interface BackupPayload {
   sources: BookSource[];
   books: Book[];
   progress: ReadProgress[];
+}
+
+/** Reuse the encoder and byte buffer across every fragment of one export. */
+class BackupWriter {
+  private readonly fd: number;
+  private readonly encoder: util.TextEncoder = util.TextEncoder.create('utf-8');
+  private readonly buffer: ArrayBuffer = new ArrayBuffer(FILE_CHUNK_BYTES);
+  private readonly bytes: Uint8Array = new Uint8Array(this.buffer);
+
+  constructor(fd: number) {
+    this.fd = fd;
+  }
+
+  private async writeAll(length: number): Promise<void> {
+    let written: number = 0;
+    while (written < length) {
+      const source: ArrayBuffer = written === 0 ? this.buffer : this.buffer.slice(written, length);
+      const n: number = await fileIo.write(this.fd, source, { length: length - written });
+      if (n <= 0) {
+        throw new Error('failed to write backup');
+      }
+      written += n;
+    }
+  }
+
+  async writeText(text: string): Promise<void> {
+    if (text.length === 0) {
+      return;
+    }
+    let next: number = 0;
+    while (next < text.length) {
+      let end: number = Math.min(text.length, next + ENCODE_CHUNK_CHARS);
+      if (end < text.length && end > next) {
+        const last: number = text.charCodeAt(end - 1);
+        if (last >= 0xD800 && last <= 0xDBFF) {
+          end -= 1; // Keep surrogate pairs in the same UTF-8 chunk.
+        }
+      }
+      const encoded: util.EncodeIntoUint8ArrayInfo =
+        this.encoder.encodeIntoUint8Array(text.substring(next, end), this.bytes);
+      if (encoded.read <= 0 || encoded.written <= 0) {
+        throw new Error('failed to encode backup');
+      }
+      await this.writeAll(encoded.written);
+      next += encoded.read;
+    }
+  }
 }
 
 @ComponentV2
@@ -63,25 +115,6 @@ export struct BackupManagePage {
     return d.getFullYear().toString() + '-' + this.pad2(d.getMonth() + 1) + '-' + this.pad2(d.getDate());
   }
 
-  private async collect(ctx: common.UIAbilityContext): Promise<BackupPayload> {
-    await this.prepareSourceStore(ctx);
-    const sources: BookSource[] = await exportAll();
-    const books: Book[] = await getBooks();
-    const progressMap: Map<string, ReadProgress> = await getAllProgress();
-    const progress: ReadProgress[] = [];
-    progressMap.forEach((p: ReadProgress) => {
-      progress.push(p);
-    });
-    const payload: BackupPayload = {
-      schemaVersion: BACKUP_SCHEMA_VERSION,
-      exportedAt: Date.now(),
-      sources: sources,
-      books: books,
-      progress: progress
-    };
-    return payload;
-  }
-
   private async readText(uri: string): Promise<string> {
     const file: fileIo.File = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
     try {
@@ -109,42 +142,40 @@ export struct BackupManagePage {
     }
   }
 
-  private async writeAll(fd: number, buffer: ArrayBuffer, length: number): Promise<void> {
-    let written: number = 0;
-    while (written < length) {
-      const source: ArrayBuffer = written === 0 ? buffer : buffer.slice(written, length);
-      const n: number = await fileIo.write(fd, source, { length: length - written });
-      if (n <= 0) {
-        throw new Error('failed to write backup');
-      }
-      written += n;
-    }
-  }
-
-  private async writeText(fd: number, text: string): Promise<void> {
-    if (text.length === 0) {
+  private async writeJsonArray<T>(
+    writer: BackupWriter, name: string, values: T[], hasNext: boolean
+  ): Promise<void> {
+    if (values.length === 0) {
+      await writer.writeText('  "' + name + '": []' + (hasNext ? ',\n' : '\n'));
       return;
     }
-    const encoder: util.TextEncoder = util.TextEncoder.create('utf-8');
-    const buffer: ArrayBuffer = new ArrayBuffer(FILE_CHUNK_BYTES);
-    const bytes: Uint8Array = new Uint8Array(buffer);
-    let next: number = 0;
-    while (next < text.length) {
-      let end: number = Math.min(text.length, next + ENCODE_CHUNK_CHARS);
-      if (end < text.length && end > next) {
-        const last: number = text.charCodeAt(end - 1);
-        if (last >= 0xD800 && last <= 0xDBFF) {
-          end -= 1; // Keep surrogate pairs in the same UTF-8 chunk.
-        }
-      }
-      const encoded: util.EncodeIntoUint8ArrayInfo =
-        encoder.encodeIntoUint8Array(text.substring(next, end), bytes);
-      if (encoded.read <= 0 || encoded.written <= 0) {
-        throw new Error('failed to encode backup');
-      }
-      await this.writeAll(fd, buffer, encoded.written);
-      next += encoded.read;
+    await writer.writeText('  "' + name + '": [\n');
+    for (let i: number = 0; i < values.length; i++) {
+      const json: string = JSON.stringify(values[i], null, 2);
+      const indented: string = '    ' + json.replace(/\n/g, '\n    ');
+      await writer.writeText(indented + (i + 1 < values.length ? ',\n' : '\n'));
     }
+    await writer.writeText('  ]' + (hasNext ? ',\n' : '\n'));
+  }
+
+  /** Write each row while it is hot; the full backup never exists as one string. */
+  private async writeBackup(writer: BackupWriter, ctx: common.UIAbilityContext): Promise<void> {
+    await this.prepareSourceStore(ctx);
+    await writer.writeText(
+      '{\n  "schemaVersion": ' + BACKUP_SCHEMA_VERSION.toString() +
+        ',\n  "exportedAt": ' + Date.now().toString() + ',\n'
+    );
+    const sources: BookSource[] = await exportAll();
+    await this.writeJsonArray(writer, 'sources', sources, true);
+    const books: Book[] = await getBooks();
+    await this.writeJsonArray(writer, 'books', books, true);
+    const progressMap: Map<string, ReadProgress> = await getAllProgress();
+    const progress: ReadProgress[] = [];
+    progressMap.forEach((p: ReadProgress) => {
+      progress.push(p);
+    });
+    await this.writeJsonArray(writer, 'progress', progress, false);
+    await writer.writeText('}\n');
   }
 
   private async doExport(): Promise<void> {
@@ -152,9 +183,9 @@ export struct BackupManagePage {
     if (ctx === undefined) {
       return;
     }
+    let tempPath: string = '';
+    let tempCreated: boolean = false;
     try {
-      const payload: BackupPayload = await this.collect(ctx);
-      const json: string = JSON.stringify(payload, null, 2);
       const savePicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(ctx);
       const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
       options.newFileNames = ['sourcereader_backup_' + this.dateStr() + '.json'];
@@ -163,18 +194,43 @@ export struct BackupManagePage {
       if (uris.length === 0) {
         return;
       }
-      const file: fileIo.File = await fileIo.open(
+      tempPath = ctx.cacheDir + '/sourcereader_backup_' + Date.now().toString() + '_' +
+        Math.floor(Math.random() * 1000000).toString() + BACKUP_TEMP_SUFFIX;
+      const tempFile: fileIo.File = await fileIo.open(
+        tempPath,
+        fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC
+      );
+      tempCreated = true;
+      try {
+        await this.writeBackup(new BackupWriter(tempFile.fd), ctx);
+      } finally {
+        await fileIo.close(tempFile);
+      }
+
+      const target: fileIo.File = await fileIo.open(
         uris[0],
         fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC
       );
       try {
-        await this.writeText(file.fd, json);
+        await fileIo.copyFile(tempPath, target.fd);
       } finally {
-        await fileIo.close(file);
+        await fileIo.close(target);
       }
       this.toast('备份已导出');
     } catch (err) {
+      const e: BusinessError = err as BusinessError;
+      hilog.error(DOMAIN, TAG, 'export failed code=%{public}d msg=%{public}s', e.code, e.message);
       this.toast('导出失败');
+    } finally {
+      if (tempCreated) {
+        try {
+          await fileIo.unlink(tempPath);
+        } catch (err) {
+          const e: BusinessError = err as BusinessError;
+          hilog.warn(DOMAIN, TAG, 'temp backup cleanup failed code=%{public}d msg=%{public}s',
+            e.code, e.message);
+        }
+      }
     }
   }
 
@@ -213,6 +269,8 @@ export struct BackupManagePage {
       await this.reload();
       this.toast('已恢复：书源 ' + this.sourceCount + ' / 书架 ' + this.bookCount + ' / 进度 ' + this.progressCount);
     } catch (err) {
+      const e: BusinessError = err as BusinessError;
+      hilog.error(DOMAIN, TAG, 'import failed code=%{public}d msg=%{public}s', e.code, e.message);
       this.toast('导入失败：文件无效或格式错误');
     }
   }

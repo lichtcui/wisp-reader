@@ -123,6 +123,16 @@ if rg -q '\b(openSync|statSync|readSync|writeSync|closeSync)\s*\(' "$backup"; th
   echo "ERROR: BackupManage file I/O must stay asynchronous and chunked" >&2
   fail=1
 fi
+if ! rg -q 'class BackupWriter' "$backup" ||
+   ! rg -q 'new BackupWriter\(tempFile\.fd\)' "$backup"; then
+  echo "ERROR: BackupManage must reuse one encoder and byte buffer per export" >&2
+  fail=1
+fi
+if ! rg -q 'fileIo\.copyFile\(tempPath, target\.fd\)' "$backup" ||
+   ! rg -q 'BACKUP_TEMP_SUFFIX' "$backup"; then
+  echo "ERROR: BackupManage must finish in a temp file before replacing the target" >&2
+  fail=1
+fi
 
 disable_body="$(sed -n '/private async disableUnavailable/,/^  }/p' "$page")"
 delete_unavailable_body="$(sed -n '/private async deleteUnavailable/,/^  }/p' "$page")"
