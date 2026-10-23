@@ -565,13 +565,15 @@ struct Index {
             ShelfPage({
               refreshToken: this.shelfRefresh,
               viewMode: this.shelfViewMode,
+              shelfUpdating: this.shelfUpdating,
               edit: this.edit,
               onGoSearch: () => {
                 this.activeTab = TAB_SEARCH;
                 this.tabsController.changeIndex(TAB_SEARCH);
               },
               onOpenBook: (source: BookSource, book: Book) => this.openReader(source, book),
-              onOpenListening: () => this.openListening()
+              onOpenListening: () => this.openListening(),
+              onRefreshShelf: () => this.doShelfUpdate()
             })
           }
           .tabBar('')

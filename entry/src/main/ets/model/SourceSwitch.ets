@@ -9,6 +9,8 @@ import { deleteBookToc, putCachedToc } from './TocCache';
 import { takePrefetchedInfo, takePrefetchedToc } from './SourcePrefetch';
 import { isLocalBook } from './LocalBook';
 import { TtsController } from './TtsController';
+import { BookDownloader } from './BookDownloader';
+import { deleteBookDownload } from './DownloadStore';
 import { ENGINE_INFO_TIMEOUT_MS, ENGINE_TOC_TIMEOUT_MS } from '../common/Const';
 
 /**
@@ -220,6 +222,7 @@ export async function switchSource(
   if (tts.isActiveFor(oldBook.bookId)) {
     tts.stop();
   }
+  BookDownloader.instance().cancelForBook(oldBook.bookId);
 
   await removeBooks([oldBook.bookId]);
   await upsertBook(newBook);
@@ -239,6 +242,7 @@ export async function switchSource(
     try {
       deleteBookChapters(ctx, oldBook.bookId);
       deleteBookToc(ctx, oldBook.bookId);
+      deleteBookDownload(ctx, oldBook.bookId);
     } catch (err) {
       // 残留文件由「清理缓存」兜底，不能因为清不掉就回滚已经生效的换源。
     }

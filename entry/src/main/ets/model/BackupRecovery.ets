@@ -14,6 +14,8 @@ import { util } from '@kit.ArkTS';
 import { Book, BookSource, ReadProgress } from '../engine/types';
 import { countRows, exportAll, initSourceStore, replaceAll } from './SourceStore';
 import { countShelfRows, getAllProgress, getBooks, initShelf, replaceShelf, ShelfCounts } from './ShelfRepository';
+import { sweepOrphanDownloads } from './DownloadStore';
+import { BookDownloader } from './BookDownloader';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'SourceReaderBackup';
@@ -415,9 +417,13 @@ export async function clearRestoreJournal(ctx: common.UIAbilityContext): Promise
 export async function applyRestorePayload(
   ctx: common.UIAbilityContext, payload: BackupPayload
 ): Promise<RestoreRecoveryResult> {
+  // Restore replaces shelf ownership; an in-process job must not recreate an orphan download.
+  BookDownloader.instance().cancel();
   await initSourceStore(ctx);
   await initShelf(ctx);
   await replaceAll(payload.sources, payload.sources.length);
+  // TEMP ACCEPTANCE PROBE: fail after source store replacement.
+  throw new Error('injected restore failure after source replace');
   await replaceShelf(payload.books, payload.progress);
 
   const sourceCount: number = (await countRows()).total;
@@ -432,6 +438,8 @@ export async function applyRestorePayload(
     );
   }
   await clearRestoreJournal(ctx);
+  // Orphan state follows the committed restored shelf, so sweep only after commit.
+  sweepOrphanDownloads(ctx, payload.books.map((book: Book): string => book.bookId));
   hilog.info(DOMAIN, TAG, 'restore committed sources=%{public}d books=%{public}d progress=%{public}d',
     sourceCount, shelf.books, shelf.progress);
   return { status: 'restored', sources: sourceCount, books: shelf.books, progress: shelf.progress };

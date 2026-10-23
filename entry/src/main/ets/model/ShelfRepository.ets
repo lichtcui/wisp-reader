@@ -363,6 +363,19 @@ export async function isInShelf(name: string, author: string): Promise<boolean> 
   return hit;
 }
 
+/** Exact shelf membership for actions keyed by the stable book identity. */
+export async function isBookInShelf(bookId: string): Promise<boolean> {
+  const s: relationalStore.RdbStore | undefined = db();
+  if (s === undefined || bookId.length === 0) {
+    return false;
+  }
+  const rs: relationalStore.ResultSet =
+    await s.querySql('SELECT book_id FROM books WHERE book_id = ? LIMIT 1', [bookId]);
+  const hit: boolean = rs.goToNextRow();
+  rs.close();
+  return hit;
+}
+
 /**
  * Write one book's reading position.
  *

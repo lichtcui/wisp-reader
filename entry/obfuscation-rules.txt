@@ -96,6 +96,10 @@ stage
 contentLen
 # ChapterCache (filesDir JSON)
 fetchedAt
+# Download manifest (filesDir/downloads/<bookId>/manifest.json)
+tocFingerprint
+chapterCount
+completedAt
 values
 diagnostics
 rule

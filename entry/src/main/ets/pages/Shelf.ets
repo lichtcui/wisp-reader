@@ -21,21 +21,39 @@ export interface ShelfBookItem {
 export struct ShelfPage {
   @Param refreshToken: number = 0;
   @Param viewMode: number = 0;
+  @Param shelfUpdating: boolean = false;
   /** Owned by Index; shared so the top bar, the action bar and the rows stay in sync. */
   @Param edit: ShelfEditState = new ShelfEditState();
   @Local entries: ShelfBookItem[] = [];
+  @Local pullRefreshing: boolean = false;
   @Local tts: TtsController = TtsController.instance();
   @Event onGoSearch: () => void = () => {};
   @Event onOpenBook: (source: BookSource, book: Book) => void = () => {};
   @Event onOpenListening: () => void = () => {};
+  @Event onRefreshShelf: () => Promise<void> = async () => {};
 
   aboutToAppear(): void {
     this.reload();
   }
 
   @Monitor('refreshToken')
-  onRefresh(): void {
+  onRefreshToken(): void {
     this.reload();
+  }
+
+  private async onPullRefresh(): Promise<void> {
+    if (this.edit.editing || this.shelfUpdating || this.pullRefreshing) {
+      this.pullRefreshing = false;
+      return;
+    }
+    this.pullRefreshing = true;
+    try {
+      await this.onRefreshShelf();
+    } catch (err) {
+      // The Index update flow owns user-facing failure feedback.
+    } finally {
+      this.pullRefreshing = false;
+    }
   }
 
   /** Monotonic guard: a slow earlier reload must not overwrite a newer shelf. */
@@ -87,10 +105,20 @@ export struct ShelfPage {
           .layoutWeight(1)
           .width('100%')
           .justifyContent(FlexAlign.Center)
-        } else if (this.viewMode === 1) {
-          this.listView()
         } else {
-          this.gridView()
+          Refresh({ refreshing: this.pullRefreshing }) {
+            if (this.viewMode === 1) {
+              this.listView()
+            } else {
+              this.gridView()
+            }
+          }
+          .pullToRefresh(!this.edit.editing && !this.shelfUpdating)
+          .onRefreshing(() => {
+            this.onPullRefresh();
+          })
+          .layoutWeight(1)
+          .width('100%')
         }
       }
       .width('100%')
@@ -158,6 +186,7 @@ export struct ShelfPage {
     .rowsGap(16)
     .layoutWeight(1)
     .width('100%')
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .padding({ left: 16, right: 16 })
     .scrollBar(BarState.Off)
   }
@@ -214,6 +243,7 @@ export struct ShelfPage {
     }
     .layoutWeight(1)
     .width('100%')
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .scrollBar(BarState.Off)
   }
 

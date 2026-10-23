@@ -96,6 +96,7 @@ entry/
     engine/        IBookEngine（端口）+ BookEngineNapi + types
     model/         SourceRepository / ShelfRepository / CacheRepository / SourceConfidence /
                    BookContent / ChapterCache / TocCache / LocalBook / BookRemoval /
+                   BookDownloader / DownloadStore /
                    ShelfEditState / ProgressOwner / TtsController / RemoteTtsClient /
                    TtsPregen（预生成契约+路由+时间轴+HTTP）/ TtsPregenRunner（作业跟踪）/ PregAudioSource
     common/        Const（含 ROUTE_*）/ Format / Prefs / Theme / ReaderTheme / Window /
@@ -117,9 +118,10 @@ rust/legado-core/    薄 NAPI 层（cdylib），依赖 legado-engine
 |---|---|
 | 底部抽屉（样式/高度/打开方式） | **先读 [`specs/UI-SPEC.md`](./specs/UI-SPEC.md)**；`ui/common/BottomDrawer.ets`（唯一实现）+ 8 处调用点 |
 | 阅读页翻页 / 分页测算 / 排版 / 字号行距 | `pages/Reader.ets`（顶部有文件索引）、`common/ReaderTheme.ets`、`common/ChapterDataSource.ets` |
+| 整书下载 / 离线正文 / 下载任务 | `pages/Reader.ets`（右上角菜单与状态）、`model/BookDownloader.ets`（进程内串行作业、后台长时任务、取消；不持久化任务，中断后下一次手动下载从头开始）、`model/DownloadStore.ets`（`filesDir/downloads/<bookId>/` 的章节与完成清单；仅有效清单允许目录更新时复用章节）、`model/BookContent.ets`（阅读与听书共用的离线优先级）；删书、换源、备份恢复分别在 `model/BookRemoval.ets`、`model/SourceSwitch.ets`、`model/BackupRecovery.ets` 清理 |
 | 听书 / 播放 / 锁屏卡片 / 后台 / 音色 / 预生成缓存 | `model/TtsController.ets`（顶部有文件索引）、`model/TtsPregen.ets` + `model/TtsPregenRunner.ets` + `model/PregAudioSource.ets`（预生成：契约/纯函数/作业跟踪/缓存音频读盘，主机仿真 `make test-pregen`）、`pages/Listening.ets`、`pages/ListeningSettings.ets`、`model/RemoteTtsClient.ets`、`model/BookContent.ets`、`entryability/EntryAbility.ets`（退出释放）、`src/main/module.json5`（`backgroundModes`） |
 | 搜索结果页 / 来源抽屉 / 书源置信度 | `pages/SearchResult.ets`（顶部有文件索引）、`model/SourceConfidence.ets`、`common/SourceListDataSource.ets` |
-| 书架 / 编辑模式（多选删除）/ 进度 | `pages/Shelf.ets`、`model/ShelfRepository.ets`、`model/ShelfEditState.ets`、`model/BookRemoval.ets`、`components/BookCover.ets` |
+| 书架 / 编辑模式（多选删除）/ 下拉刷新 / 进度 | `pages/Shelf.ets`（下拉刷新与顶栏「更新」共用检查流程）、`pages/Index.ets`、`model/ShelfRepository.ets`、`model/ShelfEditState.ets`、`model/BookRemoval.ets`、`components/BookCover.ets` |
 | 换源（候选检索 / 进度迁移 / `bookId` 替换） | `model/SourceSwitch.ets`（匹配 + 迁移 + 写库）、`components/SourceSwitchPanel.ets`（候选抽屉）、`pages/Reader.ets`（入口 + `applySwitch` / `resetContentState`）；决策 [`decisions.md`](./decisions.md) D16 |
 | 进度写归属（阅读 ↔ 听书互不覆盖） | `model/ProgressOwner.ets`（纯状态仲裁：`claim/release/canWrite/forget`）、`model/ShelfRepository.ets`（`saveProgress(p, writer)` 唯一写口）、`model/TtsController.ets`（`setPlaying` 起播 claim / 停播 release） |
 | 路由 / 页面注册 / 顶栏底栏 | `pages/Index.ets`、`common/Const.ets`（`ROUTE_*`） |
@@ -128,8 +130,8 @@ rust/legado-core/    薄 NAPI 层（cdylib），依赖 legado-engine
 | 搜索 URL / header / `@js:` 的 L1 字符串模式 | `rust/legado-engine/src/search_url.rs` |
 | 网络 / Cookie / 限速 / 编码探测 | `rust/legado-engine/src/http_client.rs` |
 | **NAPI 接口（增删函数/改返回 JSON）** | `rust/legado-core/src/lib.rs`（签名 + `///` doc comment → 生成 `index.d.ts`）；ArkTS 侧 `engine/IBookEngine.ets`、`engine/BookEngineNapi.ets`、`engine/types.ets` |
-| 缓存（章节/目录/清理） | `model/ChapterCache.ets`（章节正文 + **预生成键 sidecar** `filesDir/pregkeys/<bookId>_<index>.json`，带 `url` 校验；本地书正文不进缓存，键只能走旁路；正文条目在时**只信条目**）、`model/TocCache.ets`、`model/CacheRepository.ets`、`pages/CacheManage.ets` |
-| 备份恢复 / 本地书 | `pages/BackupManage.ets`、`model/LocalBook.ets` |
+| 缓存（章节/目录/清理） | `model/ChapterCache.ets`（章节正文 + **预生成键 sidecar** `filesDir/pregkeys/<bookId>_<index>.json`，带 `url` 校验；本地书正文不进缓存，键只能走旁路；正文条目在时**只信条目**）、`model/TocCache.ets`、`model/CacheRepository.ets`、`pages/CacheManage.ets`；永久下载在 `filesDir/downloads/`，不属于可清理缓存 |
+| 备份恢复 / 本地书 | `pages/BackupManage.ets`、`model/BackupRecovery.ets`、`model/LocalBook.ets`；恢复开始先取消活动下载，书架全量恢复数量校验通过后由 `DownloadStore.sweepOrphanDownloads` 清理不在备份中的下载目录 |
 | 规则调试器（已实现） | `pages/RuleDebugger.ets` |
 | 颜色 / Design Token | `src/main/resources/{base,dark}/element/color.json`；规范见 [`plan.md`](./plan.md) §2 |
 | 权限 / SDK 版本 / bundle / 混淆 / 签名注入 | `src/main/module.json5`、`AppScope/app.json5`、`build-profile.json5`、`hvigorfile.ts`、`entry/obfuscation-rules.txt`；签名材料在仓库外 `~/.ohos/source-reader/signing.json` |

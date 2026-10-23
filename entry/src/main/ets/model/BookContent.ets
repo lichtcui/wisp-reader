@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSource, Chapter } from '../engine/types';
 import { getCachedChapter, putCachedChapter } from './ChapterCache';
+import { getDownloadedChapter } from './DownloadStore';
 import { isLocalBook, loadLocalContent } from './LocalBook';
 import { ENGINE_CONTENT_TIMEOUT_MS } from '../common/Const';
 
@@ -43,8 +44,9 @@ export function sanitizeText(raw: string, title: string): string[] {
 
 /**
  * Load one chapter's sanitized paragraphs: local TXT books read from the
- * sandbox, engine books go through the file cache (validated by chapter URL)
- * and the Rust `content` NAPI on a miss.
+ * sandbox, engine books prefer their permanent download, then the disposable
+ * file cache (both validated by chapter URL), and finally the Rust `content`
+ * NAPI on a miss.
  */
 export async function loadChapterParagraphs(
   ctx: common.UIAbilityContext | undefined,
@@ -60,6 +62,10 @@ export async function loadChapterParagraphs(
     return ctx !== undefined ? sanitizeText(loadLocalContent(ctx, book, index), chapter.title) : [];
   }
   if (ctx !== undefined) {
+    const downloaded: string | undefined = getDownloadedChapter(ctx, book.bookId, index, chapter.url);
+    if (downloaded !== undefined) {
+      return sanitizeText(downloaded, chapter.title);
+    }
     const cached: string | undefined = getCachedChapter(ctx, book.bookId, index, chapter.url);
     if (cached !== undefined) {
       return sanitizeText(cached, chapter.title);

@@ -4,6 +4,8 @@ import { deleteBookChapters } from './ChapterCache';
 import { deleteBookToc } from './TocCache';
 import { deleteLocalBookData } from './LocalBook';
 import { TtsController } from './TtsController';
+import { BookDownloader } from './BookDownloader';
+import { deleteBookDownload } from './DownloadStore';
 
 /**
  * Permanently delete shelf books and everything they own.
@@ -25,16 +27,19 @@ export async function deleteBooks(ctx: common.UIAbilityContext, bookIds: string[
     return 0;
   }
   const tts: TtsController = TtsController.instance();
+  const downloader: BookDownloader = BookDownloader.instance();
   for (const bookId of bookIds) {
     if (tts.isActiveFor(bookId)) {
       tts.stop();
     }
+    downloader.cancelForBook(bookId);
   }
   await removeBooks(bookIds);
   for (const bookId of bookIds) {
     deleteBookChapters(ctx, bookId);
     deleteBookToc(ctx, bookId);
     deleteLocalBookData(ctx, bookId);
+    deleteBookDownload(ctx, bookId);
   }
   return bookIds.length;
 }

@@ -12,6 +12,7 @@
 //   主题：systemDark / resolveColorHex / applyFullScreen / toggleNight / bgColor / textColor / dimColor
 //         changeFont / changeLineHeight
 //   跳转：onContentTap / onTopBack / openPanel / openDetail / openListening / moreMenuItems / isSpeaking
+//   下载：onDownloadChanged / refreshDownloadState / downloadMenuElement / startDownload / cancelDownload
 //   换源：openSourceSwitch / confirmSwitch / applySwitch / resetContentState / switchMessage（逻辑在 model/SourceSwitch.ets）
 //   @Builder 子视图：topBar / bottomBar / contentPager（Swiper 分页）/ tocDrawerContent / settingsDrawerContent /
 //                    iconButton / funcButton / moreButton / buildTocItems / readableCount / toggleTocOrder
@@ -44,7 +45,7 @@ import {
   setStatusBarContentColor,
   setWindowBackgroundColor
 } from '../common/Window';
-import { getProgress, saveProgress } from '../model/ShelfRepository';
+import { getProgress, isBookInShelf, saveProgress } from '../model/ShelfRepository';
 import { ProgressWriter } from '../model/ProgressOwner';
 import { protectBook } from '../model/CacheTrim';
 import { ReaderTheme } from '../common/ReaderTheme';
@@ -52,6 +53,8 @@ import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
 import { CachedToc, getCachedToc, isTocStale, putCachedToc } from '../model/TocCache';
 import { isLocalBook, loadLocalChapters, loadLocalContent } from '../model/LocalBook';
 import { sanitizeText } from '../model/BookContent';
+import { BookDownloadState, getDownloadedChapter, inspectDownload } from '../model/DownloadStore';
+import { BookDownloader } from '../model/BookDownloader';
 import { TtsController } from '../model/TtsController';
 import { FloatingListenButton } from '../ui/common/FloatingListenButton';
 import { AppBackButton } from '../ui/common/AppBackButton';
@@ -126,6 +129,13 @@ export struct ReaderPage {
   @Local pageIndex: number = 0;
   @Local sliderValue: number = 1;
   @Local tts: TtsController = TtsController.instance();
+  @Local downloader: BookDownloader = BookDownloader.instance();
+  @Local downloadInShelf: boolean = false;
+  @Local downloadStateReady: boolean = false;
+  @Local downloadHasDirectory: boolean = false;
+  @Local downloadComplete: boolean = false;
+  @Local downloadNeedsUpdate: boolean = false;
+  @Local downloadReadableCount: number = 0;
 
   private swiperController: SwiperController = new SwiperController();
   private tocScroller: Scroller = new Scroller();
@@ -148,6 +158,8 @@ export struct ReaderPage {
    * 下一次切章再暖同一批邻居），去重后共享同一个 promise（T-READ-3）。
    */
   private inflight: Map<string, Promise<string>> = new Map();
+  private downloadStateGen: number = 0;
+  private downloadWasRunning: boolean = false;
   /** 当前可视页的身份（首段 chapterIndex@para@start）。重排窗口后用它对回同一页，
       长段落跨页拆分时 start 能区分“同一段落的最后一页”与“倒数第二页”。 */
   private currentPageId: string = '';
@@ -172,6 +184,18 @@ export struct ReaderPage {
     }
   }
 
+  @Monitor('downloader.running', 'downloader.revision')
+  onDownloadChanged(): void {
+    if (!this.downloader.running && this.downloadWasRunning) {
+      const message: string = this.downloader.message;
+      if (message.length > 0) {
+        this.toast(message);
+      }
+    }
+    this.downloadWasRunning = this.downloader.running;
+    this.refreshDownloadState();
+  }
+
   aboutToAppear(): void {
     const ctx: common.UIAbilityContext | undefined =
       this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
@@ -183,6 +207,7 @@ export struct ReaderPage {
     }
     this.source = this.initialSource;
     this.book = this.initialBook;
+    this.downloadWasRunning = this.downloader.running;
     this.applyFullScreen();
     this.load();
   }
@@ -307,6 +332,7 @@ export struct ReaderPage {
     }
     this.chapters = chapters;
     this.buildTocItems();
+    this.refreshDownloadState();
     this.persistProgress();
   }
 
@@ -332,6 +358,7 @@ export struct ReaderPage {
       }
       this.chapters = chapters;
       this.buildTocItems();
+      await this.refreshDownloadState();
       const first: number = this.firstReadable();
       if (first < 0) {
         this.failed = '目录为空';
@@ -408,6 +435,11 @@ export struct ReaderPage {
     }
     const ctx: common.UIAbilityContext | undefined = this.ctx();
     if (ctx !== undefined) {
+      const downloaded: string | undefined =
+        getDownloadedChapter(ctx, book.bookId, index, chapter.url);
+      if (downloaded !== undefined) {
+        return downloaded;
+      }
       const cached: string | undefined = getCachedChapter(ctx, book.bookId, index, chapter.url);
       if (cached !== undefined) {
         return cached;
@@ -465,7 +497,10 @@ export struct ReaderPage {
         return undefined;
       }
     } else {
-      cached = getCachedChapter(ctx, book.bookId, index, chapter.url);
+      cached = getDownloadedChapter(ctx, book.bookId, index, chapter.url);
+      if (cached === undefined) {
+        cached = getCachedChapter(ctx, book.bookId, index, chapter.url);
+      }
     }
     return cached !== undefined && cached.length > 0 ? cached : undefined;
   }
@@ -930,6 +965,100 @@ export struct ReaderPage {
     this.getUIContext().getPromptAction().showToast({ message: message });
   }
 
+  private async refreshDownloadState(): Promise<void> {
+    const gen: number = ++this.downloadStateGen;
+    const book: Book | undefined = this.book;
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (book === undefined || ctx === undefined) {
+      this.downloadStateReady = false;
+      return;
+    }
+    let inShelf: boolean = false;
+    try {
+      inShelf = await isBookInShelf(book.bookId);
+    } catch (err) {
+      inShelf = false;
+    }
+    if (gen !== this.downloadStateGen || this.book === undefined ||
+      this.book.bookId !== book.bookId) {
+      return;
+    }
+    const state: BookDownloadState = inspectDownload(ctx, book, this.chapters);
+    this.downloadInShelf = inShelf;
+    this.downloadHasDirectory = state.hasDirectory;
+    this.downloadComplete = state.complete;
+    this.downloadNeedsUpdate = state.needsUpdate;
+    this.downloadReadableCount = state.readableCount;
+    this.downloadStateReady = true;
+  }
+
+  private downloadMenuElement(): MenuElement {
+    const book: Book | undefined = this.book;
+    if (book !== undefined && isLocalBook(book)) {
+      return { value: '不支持下载', enabled: false, action: () => {} };
+    }
+    if (book === undefined || !this.downloadStateReady) {
+      return { value: '下载书籍', enabled: false, action: () => {} };
+    }
+    if (!this.downloadInShelf) {
+      return { value: '请先加入书架', enabled: false, action: () => {} };
+    }
+    if (this.downloader.isActiveFor(book.bookId)) {
+      if (this.downloader.message === '正在取消') {
+        return { value: '正在取消', enabled: false, action: () => {} };
+      }
+      return { value: '取消下载', enabled: true, action: () => this.cancelDownload() };
+    }
+    if (this.downloader.running) {
+      return { value: '其他书籍下载中', enabled: false, action: () => {} };
+    }
+    if (this.downloadComplete) {
+      return { value: '已下载', enabled: false, action: () => {} };
+    }
+    if (this.downloadNeedsUpdate) {
+      return { value: '下载新章节', enabled: true, action: () => this.startDownload() };
+    }
+    if (this.downloadHasDirectory) {
+      return { value: '重新下载', enabled: true, action: () => this.startDownload() };
+    }
+    return {
+      value: '下载书籍',
+      enabled: this.chapters.length > 0 && this.downloadReadableCount > 0,
+      action: () => this.startDownload()
+    };
+  }
+
+  private startDownload(): void {
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    const src: BookSource | undefined = this.source;
+    const book: Book | undefined = this.book;
+    if (ctx === undefined || src === undefined || book === undefined || this.chapters.length === 0) {
+      this.toast('无法开始下载');
+      return;
+    }
+    if (!this.downloadInShelf) {
+      this.toast('请先将书籍加入书架');
+      this.refreshDownloadState();
+      return;
+    }
+    if (this.downloader.start(ctx, src, book, this.chapters)) {
+      this.downloadWasRunning = true;
+      this.toast('开始下载');
+      this.refreshDownloadState();
+      return;
+    }
+    this.toast(this.downloader.running ? '已有下载任务进行中' : '无法开始下载');
+  }
+
+  private cancelDownload(): void {
+    const book: Book | undefined = this.book;
+    if (book === undefined || !this.downloader.cancelForBook(book.bookId)) {
+      return;
+    }
+    this.toast('正在取消下载');
+    this.refreshDownloadState();
+  }
+
   // ── 换源（v1.1）───────────────────────────────────────────────
 
   private openSourceSwitch(): void {
@@ -1080,7 +1209,8 @@ export struct ReaderPage {
       {
         value: '书籍详情',
         action: () => this.openDetail()
-      }
+      },
+      this.downloadMenuElement()
     ];
   }
 
