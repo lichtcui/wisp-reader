@@ -26,6 +26,13 @@ interface LocalToc {
   chapters: LocalChapterMeta[];
 }
 
+interface ParsedLocalTxt {
+  name: string;
+  author: string;
+  text: string;
+  chapters: LocalChapterMeta[];
+}
+
 const tocCache: Map<string, LocalToc> = new Map();
 const textCache: Map<string, string> = new Map();
 
@@ -72,6 +79,69 @@ function cacheSmall<T>(cache: Map<string, T>, key: string, value: T, max: number
 
 /** Pick a `.txt` file, parse it and add it to the shelf. */
 export async function importLocalTxt(ctx: common.UIAbilityContext): Promise<Book | undefined> {
+  const parsed: ParsedLocalTxt | undefined = await pickLocalTxt(ctx);
+  if (parsed === undefined) {
+    return undefined;
+  }
+  const bookId: string = computeBookId(LOCAL_SOURCE_URL, parsed.name + '|' + parsed.text.length.toString());
+  persistLocalTxt(ctx, bookId, parsed);
+
+  const last: LocalChapterMeta = parsed.chapters[parsed.chapters.length - 1];
+  const book: Book = {
+    bookId: bookId,
+    sourceUrl: LOCAL_SOURCE_URL,
+    name: parsed.name,
+    author: parsed.author,
+    coverUrl: '',
+    intro: makeIntro(parsed.text, parsed.chapters),
+    kind: '本地 TXT',
+    wordCount: parsed.text.length.toString(),
+    status: '完结',
+    lastChapterTitle: last !== undefined ? last.title : '',
+    tocUrl: LOCAL_SOURCE_URL + bookId,
+    inShelf: true,
+    addedAt: Date.now()
+  };
+  await upsertBook(book);
+  return book;
+}
+
+/**
+ * Reattach a TXT to an existing local shelf row. The old bookId/sourceUrl/tocUrl
+ * stay unchanged so reading progress still belongs to the same book.
+ */
+export async function relinkLocalTxt(
+  ctx: common.UIAbilityContext,
+  book: Book
+): Promise<Book | undefined> {
+  const parsed: ParsedLocalTxt | undefined = await pickLocalTxt(ctx);
+  if (parsed === undefined) {
+    return undefined;
+  }
+  validateRelink(book, parsed);
+  persistLocalTxt(ctx, book.bookId, parsed);
+
+  const last: LocalChapterMeta = parsed.chapters[parsed.chapters.length - 1];
+  const relinked: Book = {
+    bookId: book.bookId,
+    sourceUrl: book.sourceUrl,
+    name: book.name,
+    author: book.author,
+    coverUrl: book.coverUrl,
+    intro: makeIntro(parsed.text, parsed.chapters),
+    kind: book.kind,
+    wordCount: parsed.text.length.toString(),
+    status: book.status,
+    lastChapterTitle: last !== undefined ? last.title : '',
+    tocUrl: book.tocUrl,
+    inShelf: book.inShelf,
+    addedAt: book.addedAt
+  };
+  await upsertBook(relinked);
+  return relinked;
+}
+
+async function pickLocalTxt(ctx: common.UIAbilityContext): Promise<ParsedLocalTxt | undefined> {
   const documentPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(ctx);
   const options: picker.DocumentSelectOptions = {
     maxSelectNumber: 1,
@@ -90,35 +160,36 @@ export async function importLocalTxt(ctx: common.UIAbilityContext): Promise<Book
   const name: string = stripExt(fileNameFromUri(uri));
   const author: string = extractAuthor(text);
   const chapters: LocalChapterMeta[] = splitChapters(text);
-  const bookId: string = computeBookId(LOCAL_SOURCE_URL, name + '|' + text.length.toString());
+  return { name: name, author: author, text: text, chapters: chapters };
+}
 
+function persistLocalTxt(ctx: common.UIAbilityContext, bookId: string, parsed: ParsedLocalTxt): void {
   const dir: string = bookDir(ctx, bookId);
   if (!fileIo.accessSync(dir)) {
     fileIo.mkdirSync(dir, true);
   }
-  writeText(textPath(ctx, bookId), text);
-  const toc: LocalToc = { name: name, author: author, chapters: chapters };
+  writeText(textPath(ctx, bookId), parsed.text);
+  const toc: LocalToc = { name: parsed.name, author: parsed.author, chapters: parsed.chapters };
   writeText(tocPath(ctx, bookId), JSON.stringify(toc));
   tocCache.set(bookId, toc);
+  textCache.delete(bookId);
+}
 
-  const last: LocalChapterMeta = chapters[chapters.length - 1];
-  const book: Book = {
-    bookId: bookId,
-    sourceUrl: LOCAL_SOURCE_URL,
-    name: name,
-    author: author,
-    coverUrl: '',
-    intro: makeIntro(text, chapters),
-    kind: '本地 TXT',
-    wordCount: text.length.toString(),
-    status: '完结',
-    lastChapterTitle: last !== undefined ? last.title : '',
-    tocUrl: LOCAL_SOURCE_URL + bookId,
-    inShelf: true,
-    addedAt: Date.now()
-  };
-  await upsertBook(book);
-  return book;
+/** A relink must not silently attach an unrelated file to the current progress. */
+function validateRelink(book: Book, parsed: ParsedLocalTxt): void {
+  const expected: string = normalizeTitle(book.name);
+  const actual: string = normalizeTitle(parsed.name);
+  if (expected.length === 0 || actual.length === 0) {
+    return;
+  }
+  if (expected === actual || expected.indexOf(actual) >= 0 || actual.indexOf(expected) >= 0) {
+    return;
+  }
+  throw new Error('mismatch');
+}
+
+function normalizeTitle(value: string): string {
+  return value.replace(/\s+/g, '').trim();
 }
 
 /**
@@ -143,6 +214,32 @@ export function deleteLocalBookData(ctx: common.UIAbilityContext, bookId: string
 }
 
 // ── Loading ─────────────────────────────────────────────────────
+
+/** Check the imported text directly; caches must not hide missing sandbox data. */
+export function hasLocalBookText(ctx: common.UIAbilityContext, book: Book): boolean {
+  try {
+    return fileIo.accessSync(textPath(ctx, book.bookId));
+  } catch (err) {
+    return false;
+  }
+}
+
+export function hasLocalBookToc(ctx: common.UIAbilityContext, book: Book): boolean {
+  try {
+    return fileIo.accessSync(tocPath(ctx, book.bookId));
+  } catch (err) {
+    return false;
+  }
+}
+
+/** Rebuild only the chapter index; keeps the existing text and shelf row untouched. */
+export function rebuildLocalToc(ctx: common.UIAbilityContext, book: Book): void {
+  const text: string = normalize(fileIo.readTextSync(textPath(ctx, book.bookId)));
+  const chapters: LocalChapterMeta[] = splitChapters(text);
+  const toc: LocalToc = { name: book.name, author: book.author, chapters: chapters };
+  writeText(tocPath(ctx, book.bookId), JSON.stringify(toc));
+  tocCache.set(book.bookId, toc);
+}
 
 export function loadLocalChapters(ctx: common.UIAbilityContext, book: Book): Chapter[] {
   const toc: LocalToc = readToc(ctx, book.bookId);

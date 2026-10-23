@@ -221,6 +221,28 @@ export function getDownloadedChapter(
   }
 }
 
+/** Async variant for exporting a whole book without blocking on every chapter read. */
+export async function readDownloadedChapterText(
+  ctx: common.UIAbilityContext,
+  bookId: string,
+  index: number,
+  url: string
+): Promise<string | undefined> {
+  const path: string = chapterPath(ctx, bookId, index);
+  try {
+    if (!fileIo.accessSync(path)) {
+      return undefined;
+    }
+    const entry: StoredChapter = JSON.parse(await fileIo.readText(path)) as StoredChapter;
+    if (entry.url !== url || typeof entry.content !== 'string') {
+      return undefined;
+    }
+    return entry.content;
+  } catch (err) {
+    return undefined;
+  }
+}
+
 /** Persist one chapter. Unlike the disposable chapter cache, write failures throw. */
 export function writeDownloadedChapter(
   ctx: common.UIAbilityContext,

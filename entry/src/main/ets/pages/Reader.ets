@@ -13,6 +13,7 @@
 //         changeFont / changeLineHeight
 //   跳转：onContentTap / onTopBack / openPanel / openDetail / openListening / moreMenuItems / isSpeaking
 //   下载：onDownloadChanged / refreshDownloadState / downloadMenuElement / startDownload / cancelDownload
+//         exportMenuElement / exportDownloadedAsTxt
 //   换源：openSourceSwitch / confirmSwitch / applySwitch / resetContentState / switchMessage（逻辑在 model/SourceSwitch.ets）
 //   @Builder 子视图：topBar / bottomBar / contentPager（Swiper 分页）/ tocDrawerContent / settingsDrawerContent /
 //                    iconButton / funcButton / moreButton / buildTocItems / readableCount / toggleTocOrder
@@ -51,10 +52,19 @@ import { protectBook } from '../model/CacheTrim';
 import { ReaderTheme } from '../common/ReaderTheme';
 import { getCachedChapter, putCachedChapter } from '../model/ChapterCache';
 import { CachedToc, getCachedToc, isTocStale, putCachedToc } from '../model/TocCache';
-import { isLocalBook, loadLocalChapters, loadLocalContent } from '../model/LocalBook';
+import {
+  hasLocalBookText,
+  hasLocalBookToc,
+  isLocalBook,
+  loadLocalChapters,
+  loadLocalContent,
+  rebuildLocalToc,
+  relinkLocalTxt
+} from '../model/LocalBook';
 import { sanitizeText } from '../model/BookContent';
 import { BookDownloadState, getDownloadedChapter, inspectDownload } from '../model/DownloadStore';
 import { BookDownloader } from '../model/BookDownloader';
+import { exportDownloadedTxt } from '../model/BookTxtExport';
 import { TtsController } from '../model/TtsController';
 import { FloatingListenButton } from '../ui/common/FloatingListenButton';
 import { AppBackButton } from '../ui/common/AppBackButton';
@@ -136,6 +146,11 @@ export struct ReaderPage {
   @Local downloadComplete: boolean = false;
   @Local downloadNeedsUpdate: boolean = false;
   @Local downloadReadableCount: number = 0;
+  @Local exportingTxt: boolean = false;
+  /** The local TXT itself is gone; only then is relinking required. */
+  @Local localTextMissing: boolean = false;
+  @Local relinkingLocal: boolean = false;
+  @Local loadingMessage: string = '';
 
   private swiperController: SwiperController = new SwiperController();
   private tocScroller: Scroller = new Scroller();
@@ -349,13 +364,25 @@ export struct ReaderPage {
     // 缓存整理时保护这本书的章节文件（会话级，30 分钟未更新自动失效）。
     protectBook(book.bookId);
     try {
+      this.failed = '';
+      this.localTextMissing = false;
+      this.loadingMessage = '';
       let chapters: Chapter[];
       if (isLocalBook(book)) {
         const c: common.UIAbilityContext | undefined = this.ctx();
-        chapters = c !== undefined ? loadLocalChapters(c, book) : [];
+        if (c !== undefined && !hasLocalBookText(c, book)) {
+          this.localTextMissing = true;
+          this.failed = '本地书籍正文缺失，请重新关联 TXT';
+          this.loading = false;
+          hilog.warn(DOMAIN, TAG, 'local book text missing book=%{public}s id=%{public}s',
+            book.name, book.bookId);
+          return;
+        }
+        chapters = c !== undefined ? await this.loadLocalToc(c, book) : [];
       } else {
         chapters = await this.loadToc(src, book);
       }
+      this.loadingMessage = '';
       this.chapters = chapters;
       this.buildTocItems();
       await this.refreshDownloadState();
@@ -368,14 +395,131 @@ export struct ReaderPage {
       const progress: ReadProgress | undefined = await getProgress(book.bookId);
       let start: number = first;
       let paragraph: number = 0;
-      if (progress !== undefined && this.isReadable(progress.chapterIndex)) {
-        start = progress.chapterIndex;
-        paragraph = progress.paragraphIndex;
+      if (progress !== undefined) {
+        const byTitle: number = this.findReadableChapterByTitle(progress.chapterTitle, progress.chapterIndex);
+        if (byTitle >= 0) {
+          // Local TXT TOCs can gain a 前言 entry, shifting every saved index by one.
+          start = byTitle;
+          paragraph = progress.paragraphIndex;
+        } else if (this.isReadable(progress.chapterIndex)) {
+          start = progress.chapterIndex;
+          paragraph = progress.paragraphIndex;
+        }
       }
       await this.loadChapter(start, paragraph);
     } catch (err) {
-      this.failed = '目录加载失败';
+      const local: boolean = isLocalBook(book);
+      const c: common.UIAbilityContext | undefined = this.ctx();
+      const textExists: boolean = local && c !== undefined && hasLocalBookText(c, book);
+      hilog.error(DOMAIN, TAG, 'reader load failed book=%{public}s local=%{public}s msg=%{public}s',
+        book.name, local ? 'true' : 'false', (err as BusinessError).message);
+      this.localTextMissing = local && !textExists;
+      this.failed = local
+        ? (textExists ? '本地书籍目录重新生成失败，点击重试' : '本地书籍正文缺失，请重新关联 TXT')
+        : '目录加载失败';
+      this.loadingMessage = '';
       this.loading = false;
+    }
+  }
+
+  /**
+   * Local TXT files are the source of truth. A missing or unreadable `toc.json`
+   * is rebuilt from `book.txt`; only a missing TXT requires user relinking.
+   */
+  private async loadLocalToc(ctx: common.UIAbilityContext, book: Book): Promise<Chapter[]> {
+    if (!hasLocalBookToc(ctx, book)) {
+      await this.rebuildLocalTocFromText(ctx, book);
+      return loadLocalChapters(ctx, book);
+    }
+    try {
+      return loadLocalChapters(ctx, book);
+    } catch (err) {
+      if (!hasLocalBookText(ctx, book)) {
+        throw new Error((err as Error).message);
+      }
+      hilog.warn(DOMAIN, TAG, 'local toc unreadable, rebuilding book=%{public}s msg=%{public}s',
+        book.name, (err as BusinessError).message);
+      await this.rebuildLocalTocFromText(ctx, book);
+      return loadLocalChapters(ctx, book);
+    }
+  }
+
+  private async rebuildLocalTocFromText(ctx: common.UIAbilityContext, book: Book): Promise<void> {
+    this.loadingMessage = '正在重新生成目录…';
+    this.loading = true;
+    // Let ArkUI paint the explicit loading state before the synchronous TOC scan.
+    await new Promise<void>((resolve: (value: void) => void): void => {
+      setTimeout((): void => {
+        resolve();
+      }, 16);
+    });
+    rebuildLocalToc(ctx, book);
+  }
+
+  private findReadableChapterByTitle(title: string, near: number): number {
+    const wanted: string = title.replace(/\s+/g, '').trim();
+    if (wanted.length === 0) {
+      return -1;
+    }
+    let found: number = -1;
+    for (let i = 0; i < this.chapters.length; i++) {
+      if (!this.isReadable(i)) {
+        continue;
+      }
+      const current: string = this.chapters[i].title.replace(/\s+/g, '').trim();
+      if (current !== wanted) {
+        continue;
+      }
+      if (found < 0 || Math.abs(i - near) < Math.abs(found - near)) {
+        found = i;
+      }
+    }
+    return found;
+  }
+
+  private async retryLoad(): Promise<void> {
+    if (this.localTextMissing) {
+      await this.relinkLocal();
+      return;
+    }
+    if (this.chapters.length === 0) {
+      this.failed = '';
+      this.loading = true;
+      this.load();
+      return;
+    }
+    this.loadChapter(this.chapterIndex, this.paragraphIndex);
+  }
+
+  private async relinkLocal(): Promise<void> {
+    const book: Book | undefined = this.book;
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (book === undefined || ctx === undefined || this.relinkingLocal) {
+      return;
+    }
+    this.relinkingLocal = true;
+    try {
+      const relinked: Book | undefined = await relinkLocalTxt(ctx, book);
+      if (relinked === undefined) {
+        return;
+      }
+      this.book = relinked;
+      this.failed = '';
+      this.loading = true;
+      await this.load();
+      if (this.failed.length === 0) {
+        this.toast('已重新关联《' + relinked.name + '》');
+      }
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, 'local relink failed book=%{public}s msg=%{public}s',
+        book.name, (err as Error).message);
+      this.localTextMissing = true;
+      this.loading = false;
+      this.failed = (err as Error).message === 'mismatch'
+        ? '所选 TXT 与当前书籍不匹配'
+        : '重新关联失败，请选择这本书的 TXT';
+    } finally {
+      this.relinkingLocal = false;
     }
   }
 
@@ -1059,6 +1203,34 @@ export struct ReaderPage {
     this.refreshDownloadState();
   }
 
+  private exportMenuElement(): MenuElement {
+    if (this.exportingTxt) {
+      return { value: '正在导出 TXT', enabled: false, action: () => {} };
+    }
+    return { value: '导出 TXT', enabled: this.downloadComplete, action: () => this.exportDownloadedAsTxt() };
+  }
+
+  private async exportDownloadedAsTxt(): Promise<void> {
+    const book: Book | undefined = this.book;
+    const ctx: common.UIAbilityContext | undefined = this.ctx();
+    if (book === undefined || ctx === undefined || this.exportingTxt) {
+      return;
+    }
+    this.exportingTxt = true;
+    try {
+      const saved: boolean = await exportDownloadedTxt(ctx, book, this.chapters);
+      if (saved) {
+        this.toast('TXT 已导出');
+      }
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, 'txt export failed book=%{public}s msg=%{public}s',
+        book.name, (err as Error).message);
+      this.toast('导出 TXT 失败');
+    } finally {
+      this.exportingTxt = false;
+    }
+  }
+
   // ── 换源（v1.1）───────────────────────────────────────────────
 
   private openSourceSwitch(): void {
@@ -1205,13 +1377,17 @@ export struct ReaderPage {
   }
 
   private moreMenuItems(): MenuElement[] {
-    return [
+    const items: MenuElement[] = [
       {
         value: '书籍详情',
         action: () => this.openDetail()
       },
       this.downloadMenuElement()
     ];
+    if (this.downloadComplete || this.exportingTxt) {
+      items.push(this.exportMenuElement());
+    }
+    return items;
   }
 
   // ── TOC ordering / positioning ────────────────────────────────
@@ -1688,6 +1864,12 @@ export struct ReaderPage {
             .width(40)
             .height(40)
             .color($r('app.color.brand'))
+          if (this.loadingMessage.length > 0) {
+            Text(this.loadingMessage)
+              .fontSize(14)
+              .fontColor(this.textColor())
+              .margin({ top: 12 })
+          }
         }
         .width('100%')
         .height('100%')
@@ -1697,11 +1879,16 @@ export struct ReaderPage {
           Text(this.failed)
             .fontSize(15)
             .fontColor(this.textColor())
-          Button('重试')
+          Button(this.localTextMissing
+            ? (this.relinkingLocal ? '正在关联…' : '重新关联 TXT')
+            : '重试')
             .margin({ top: 12 })
             .backgroundColor($r('app.color.brand'))
             .fontColor($r('app.color.on_brand'))
-            .onClick(() => this.loadChapter(this.chapterIndex, this.paragraphIndex))
+            .enabled(!this.relinkingLocal)
+            .onClick(() => {
+              this.retryLoad();
+            })
         }
         .width('100%')
         .height('100%')
