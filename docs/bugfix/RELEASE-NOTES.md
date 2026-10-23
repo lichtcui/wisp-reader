@@ -887,8 +887,8 @@ JSON 的 `stringify` / `parse` 与备份事务语义未变。
 
 ### 21.2 修复
 
-- `ShelfUpdateOutcome` 新增 `local`；进度回调扩为 `(done,total,failed,local)`，`shelfProgressText()` 按架上总书数显示，
-  本地书立即计为已完成并标注跳过，例如 `检查中 1/2 · 本地书 1 本跳过`。
+- `ShelfUpdateOutcome` 新增 `local`；进度回调扩为 `(done,total,failed,local)`，`shelfProgressText()` 只显示网络书进度，
+  本地书仅在末尾显示数量，例如 `网络 1/2 · 本地 2`；失败时追 ` · N 本未检查`。
 - 新增 `shelfUpdateResultText()` 统一结束 toast：混合书架网络书全失败时显示「网络书检查失败，请检查网络或书源」；
   无新章时明确本地书跳过；部分网络书失败与本地书跳过同时存在时分别说明。
 - 只有详情页与搜索结果都没有章节名时才回退 `bookEngine.toc()`，URL 顺序为 `info.tocUrl` → 书架 `book.tocUrl` →

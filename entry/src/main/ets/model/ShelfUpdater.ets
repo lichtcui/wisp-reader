@@ -89,8 +89,8 @@ export function hasNewChapter(baseline: string, latest: string): boolean {
  *
  * 与结束 toast 的「N 本未检查」同口径，但**只算已结束的失败书**（`failed`）：
  * `skipped`（整体预算耗尽后没开始的书）要等所有 lane 收尾才知道，进行中报不出来。
- * 本地书不参与网络检查，因此混合书架只显示网络书进度，本地书单独标注跳过。不能把本地书
- * 同时计入进度分子和跳过数，否则「检查中 2/3 · 本地书 2 本跳过」会被误读成还有两本在检查。
+ * 本地书不参与网络检查，因此混合书架只显示网络书进度，本地书仅在末尾显示数量。不能把本地书
+ * 同时计入进度分子和数量，否则「检查中 2/3 · 本地 2」会被误读成还有两本在检查。
  * 放在本文件而非 `pages/Index.ets`：主机仿真（`scripts/shelf-updater-sim.py`）
  * 按整文件切片本模块 ⇒ 三种形态在主机侧有断言，纯 UI 里写就只能靠真机截图 OCR。
  */
@@ -99,16 +99,16 @@ export function shelfProgressText(done: number, total: number, failed: number, l
     return '检查中…';
   }
   if (total <= 0) {
-    return '本地书 ' + local.toString() + ' 本跳过';
+    return '本地 ' + local.toString();
   }
   let text: string = local > 0
-    ? '检查网络书 ' + done.toString() + '/' + total.toString()
+    ? '网络 ' + done.toString() + '/' + total.toString()
     : '检查中 ' + done.toString() + '/' + total.toString();
   if (failed > 0) {
     text += ' · ' + failed.toString() + ' 本未检查';
   }
   if (local > 0) {
-    text += ' · 本地书 ' + local.toString() + ' 本跳过';
+    text += ' · 本地 ' + local.toString();
   }
   return text;
 }

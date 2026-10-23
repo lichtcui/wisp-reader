@@ -176,10 +176,10 @@ async function main(): Promise<void> {
   check('进度文案 起始（0 本结束时不写 0 本未检查）', shelfProgressText(0, 2, 0, 0), '检查中 0/2');
   check('进度文案 无书', shelfProgressText(0, 0, 0, 0), '检查中…');
   check('进度文案 1 网络书 + 1 本地书', shelfProgressText(0, 1, 0, 1),
-    '检查网络书 0/1 · 本地书 1 本跳过');
+    '网络 0/1 · 本地 1');
   check('进度文案 网络书失败 + 本地书', shelfProgressText(1, 1, 1, 1),
-    '检查网络书 1/1 · 1 本未检查 · 本地书 1 本跳过');
-  check('进度文案 仅本地书', shelfProgressText(0, 0, 0, 1), '本地书 1 本跳过');
+    '网络 1/1 · 1 本未检查 · 本地 1');
+  check('进度文案 仅本地书', shelfProgressText(0, 0, 0, 1), '本地 1');
   check('结束文案 全失败 + 本地书', shelfUpdateResultText({
     total: 1, local: 1, checked: 0, failed: 1, skipped: 0, updated: []
   }), '网络书检查失败，请检查网络或书源');
