@@ -2,7 +2,8 @@
 """书架「更新」（T-SHELF-7）主机侧仿真：不上设备就跑通 `model/ShelfUpdater.ets` 的编排。
 
 为什么需要：这条路径的**真实依赖只有 3 个**（引擎 `bookEngine` / DB `upsertBook` / `isLocalBook`），
-其余全是纯逻辑。因为两个网络请求的形态（`search` → `isSameBook` 取 `bookUrl` → `bookInfo`）在
+其余全是纯逻辑。因为网络请求的形态（`search` → `isSameBook` 取 `bookUrl` → `bookInfo`，
+以及详情缺章名时的 `toc` 兜底）在
 设备上要 20+ 秒一轮、还要真书，主机侧用**打桩引擎**能把并发上限 / 整体预算 / 单本超时 /
 失败静默 / 基线前移 / 幂等这些分支一次跑完，秒级反馈。
 
@@ -13,8 +14,9 @@
 编到 JS、`node` 跑断言。改动 `ShelfUpdater.ets` 后直接重跑本脚本即可。
 
 用法：python3 scripts/shelf-updater-sim.py      （退出码 0 = 全部断言通过）
-覆盖：计数（checked/failed/skipped/updated）、本地书排除、基线前移与「等价对齐」不误报、
-      幂等（第二次点击 0 新章 + 0 写库）、并发上限 3、进度回调序列（含进行中失败数
+覆盖：本地 TXT 文件名拆书名/作者、计数（checked/failed/skipped/updated）、本地书排除、基线前移与「等价对齐」不误报、
+      幂等（第二次点击 0 新章 + 0 写库）、并发上限 3、详情缺章名时目录末章兜底（URL 三级回退、
+      卷标题跳过、目录失败隔离）、进度回调序列（含进行中失败数
       `failed` 累计值与 `shelfProgressText()` 三种文案形态）、预算耗尽、书源缺失、
       搜索 6s / 详情 15s 预算传入引擎（超时仍按单本失败隔离）。**未覆盖**：真机网络/真书/UI。
 """
@@ -29,12 +31,23 @@ TSC_CANDIDATES = [
 
 STUBS = r"""// ── host stubs（只替换 3 个外部依赖：引擎 / DB / 本地书判定 + 2 个纯函数）──
 interface BookSource { bookSourceUrl: string; bookSourceName: string; enabled?: boolean; }
-interface Book { bookId: string; sourceUrl: string; name: string; author: string; lastChapterTitle: string; }
+interface Book { bookId: string; sourceUrl: string; name: string; author: string; lastChapterTitle: string; tocUrl: string; }
+interface Chapter { title: string; isVolume?: boolean; }
 interface BookSearchItem { name: string; author: string; bookUrl: string; lastChapter: string; }
 interface SearchResult { items: BookSearchItem[]; }
 
-interface Scenario { lastChapterTitle?: string; failSearch?: boolean; failInfo?: boolean; timeout?: boolean; delayMs?: number; }
+interface Scenario {
+  lastChapterTitle?: string;
+  tocLastChapterTitle?: string;
+  infoTocUrl?: string;
+  failSearch?: boolean;
+  failInfo?: boolean;
+  failToc?: boolean;
+  timeout?: boolean;
+  delayMs?: number;
+}
 const ENGINE_INFO_TIMEOUT_MS: number = 15000;
+const ENGINE_TOC_TIMEOUT_MS: number = 45000;
 let scenario: Record<string, Scenario> = {};
 let inFlight: number = 0;
 let maxInFlight: number = 0;
@@ -42,6 +55,8 @@ let writes: string[] = [];
 let progress: string[] = [];
 let searchTimeouts: number[] = [];
 let infoTimeouts: number[] = [];
+let tocTimeouts: number[] = [];
+let tocUrls: string[] = [];
 const sleep = (ms: number): Promise<void> => new Promise<void>((r) => setTimeout(r, ms));
 
 const bookEngine = {
@@ -53,8 +68,9 @@ const bookEngine = {
     await sleep(sc === undefined || sc.delayMs === undefined ? 0 : sc.delayMs);
     inFlight = inFlight - 1;
     if (sc !== undefined && sc.failSearch === true) { throw new Error('search failed'); }
+    const hasTocFallback = sc !== undefined && sc.tocLastChapterTitle !== undefined;
     return { items: [{ name: keyword, author: '作者：烽火戏诸侯', bookUrl: 'u:' + keyword,
-      lastChapter: sc === undefined || sc.lastChapterTitle === undefined ? '' : sc.lastChapterTitle }] };
+      lastChapter: hasTocFallback || sc === undefined || sc.lastChapterTitle === undefined ? '' : sc.lastChapterTitle }] };
   },
   async bookInfo(_s: BookSource, bookUrl: string, timeoutMs: number): Promise<Book> {
     const name = bookUrl.substring(2);
@@ -63,8 +79,19 @@ const bookEngine = {
     await sleep(sc === undefined || sc.delayMs === undefined ? 0 : sc.delayMs);
     if (sc !== undefined && sc.failInfo === true) { throw new Error('info failed'); }
     if (sc !== undefined && sc.timeout === true) { throw new Error('timeout'); }
+    const hasTocFallback = sc !== undefined && sc.tocLastChapterTitle !== undefined;
     return { bookId: name, sourceUrl: 'http://s', name: name, author: '烽火戏诸侯',
-      lastChapterTitle: sc === undefined || sc.lastChapterTitle === undefined ? '' : sc.lastChapterTitle };
+      lastChapterTitle: hasTocFallback || sc === undefined || sc.lastChapterTitle === undefined ? '' : sc.lastChapterTitle,
+      tocUrl: sc !== undefined && sc.infoTocUrl !== undefined ? sc.infoTocUrl : '' };
+  },
+  async toc(_s: BookSource, tocUrl: string, timeoutMs: number): Promise<Chapter[]> {
+    const name = tocUrl.substring(2);
+    const sc = scenario[name];
+    tocUrls.push(tocUrl);
+    tocTimeouts.push(timeoutMs);
+    if (sc !== undefined && sc.failToc === true) { throw new Error('toc failed'); }
+    return [{ title: '卷标题', isVolume: true }, { title: '第一段' }, { title: ' ' },
+      { title: sc === undefined || sc.tocLastChapterTitle === undefined ? '' : sc.tocLastChapterTitle }];
   }
 };
 const upsertBook = async (book: Book): Promise<void> => { writes.push(book.name + '=' + book.lastChapterTitle); };
@@ -82,7 +109,8 @@ function isSameBook(book: Book, item: BookSearchItem): boolean {
 
 TEST = r"""// ── 场景：4 本网络书 + 1 本本地书（并发 3）──
 function mk(id: string, name: string, last: string): Book {
-  return { bookId: id, sourceUrl: 'http://s', name: name, author: '烽火戏诸侯', lastChapterTitle: last };
+  return { bookId: id, sourceUrl: 'http://s', name: name, author: '烽火戏诸侯', lastChapterTitle: last,
+    tocUrl: 't:' + name };
 }
 let failures: number = 0;
 function check(label: string, got: unknown, want: unknown): void {
@@ -92,6 +120,21 @@ function check(label: string, got: unknown, want: unknown): void {
 }
 
 async function main(): Promise<void> {
+  check('文件名作者全角冒号', splitTitleAuthor('大唐：李世民求我造反 作者：天下乐'),
+    { title: '大唐：李世民求我造反', author: '天下乐' });
+  check('文件名作者半角冒号', splitTitleAuthor('大唐：李世民求我造反 作者:天下乐'),
+    { title: '大唐：李世民求我造反', author: '天下乐' });
+  check('文件名作者括号', splitTitleAuthor('大唐：李世民求我造反（作者：天下乐）'),
+    { title: '大唐：李世民求我造反', author: '天下乐' });
+  check('文件名无作者', splitTitleAuthor('大唐：李世民求我造反'),
+    { title: '大唐：李世民求我造反', author: '' });
+  check('标题中间的作者字样不剥离', splitTitleAuthor('我在作者身边 作者：天下乐'),
+    { title: '我在作者身边', author: '天下乐' });
+  check('多个作者标签取最右一个', splitTitleAuthor('作者：我与作者 作者：天下乐'),
+    { title: '作者：我与作者', author: '天下乐' });
+  check('只有作者标签时不误拆', splitTitleAuthor('作者：天下乐'),
+    { title: '作者：天下乐', author: '' });
+
   scenario = {
     '剑来': { lastChapterTitle: '第84章 明日无风', delayMs: 40 },     // 基线 第83章 → 有新章
     '雪中': { lastChapterTitle: '第83章 今日无事', delayMs: 40 },     // 基线带「最新：」标签 → 等价，不算新章
@@ -104,12 +147,16 @@ async function main(): Promise<void> {
     mk('3', '斗破', '第83章 今日无事'),
     mk('4', '凡人', '')
   ];
-  const local: Book = { bookId: '5', sourceUrl: 'local://', name: '本地书', author: 'x', lastChapterTitle: '第一章' };
+  const local: Book = { bookId: '5', sourceUrl: 'local://', name: '本地书', author: 'x', lastChapterTitle: '第一章',
+    tocUrl: 'local://5' };
   books.push(local);
 
   const out = await checkShelfUpdates(books, [{ bookSourceUrl: 'http://s', bookSourceName: 's' }],
-    (done: number, total: number, failed: number): void => { progress.push(done + '/' + total + ':' + failed); });
+    (done: number, total: number, failed: number, local: number): void => {
+      progress.push(done + '/' + total + ':' + failed + ':' + local);
+    });
   check('total（本地书已排除）', out.total, 4);
+  check('local（本地书单独计数）', out.local, 1);
   check('checked', out.checked, 3);
   check('failed（搜索失败静默）', out.failed, 1);
   check('skipped', out.skipped, 0);
@@ -117,16 +164,79 @@ async function main(): Promise<void> {
   // 雪中 那次是**设计行为**：原始串带「最新：」标签、归一化等价 ⇒ 静默对齐基线（不报新章）
   check('回写基线（新章 + 无基线 + 等价对齐）', writes.sort(), ['凡人=第83章 今日无事', '剑来=第84章 明日无风', '雪中=第83章 今日无事']);
   check('等价对齐不算新章', out.updated.map((b: Book): string => b.name).indexOf('雪中'), -1);
-  check('进度首尾（done 从 0 走到 total）', [progress[0], progress[progress.length - 1].split(':')[0]], ['0/4:0', '4/4']);
+  check('进度首尾（done 从 0 走到 total）', [progress[0], progress[progress.length - 1].split(':')[0]],
+    ['0/4:0:1', '4/4']);
   check('进度条数（1 次起始 + 每本 1 次）', progress.length, 5);
   check('并发上限 ≤ 3', maxInFlight <= 3, true);
   check('基线未被失败书改写（斗破）', books[2].lastChapterTitle, '第83章 今日无事');
 
   // 进行中进度文案（UI 直接渲染的字符串）：三种形态
-  check('进度文案 无失败', shelfProgressText(1, 2, 0), '检查中 1/2');
-  check('进度文案 有失败', shelfProgressText(2, 3, 1), '检查中 2/3 · 1 本未检查');
-  check('进度文案 起始（0 本结束时不写 0 本未检查）', shelfProgressText(0, 2, 0), '检查中 0/2');
-  check('进度文案 无网络书', shelfProgressText(0, 0, 0), '检查中…');
+  check('进度文案 无失败', shelfProgressText(1, 2, 0, 0), '检查中 1/2');
+  check('进度文案 有失败', shelfProgressText(2, 3, 1, 0), '检查中 2/3 · 1 本未检查');
+  check('进度文案 起始（0 本结束时不写 0 本未检查）', shelfProgressText(0, 2, 0, 0), '检查中 0/2');
+  check('进度文案 无书', shelfProgressText(0, 0, 0, 0), '检查中…');
+  check('进度文案 1 网络书 + 1 本地书', shelfProgressText(0, 1, 0, 1),
+    '检查网络书 0/1 · 本地书 1 本跳过');
+  check('进度文案 网络书失败 + 本地书', shelfProgressText(1, 1, 1, 1),
+    '检查网络书 1/1 · 1 本未检查 · 本地书 1 本跳过');
+  check('进度文案 仅本地书', shelfProgressText(0, 0, 0, 1), '本地书 1 本跳过');
+  check('结束文案 全失败 + 本地书', shelfUpdateResultText({
+    total: 1, local: 1, checked: 0, failed: 1, skipped: 0, updated: []
+  }), '网络书检查失败，请检查网络或书源');
+  check('结束文案 无新章 + 本地书', shelfUpdateResultText({
+    total: 1, local: 1, checked: 1, failed: 0, skipped: 0, updated: []
+  }), '没有发现新章节，1 本本地书跳过');
+  check('结束文案 部分失败 + 本地书', shelfUpdateResultText({
+    total: 2, local: 1, checked: 1, failed: 1, skipped: 0, updated: []
+  }), '没有发现新章节，1 本未检查，另有 1 本本地书跳过');
+
+  // qwyd 这类源没有 lastChapter 规则：详情与搜索都为空时必须回退目录末章，
+  // 而不是把整本书误判成网络失败。
+  writes = [];
+  tocTimeouts = [];
+  tocUrls = [];
+  scenario = { '中国少了一味药': { tocLastChapterTitle: '第三十七章' } };
+  const fallback = await checkShelfUpdates([mk('6', '中国少了一味药', '')],
+    [{ bookSourceUrl: 'http://s', bookSourceName: 's' }], (): void => {});
+  check('详情缺章名回退目录 checked', fallback.checked, 1);
+  check('详情缺章名回退目录 failed', fallback.failed, 0);
+  check('详情缺章名回退目录建基线', writes, ['中国少了一味药=第三十七章']);
+  check('目录兜底跳过卷标题', lastContentChapterTitle([
+    { title: '第一章' }, { title: '第二卷', isVolume: true }, { title: '' }
+  ]), '第一章');
+  check('目录兜底使用书架 tocUrl', tocUrls, ['t:中国少了一味药']);
+  check('目录预算 45s', tocTimeouts, [45000]);
+
+  // 详情页给出 tocUrl 时优先于书架旧值。
+  tocUrls = [];
+  scenario = { '详情目录': { tocLastChapterTitle: '第十章', infoTocUrl: 'i:详情目录' } };
+  await checkShelfUpdates([mk('7', '详情目录', '')],
+    [{ bookSourceUrl: 'http://s', bookSourceName: 's' }], (): void => {});
+  check('目录兜底优先详情 tocUrl', tocUrls, ['i:详情目录']);
+
+  // 详情与书架都没有 tocUrl 时，用搜索命中的 bookUrl。
+  tocUrls = [];
+  scenario = { '搜索地址': { tocLastChapterTitle: '第十一章' } };
+  const searchUrlBook: Book = mk('8', '搜索地址', '');
+  searchUrlBook.tocUrl = '';
+  await checkShelfUpdates([searchUrlBook],
+    [{ bookSourceUrl: 'http://s', bookSourceName: 's' }], (): void => {});
+  check('目录兜底回退 bookUrl', tocUrls, ['u:搜索地址']);
+
+  // 目录请求失败仍按单本失败隔离，不建基线。
+  writes = [];
+  scenario = { '目录失败': { failToc: true } };
+  const tocFailed = await checkShelfUpdates([mk('9', '目录失败', '')],
+    [{ bookSourceUrl: 'http://s', bookSourceName: 's' }], (): void => {});
+  check('目录失败计 failed', tocFailed.failed, 1);
+  check('目录失败不写库', writes.length, 0);
+
+  scenario = {
+    '剑来': { lastChapterTitle: '第84章 明日无风', delayMs: 40 },
+    '雪中': { lastChapterTitle: '第83章 今日无事', delayMs: 40 },
+    '斗破': { failSearch: true, delayMs: 40 },
+    '凡人': { lastChapterTitle: '第83章 今日无事', delayMs: 40 }
+  };
 
   // 幂等：把回写后的基线再查一次，必须 0 本有新章、0 次写库
   writes = [];
@@ -163,8 +273,8 @@ async function main(): Promise<void> {
   const midProgress: string[] = [];
   await checkShelfUpdates([mk('1', '剑来', '第83章 今日无事'), mk('3', '斗破', '第83章 今日无事')],
     [{ bookSourceUrl: 'http://s', bookSourceName: 's' }],
-    (done: number, total: number, failed: number): void => {
-      midProgress.push(shelfProgressText(done, total, failed));
+    (done: number, total: number, failed: number, local: number): void => {
+      midProgress.push(shelfProgressText(done, total, failed, local));
     });
   check('失败书之后每条进度都带未检查数', midProgress,
     ['检查中 0/2', '检查中 1/2 · 1 本未检查', '检查中 2/2 · 1 本未检查']);

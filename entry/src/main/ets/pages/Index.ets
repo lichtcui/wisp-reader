@@ -27,7 +27,12 @@ import { ShelfEditState } from '../model/ShelfEditState';
 import { getBooks, initShelf } from '../model/ShelfRepository';
 import { sourcesForUrls } from '../model/SourceStore';
 import { ensureSourceStore } from '../model/SourceStoreMigration';
-import { checkShelfUpdates, shelfProgressText, ShelfUpdateOutcome } from '../model/ShelfUpdater';
+import {
+  checkShelfUpdates,
+  shelfProgressText,
+  shelfUpdateResultText,
+  ShelfUpdateOutcome
+} from '../model/ShelfUpdater';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 import { BookDetailPage } from './BookDetail';
 import { BookSourceManagePage } from './BookSourceManage';
@@ -117,8 +122,8 @@ struct Index {
   /**
    * 书架「更新」：批量查新章（T-SHELF-7）。
    *
-   * 「检查中」由 `shelfUpdating` 驱动顶栏进度文案，文案由 `shelfProgressText()` 生成
-   * （无失败 `检查中 1/2`，有失败追 ` · 1 本未检查` —— 失败数不必等结束 toast 才知道）；
+   * 顶栏进度文案由 `shelfProgressText()` 生成：纯网络书架显示 `检查中 1/2`；
+   * 混合书架显示 `检查网络书 1/2 · 本地书 2 本跳过`，失败时追 ` · N 本未检查`；
    * 结束一次 toast（不逐本书弹）。
    * 回写基线后刷新书架：`books.last_chapter_title` 目前没有 UI 读（书架标签走
    * `progress.percent`），刷新只为让可能的行内角标/文案后续改动自然生效。
@@ -155,9 +160,10 @@ struct Index {
           }
         }
       }
-      outcome = await checkShelfUpdates(books, sources, (done: number, total: number, failed: number): void => {
-        this.shelfUpdateProgress = shelfProgressText(done, total, failed);
-      });
+      outcome = await checkShelfUpdates(books, sources,
+        (done: number, total: number, failed: number, local: number): void => {
+          this.shelfUpdateProgress = shelfProgressText(done, total, failed, local);
+        });
     } catch (err) {
       outcome = undefined;
     }
@@ -167,24 +173,9 @@ struct Index {
       this.getUIContext().getPromptAction().showToast({ message: '更新失败，请稍后重试' });
       return;
     }
-    if (outcome.total === 0) {
-      this.getUIContext().getPromptAction().showToast({ message: '书架里没有可检查的网络书籍' });
-      return;
-    }
+    const result: string = shelfUpdateResultText(outcome);
     this.shelfRefresh = this.shelfRefresh + 1;
-    const updated: number = outcome.updated.length;
-    const missed: number = outcome.failed + outcome.skipped;
-    if (updated > 0) {
-      this.getUIContext().getPromptAction().showToast({ message: updated.toString() + ' 本有新章节' });
-    } else if (outcome.checked === 0) {
-      this.getUIContext().getPromptAction().showToast({ message: '检查失败，请检查网络或书源' });
-    } else if (missed > 0) {
-      this.getUIContext().getPromptAction().showToast({
-        message: '没有发现新章节，' + missed.toString() + ' 本未检查'
-      });
-    } else {
-      this.getUIContext().getPromptAction().showToast({ message: '没有发现新章节' });
-    }
+    this.getUIContext().getPromptAction().showToast({ message: result });
   }
 
   private confirmDelete(): void {

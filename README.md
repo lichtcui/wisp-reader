@@ -5,15 +5,16 @@ HarmonyOS NEXT 原生阅读 App，兼容 [Legado](https://github.com/gedoor/lega
 - **引擎**：复用本地 Rust 书源引擎（`rust/legado-core`），经 [ohos-rs](https://github.com/ohos-rs/ohos-rs) 编译为
   `.so`，ArkTS 通过 NAPI 调用。网络请求（`reqwest` + rustls）也在 Rust 侧完成。
 - **UI**：ArkTS + ArkUI 声明式，V2 状态管理，白 + 红视觉。
-- **v1 范围**：搜索 → 详情 → 加入书架 → 阅读（横向分页翻页）→ 听书。
-- **v1 不做**：JS 运行时、登录型源、换源、发现(explore)、真分页、在线 TTS。
+- **v1 范围**：搜索 → 详情 → 加入书架 → 阅读（横向分页翻页）→ 听书；v1.1 起已支持换源。
+- **尚未支持**：JS 运行时、登录型源、发现(explore)、真分页、在线 TTS。
 
-> 完整设计见 [`docs/plan.md`](./docs/plan.md)；开发/构建说明见 [`docs/development.md`](./docs/development.md)；
+> 产品路线见 [`docs/roadmap.md`](./docs/roadmap.md)；完整设计见 [`docs/plan.md`](./docs/plan.md)；
+> 开发/构建说明见 [`docs/development.md`](./docs/development.md)；
 > 文档路由见 [`AGENTS.md`](./AGENTS.md)。
 
 ## 当前进度
 
-M0–M5 已完成并真机验证；M6（规则调试器 + 缓存/备份）大部分已落地（已过 release 真机冒烟），剩余缓存上限策略与导入「覆盖」语义。
+M0–M5 已完成并真机验证；M6 功能已落地，仅余规则调试器真机验收。v1.1-v1.3 已覆盖换源、书架更新和 TTS 预生成，当前以稳定性收口为主。
 
 | 里程碑 | 状态 |
 |---|---|
@@ -23,7 +24,7 @@ M0–M5 已完成并真机验证；M6（规则调试器 + 缓存/备份）大部
 | M3 搜索聚合 + 详情 + 加入书架 | ✅ |
 | M4 阅读页 + 目录 + 进度 | ✅ |
 | M5 听书 + TTS + 后台播放 | ✅ |
-| M6 规则调试器 + 缓存/备份 | 🟡 大部分已落地 |
+| M6 规则调试器 + 缓存/备份 | 🟡 待调试器真机验收 |
 
 详见 [`docs/progress.md`](./docs/progress.md)。
 

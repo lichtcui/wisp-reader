@@ -2,7 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { Book, BookSource, Chapter } from '../engine/types';
-import { computeBookId } from '../common/Format';
+import { computeBookId, splitTitleAuthor, TitleAuthorParts } from '../common/Format';
 import { upsertBook } from './ShelfRepository';
 
 /**
@@ -49,6 +49,48 @@ export function localSource(): BookSource {
 
 export function isLocalBook(book: Book): boolean {
   return book.sourceUrl === LOCAL_SOURCE_URL;
+}
+
+/**
+ * Older imports kept the trailing `作者：…` in the title. Repair those rows in
+ * place so the stable id, source and progress stay attached to the same book.
+ */
+export async function repairLocalBookMetadata(
+  ctx: common.UIAbilityContext,
+  book: Book
+): Promise<Book> {
+  if (!isLocalBook(book)) {
+    return book;
+  }
+  const parts: TitleAuthorParts = splitTitleAuthor(book.name);
+  if (parts.author.length === 0) {
+    return book;
+  }
+  if (parts.title === book.name && parts.author === book.author) {
+    return book;
+  }
+  const repaired: Book = {
+    bookId: book.bookId,
+    sourceUrl: book.sourceUrl,
+    name: parts.title,
+    author: parts.author,
+    coverUrl: book.coverUrl,
+    intro: book.intro,
+    kind: book.kind,
+    wordCount: book.wordCount,
+    status: book.status,
+    lastChapterTitle: book.lastChapterTitle,
+    tocUrl: book.tocUrl,
+    inShelf: book.inShelf,
+    addedAt: book.addedAt
+  };
+  try {
+    await upsertBook(repaired);
+  } catch (err) {
+    return book;
+  }
+  updateLocalTocMetadata(ctx, book.bookId, parts.title, parts.author);
+  return repaired;
 }
 
 // ── Paths ───────────────────────────────────────────────────────
@@ -125,8 +167,8 @@ export async function relinkLocalTxt(
   const relinked: Book = {
     bookId: book.bookId,
     sourceUrl: book.sourceUrl,
-    name: book.name,
-    author: book.author,
+    name: parsed.name,
+    author: parsed.author,
     coverUrl: book.coverUrl,
     intro: makeIntro(parsed.text, parsed.chapters),
     kind: book.kind,
@@ -157,10 +199,10 @@ async function pickLocalTxt(ctx: common.UIAbilityContext): Promise<ParsedLocalTx
   if (text.trim().length === 0) {
     throw new Error('empty');
   }
-  const name: string = stripExt(fileNameFromUri(uri));
-  const author: string = extractAuthor(text);
+  const parts: TitleAuthorParts = splitTitleAuthor(stripExt(fileNameFromUri(uri)));
+  const author: string = parts.author.length > 0 ? parts.author : extractAuthor(text);
   const chapters: LocalChapterMeta[] = splitChapters(text);
-  return { name: name, author: author, text: text, chapters: chapters };
+  return { name: parts.title, author: author, text: text, chapters: chapters };
 }
 
 function persistLocalTxt(ctx: common.UIAbilityContext, bookId: string, parsed: ParsedLocalTxt): void {
@@ -278,6 +320,26 @@ function readToc(ctx: common.UIAbilityContext, bookId: string): LocalToc {
   const toc: LocalToc = JSON.parse(fileIo.readTextSync(tocPath(ctx, bookId))) as LocalToc;
   cacheSmall(tocCache, bookId, toc, 4);
   return toc;
+}
+
+function updateLocalTocMetadata(
+  ctx: common.UIAbilityContext,
+  bookId: string,
+  name: string,
+  author: string
+): void {
+  try {
+    if (!fileIo.accessSync(tocPath(ctx, bookId))) {
+      return;
+    }
+    const toc: LocalToc = readToc(ctx, bookId);
+    toc.name = name;
+    toc.author = author;
+    writeText(tocPath(ctx, bookId), JSON.stringify(toc));
+    tocCache.set(bookId, toc);
+  } catch (err) {
+    // Metadata repair must not make an otherwise readable local book unavailable.
+  }
 }
 
 // ── Parsing helpers ─────────────────────────────────────────────

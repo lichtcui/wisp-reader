@@ -131,7 +131,7 @@ rust/legado-core/    薄 NAPI 层（cdylib），依赖 legado-engine
 | 网络 / Cookie / 限速 / 编码探测 | `rust/legado-engine/src/http_client.rs` |
 | **NAPI 接口（增删函数/改返回 JSON）** | `rust/legado-core/src/lib.rs`（签名 + `///` doc comment → 生成 `index.d.ts`）；ArkTS 侧 `engine/IBookEngine.ets`、`engine/BookEngineNapi.ets`、`engine/types.ets` |
 | 缓存（章节/目录/清理） | `model/ChapterCache.ets`（章节正文 + **预生成键 sidecar** `filesDir/pregkeys/<bookId>_<index>.json`，带 `url` 校验；本地书正文不进缓存，键只能走旁路；正文条目在时**只信条目**）、`model/TocCache.ets`、`model/CacheRepository.ets`、`pages/CacheManage.ets`；永久下载在 `filesDir/downloads/`，不属于可清理缓存 |
-| 备份恢复 / 本地书 | `pages/BackupManage.ets`、`model/BackupRecovery.ets`、`model/LocalBook.ets`（本地 TXT 导入；`toc.json` 缺失或损坏时从 `book.txt` 自动重建，仅正文缺失时原地重新关联并保留 `bookId` / 进度）；恢复开始先取消活动下载，书架全量恢复数量校验通过后由 `DownloadStore.sweepOrphanDownloads` 清理不在备份中的下载目录 |
+| 备份恢复 / 本地书 | `pages/BackupManage.ets`、`model/BackupRecovery.ets`、`model/LocalBook.ets`（本地 TXT 导入；Legado 风格文件名由 `Format.splitTitleAuthor()` 拆书名/作者并自愈旧行；`toc.json` 缺失或损坏时从 `book.txt` 自动重建，仅正文缺失时原地重新关联并保留 `bookId` / 进度）；恢复开始先取消活动下载，书架全量恢复数量校验通过后由 `DownloadStore.sweepOrphanDownloads` 清理不在备份中的下载目录 |
 | 规则调试器（已实现） | `pages/RuleDebugger.ets` |
 | 颜色 / Design Token | `src/main/resources/{base,dark}/element/color.json`；规范见 [`plan.md`](./plan.md) §2 |
 | 权限 / SDK 版本 / bundle / 混淆 / 签名注入 | `src/main/module.json5`、`AppScope/app.json5`、`build-profile.json5`、`hvigorfile.ts`、`entry/obfuscation-rules.txt`；签名材料在仓库外 `~/.ohos/source-reader/signing.json` |

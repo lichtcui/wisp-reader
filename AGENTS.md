@@ -2,7 +2,7 @@
 
 本仓库是 **HarmonyOS NEXT 原生阅读 App**（ArkTS + ArkUI），兼容 Legado 书源格式；书源引擎复用本地 Rust
 项目经 `ohos-rs` 编译的 `.so`，由 ArkTS 通过 NAPI 调用。
-**状态**：M0–M5 已真机验证；M6（规则调试器 / 缓存清理 / 备份恢复）未开始，当前以单点修复与小迭代为主。
+**状态**：M0–M5 已真机验证；M6 功能已落地，仅余规则调试器真机验收；当前以 v1.1-v1.3 的稳定性收口为主。
 
 ## 按需查阅（**不要**开场通读）
 
@@ -11,6 +11,7 @@
 | **构建 / 安装 / 跑测 / 看日志** | **先 `make help`**（根目录 `Makefile`）；改完代码直接 `make run` |
 | 完整设计方案（权威） | [`docs/plan.md`](./docs/plan.md)（顶部有行号目录，只读需要的 §） |
 | 进度 / 未决风险 / 交接 | [`docs/progress.md`](./docs/progress.md)（只记当前状态，很短） |
+| 产品路线 / 下一阶段优先级 | [`docs/roadmap.md`](./docs/roadmap.md)（Now / Next / Later；不替代设计、进度与任务清单） |
 | 环境 / 构建 / 安装 / 调试 / 签名 | [`docs/development.md`](./docs/development.md) |
 | 引擎与 NAPI 接口 | [`docs/engine.md`](./docs/engine.md)（语义）、`entry/src/main/cpp/types/liblegado_core/index.d.ts`（**签名**） |
 | UI 规范（**改底部抽屉前必读**） | [`docs/specs/UI-SPEC.md`](./docs/specs/UI-SPEC.md) |

@@ -103,6 +103,49 @@ export function cleanAuthor(raw: string): string {
   return stripLabel(raw, AUTHOR_LABELS);
 }
 
+export interface TitleAuthorParts {
+  title: string;
+  author: string;
+}
+
+const AUTHOR_SUFFIX_LABELS: string[] = ['作者：', '作者:', '作家：', '作家:'];
+
+/**
+ * Split a Legado-style filename stem such as `书名 作者：作者名`.
+ * Only a trailing author label is metadata; the same words in the middle of a
+ * title must stay untouched.
+ */
+export function splitTitleAuthor(value: string): TitleAuthorParts {
+  const raw: string = value.trim();
+  let body: string = raw;
+  if (body.endsWith('）') || body.endsWith(')') || body.endsWith('】') || body.endsWith(']')) {
+    body = body.substring(0, body.length - 1).trim();
+  }
+  let labelIndex: number = -1;
+  let label: string = '';
+  for (const candidate of AUTHOR_SUFFIX_LABELS) {
+    const index: number = body.lastIndexOf(candidate);
+    if (index > labelIndex) {
+      labelIndex = index;
+      label = candidate;
+    }
+  }
+  if (labelIndex < 0) {
+    return { title: raw, author: '' };
+  }
+  const author: string = body.substring(labelIndex + label.length).trim();
+  let title: string = body.substring(0, labelIndex).trim();
+  if (title.endsWith('（') || title.endsWith('(') || title.endsWith('【') || title.endsWith('[')) {
+    title = title.substring(0, title.length - 1).trim();
+  }
+  if (title.length === 0 || author.length === 0 || author.length > 40 ||
+    author.indexOf('\n') >= 0 || author.indexOf('（') >= 0 || author.indexOf('(') >= 0 ||
+    author.indexOf('【') >= 0 || author.indexOf('[') >= 0) {
+    return { title: raw, author: '' };
+  }
+  return { title: title, author: author };
+}
+
 /** 最新章节名：削掉 `最新章节：` / `最新：` 之类标签。 */
 export function cleanChapter(raw: string): string {
   return stripLabel(raw, CHAPTER_LABELS);

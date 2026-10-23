@@ -442,25 +442,27 @@
     ③ 恰一条 `SourceReaderCover: cover unavailable url=https://tiantangxiangzuoshenzhenwangyou.qwyd.net/ err=not_image`（基线插桩为 `err=undefined`，说明现在引擎能说清原因）；
     ④ 沙箱中毒文件 `cover_abfeec91b5ff5574.img` 已消失；`hdc file recv` 全部 38 个 `cover_*.img` 经 `file` 检查**全为合法 JPEG，无一 HTML**；
     ⑤ `uitest dumpLayout` 与修复前**逐行一致**（`剑来` 仍无占位 Text = 正常封面未回归；另两本仍占位 = 预期）；
-    ⑥ 书架↔搜索来回切 3 轮：**0 条封面日志**（负缓存生效，不再重复下载/解码）；
-    ⑦ 搜索「剑来」107 条结果 + 5 个新下载封面全部解码成功（新下载路径未被守卫误杀）。
+    ⑥ **2026-10-23 混合书架与目录兜底修正（已真机验证）**：真实书架证据为 2 本，其中一本 `source_url=local://`，另一本《中国少了一味药》来自 qwyd。主机探针确认该源搜索/详情可用、详情章节名为空、目录 38 章末章为 `第三十七章`。修正后主机仿真 **48 断言 `ALL PASS`**，新增覆盖本地书分母、结束文案、详情缺章名时目录兜底、卷标题跳过、`info.tocUrl` → 书架 `tocUrl` → 搜索 `bookUrl` 三级回退、目录 45s 预算与目录失败不写库；`make hap` 与 `make check` 通过。**真机（设备 `33Z0224424136564` · debug · `make hap` → `make install` → `make restart`）**：首轮截图 OCR 得到 `检查中 1/2 · 本地书 1 本跳过`，结束 toast 为「没有发现新章节，1 本本地书跳过」；DB 中 qwyd 书基线写为 `第三十七章`，本地书行与进度不变；第二次点击后 `shelf.db` 逻辑 `dump` 哈希前后均为 `8c1464d2…` ⇒ 幂等、0 误写。
+    ⑦ **2026-10-23 本地 TXT 文件名拆书名/作者（已真机验证）**：本地书架行《大唐：李世民求我造反 作者：天下乐》实际来源为 `local://`，导入时旧逻辑只去扩展名，导致书名残留作者标签，无法得到可搜索的规范书名/作者。新增 `common/Format.ets::splitTitleAuthor()`，只识别尾部 `作者：` / `作者:` / `作家：`（含括号形式），从文件名取作者时优先于正文探测；书架加载时对旧 `local://` 行原地修复，保留 `bookId`、来源、添加时间和进度，并尽力同步本地 `toc.json` 的元数据。仿真增至 **55 断言 `ALL PASS`**（新增全角/半角冒号、括号、无作者、标题中间含“作者”、多个作者标签与只有作者标签六类）；`make hap` / `make check` / `git diff --check` 通过。**真机复验**：书架与 DB 中旧行已变为 `name=大唐：李世民求我造反` / `author=天下乐`，`bookId=155886f3`、`added_at=1790260398161` 和第 152 章阅读进度不变；`toc.json` 同步为同名同作者、1441 章。
+    ⑧ **2026-10-24 混合书架进度去重（已真机验证）**：用户指出 `检查中 2/3 · 本地书 2 本跳过` 容易被理解为两本正在检查。`shelfProgressText()` 现改为只显示网络书进度，本地书只在后缀标注跳过：`检查网络书 0/1 · 本地书 2 本跳过`；纯网络书架仍为 `检查中 x/y`，失败数和结束 toast 口径不变。主机仿真新增“仅本地书”断言并全过；真机 `33Z0224424136564` 截图 OCR 已确认新进度文案与结束 toast。
   - 未覆盖：release 包未复跑；跨启动不重下需要持久负标记 `cover_*.miss`，**故意不做**（会破坏 `CacheTrim` 的 `cover_` 前缀 + `.img` 后缀扫描 → 变成永不被清理的泄漏），接受「每次启动对该 URL 一次无效请求」；`ImageSource.release()` 未加（无法无截图验证渲染，风险大于收益）。
   - 证据：`rust/legado-engine/src/runtime.rs`（`cover_cache_path` / `looks_like_image` / `download_cover` / tests）、`rust/legado-engine/src/status.rs`、`entry/src/main/ets/components/BookCover.ets`；完整修复说明见 [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §14。
-- [x] **T-SHELF-7（P2）书架「更新」：批量检查所有书籍是否有新章节 —— 2026-10-13 落地并真机验收**（进度 / 两个 toast 分支 / `total` 排除本地书 / 零误写 / 防重入 / 幂等 / 编辑态隐藏，共 13 项，含 **「有新章」分支**（2026-10-13 由一次性调试版真机走通，证据见「验证」④）；同日**收尾小迭代**：进行中进度行显示未检查数，两种形态真机已拍到（见「验证」⑤））。
+- [x] **T-SHELF-7（P2）书架「更新」：批量检查所有书籍是否有新章节 —— 2026-10-13 落地并真机验收**（进度 / 两个 toast 分支 / `total` 排除本地书 / 零误写 / 防重入 / 幂等 / 编辑态隐藏，共 13 项，含 **「有新章」分支**（2026-10-13 由一次性调试版真机走通，证据见「验证」④）；同日**收尾小迭代**：进行中进度行显示未检查数，两种形态真机已拍到（见「验证」⑤）；**2026-10-23 修正混合书架分母与无 `lastChapter` 源误报失败，并已完成真机复验（见「验证」⑥）；2026-10-24 修正混合书架进度重复计数（见「验证」⑧）**）。
+  - **2026-10-23 修正**：用户反馈书架有 2 本，更新却显示 `检查中 0/1`，随后报「检查失败，请检查网络或书源」。实际一本是 `local://` TXT（应跳过），另一本《中国少了一味药》所在 qwyd 源可用，但源规则没有 `lastChapter`：详情和搜索的章节名都为空，旧逻辑因此把整本书误判为失败。现在进度分母包含本地书并明确显示 `本地书 N 本跳过`；章节名缺失时按 `info.tocUrl` → 书架 `book.tocUrl` → 搜索命中 `bookUrl` 的顺序拉一次目录，取末个非卷非空章节；全部失败且存在本地书时提示「网络书检查失败」，不再把本地书也算成网络故障。
   需求（用户 2026-10-13 原话：「书架中也需要一个更新的功能（更新所有书籍，查看是否有新章节）」）。
   - **现状（为什么现在看不到）**：书架 `reload()` 只读 DB + 进度、**零网络 I/O**（`pages/Shelf.ets:44-79`，`@Monitor('refreshToken')` 也只是重读 DB）；
     「最新：xxx」/「N章/M章」全靠 Reader 打开书时写入（`refreshToc` 重写 `progress.percent` 分母，见 T-SHELF-6）⇒ **不打开书就永远不动**。
   - **已拍板（2026-10-13，用户选定）**：① 入口 = 书架顶栏标题右侧**独立「更新」按钮**（与 `MoreMenuButton` 并排，`pages/Index.ets:188 shelfNormalHeader`）——
     顶栏改动要过 [`specs/UI-SPEC.md`](../specs/UI-SPEC.md)（间距 / 字号 / 颜色令牌 / 无障碍 `accessibilityText`）；
-    ② 探测深度 = **只查详情 `bookInfo`**（立项时以为 1 请求/书，实际因书架行缺 `bookUrl` 变成 **2 请求/书**，见「实现」），**不爬目录**；③ 触发 = **仅手动**，不做启动自动检查 / 定时任务。
+    ② 探测深度 = **详情优先**（立项时以为 1 请求/书，实际因书架行缺 `bookUrl` 通常变成 **2 请求/书**，见「实现」）；2026-10-23 起只在详情与搜索结果都没有章节名时追加一次目录请求，**不遍历整本目录**；③ 触发 = **仅手动**，不做启动自动检查 / 定时任务。
   - **实现（2026-10-13）**：新 `model/ShelfUpdater.ets`（编排 + 两个导出的纯函数 `chapterKey(title)` / `hasNewChapter(baseline, latest)`）+ `pages/Index.ets` 顶栏入口。
-    每本书 = **2 请求**（`books` 表没有 `bookUrl`，`bookId` 是 `computeBookId` 哈希不可逆，`tocUrl` 在 7/13 个内置源里指的是目录页 ≠ 详情页）：
+    每本书**通常 2 请求、缺章节名兜底时 3 请求**（`books` 表没有 `bookUrl`，`bookId` 是 `computeBookId` 哈希不可逆，`tocUrl` 在 7/13 个内置源里指的是目录页 ≠ 详情页）：
     `bookEngine.search([source], book.name, {timeoutMs: 6000, concurrency: 1})` → 复用换源的 `isSameBook` 命中拿 `item.bookUrl` → `bookInfo(source, bookUrl)`；
-    章节名取详情页优先、回落搜索结果 `item.lastChapter`（与换源同口径）；与基线不同 ⇒ 记「有新章」+ `upsertBook` **前移基线**，相同 ⇒ 只计数。
-    常量：`SEARCH_TIMEOUT_MS = 6000`（与 T-SWITCH-1 单源超时对齐）、`ENGINE_INFO_TIMEOUT_MS = 15000`、`CHECK_CONCURRENCY = 3`、`CHECK_BUDGET_MS = 90000`；
-    返回 `ShelfUpdateOutcome { total, checked, failed, skipped, updated: Book[] }`，进度回调 = 起始 `(0,N,0)` + 每本结束一次 `(done,N,failed)`（第三个参数是**累计**失败数，2026-10-13 收尾小迭代加的，供进行中文案）。
+    章节名取详情页优先、回落搜索结果 `item.lastChapter`；两者都为空时再拉一次目录，取末个非卷非空章节。与基线不同 ⇒ 记「有新章」+ `upsertBook` **前移基线**，相同 ⇒ 只计数。
+    常量：`SEARCH_TIMEOUT_MS = 6000`（与 T-SWITCH-1 单源超时对齐）、`ENGINE_INFO_TIMEOUT_MS = 15000`、`ENGINE_TOC_TIMEOUT_MS = 45000`、`CHECK_CONCURRENCY = 3`、`CHECK_BUDGET_MS = 90000`；
+    返回 `ShelfUpdateOutcome { total, local, checked, failed, skipped, updated: Book[] }`，进度回调 = 起始 `(0,N,0,local)` + 每本结束一次 `(done,N,failed,local)`（第三个参数是**累计**失败数，第四个是本地书数）。
     UI：入口 `shelfUpdateAction()`（`@Builder` **0 参数直读 `@Local`**，与 `deleteAction()` 同形——本文件 §5.3：`@Builder` 传 2+ 参数不动态刷新）插在 `shelfNormalHeader()` 的 `Blank()` 与 `MoreMenuButton` 之间（编辑态不显示）；
-    「更新」用 `brand` 令牌 + 44 热区 + `accessibilityText`，进行中显示 `shelfProgressText(done,total,failed)`（无失败 `检查中 1/2`，有失败 `检查中 1/2 · 1 本未检查`，无网络书 `检查中…`；实现放在 `ShelfUpdater.ets` 的**导出纯函数**里，好让主机仿真能断言字符串）并防重入；结束 toast：`N 本有新章节` / `没有发现新章节` / `没有发现新章节，N 本未检查` / `检查失败，请检查网络或书源` / `书架里没有可检查的网络书籍` / `更新失败，请稍后重试`。
+    「更新」用 `brand` 令牌 + 44 热区 + `accessibilityText`，进行中显示 `shelfProgressText(done,total,failed,local)`（如 `检查中 1/2 · 本地书 1 本跳过`；实现放在 `ShelfUpdater.ets` 的**导出纯函数**里，好让主机仿真能断言字符串）并防重入；结束 toast 统一由 `shelfUpdateResultText(outcome)` 生成，覆盖有新章 / 无新章 / 部分未检查 / 网络书全失败 / 无可检查网络书 / 更新本身异常。
   - **与立项方案不同的三个设计点（复核/实测后改，勿改回去）**：
     ① **基线比较必须走 `cleanChapter` 归一化**，不能直接比字符串：同一本书的同一章在不同位置写法不同——详情页 `第83章 今日无事`、搜索结果/换源 `最新：第83章 今日无事`。
        直接比会把**没更新**的书报成有新章；归一化后**相等但原串不同**时**静默对齐**基线（不回显「有新章」），让下次比较退化成纯字符串相等 ⇒ 幂等。
@@ -470,9 +472,9 @@
        `timeoutMs`，`ShelfUpdater` 直接传 `ENGINE_INFO_TIMEOUT_MS = 15s`，由 Rust 对整个详情操作统一计时，
        不再维护竞速定时器。搜索那一步另有 6s 源级预算（Rust 侧 clamp 到 [3s, 20s]）；整轮仍保留 90s 预算。
     **未动的**：不加 `book_url` 列（方案 ②：幂等 ALTER + 3 个写入点 + 存量回填，且 `initShelf` 没有 migration 机制），继续复用 `books.last_chapter_title` 当基线（它只在「加入书架」与「换源」时写入、Reader 的后台重爬不写、全仓无 UI 读它）。
-  - **失败语义**：搜索失败 / 没匹配到同一本书 / `bookInfo` 失败 / 单本超时 / 结果无章节名 / 书源缺失或停用 ⇒ 一律计 `failed`，**不写库、不动基线、不影响其余书**；本地书直接排除（不计入 `total`）；
+  - **失败语义**：搜索失败 / 没匹配到同一本书 / `bookInfo` 失败 / 单本超时 / 详情、搜索与目录均无章节名 / 书源缺失或停用 ⇒ 一律计 `failed`，**不写库、不动基线、不影响其余书**；本地书不参与网络检查（不计入 `total`，单独计入 `local` 并参与展示分母）；
     整体预算耗尽而未开始的书计 `skipped`（不改基线，下次点击继续）。`updated === 0 && checked === 0`（且 `total > 0`）才提示「检查失败」。
-  - **刻意不做**：连目录一起刷（长书每本 10+ 请求，《剑来》13 页 ⇒ 20 本可能上百请求）；每次更新顺带修正「N章/M章」的分母（交给打开书时的 6h 新鲜期逻辑自愈，T-SHELF-6）；后台/定时自动检查。
+  - **刻意不做**：无条件连目录一起刷（长书每本 10+ 请求，《剑来》13 页 ⇒ 20 本可能上百请求）；2026-10-23 的目录兜底只限详情和搜索都没有章节名的源，每次仍最多额外 1 次请求。每次更新顺带修正「N章/M章」的分母（交给打开书时的 6h 新鲜期逻辑自愈，T-SHELF-6）；后台/定时自动检查。
   - **验证（2026-10-13）**：
     ① **主机侧仿真（已做，可复跑）**：新增 `scripts/shelf-updater-sim.py` —— 从真源码**机械切片**（`common/Format.ets` 的 `AUTHOR_LABELS`/`CHAPTER_LABELS`/`stripLabel`/`cleanAuthor`/`cleanChapter`
        + `model/ShelfUpdater.ets` 去掉 `import` 行的**全文**）+ 只打桩 3 个外部依赖（`bookEngine` / `upsertBook` / `isLocalBook`）→ DevEco 自带 `tsc` 编 JS → `node` 跑断言。
@@ -508,8 +510,10 @@
          b. 有失败形态 `检查中 1/2 · 1 本未检查` —— 注入方式：停用 `bbiquge8` + 同 URL 孪生 `笔趣阁8`（该源**不请求即计失败**），另一本仍要走网络 ⇒ 失败数在**进行中**就上屏（这正是本迭代的目的；对照：不注入时同一位置只有 `检查中 1/2`）；注入后两个开关已还原，复检「书源（13/13 启用）」；
          c. 该注入轮 DB 无写入（13 轮请求全失败 ⇒ 不该有 `upsertBook`，用 `shelf.db`+`-wal` 合并比对）；
          d. 宽度/截断：以实测字宽外推最长形态 `检查中 20/20 · 19 本未检查` ≈ 550px，可用区间 ≈ 710px（标题右缘 190 → 「更新」按钮左缘 ~900）⇒ 余量 ≈ 160px（~80vp），**未截断**；但该最长形态本身未在真机出现（架上只有 2 本网络书），仍是外推。
+    ⑥ **2026-10-23 混合书架与目录兜底修正（已真机验证）**：真实书架证据为 2 本，其中一本 `source_url=local://`，另一本《中国少了一味药》来自 qwyd。主机探针确认该源搜索/详情可用、详情章节名为空、目录 38 章末章为 `第三十七章`。修正后主机仿真 **48 断言 `ALL PASS`**，新增覆盖本地书分母、结束文案、详情缺章名时目录兜底、卷标题跳过、`info.tocUrl` → 书架 `tocUrl` → 搜索 `bookUrl` 三级回退、目录 45s 预算与目录失败不写库；`make hap` 与 `make check` 通过。**真机（设备 `33Z0224424136564` · debug · `make hap` → `make install` → `make restart`）**：首轮截图 OCR 得到 `检查中 1/2 · 本地书 1 本跳过`，结束 toast 为「没有发现新章节，1 本本地书跳过」；DB 中 qwyd 书基线写为 `第三十七章`，本地书行与进度不变；第二次点击后 `shelf.db` 逻辑 `dump` 哈希前后均为 `8c1464d2…` ⇒ 幂等、0 误写。
+    ⑦ **2026-10-23 本地 TXT 文件名拆书名/作者（已真机验证）**：本地书架行《大唐：李世民求我造反 作者：天下乐》实际来源为 `local://`，导入时旧逻辑只去扩展名，导致书名残留作者标签，无法得到可搜索的规范书名/作者。新增 `common/Format.ets::splitTitleAuthor()`，只识别尾部 `作者：` / `作者:` / `作家：`（含括号形式），从文件名取作者时优先于正文探测；书架加载时对旧 `local://` 行原地修复，保留 `bookId`、来源、添加时间和进度，并尽力同步本地 `toc.json` 的元数据。仿真增至 **55 断言 `ALL PASS`**（新增全角/半角冒号、括号、无作者、标题中间含“作者”、多个作者标签与只有作者标签六类）；`make hap` / `make check` / `git diff --check` 通过。**真机复验**：书架与 DB 中旧行已变为 `name=大唐：李世民求我造反` / `author=天下乐`，`bookId=155886f3`、`added_at=1790260398161` 和第 152 章阅读进度不变；`toc.json` 同步为同名同作者、1441 章。
   - 涉及文件：新 `model/ShelfUpdater.ets`、`pages/Index.ets`（顶栏入口 + 进度/结果反馈）、新 `scripts/shelf-updater-sim.py`（主机侧仿真）；`bookEngine.search` / `bookInfo`、`isSameBook`、`upsertBook`、`isLocalBook` 均复用既有实现。
-  - 未覆盖：~~「有新章」分支的真机写库~~（④，**2026-10-13 已用一次性调试版真机走通**；原「结构性不可造」的判断已被该调试版绕过，两条常规注入路径仍不可用）；release 包未复跑（本轮无新增 JSON 契约 ⇒ 混淆面未变）；探测深度只到详情页（不爬目录，按决策不做）；书架行内角标（留待下一轮）；**收尾小迭代的进度文案**已真机验证两种形态（⑤），仍未覆盖的只剩最长形态 `检查中 20/20 · 19 本未检查` 的真机渲染（架上书数不够，只有以外推）。
+  - 未覆盖：~~「有新章」分支的真机写库~~（④，**2026-10-13 已用一次性调试版真机走通**；原「结构性不可造」的判断已被该调试版绕过，两条常规注入路径仍不可用）；release 包未复跑（本轮无新增 JSON 契约 ⇒ 混淆面未变）；**2026-10-23 的本地书分母 / 目录兜底**（⑥，已真机复验）；**本地 TXT 全新导入未重复造书验证**（旧行自愈与 `toc.json` 已真机核对，导入路径复用同一 `splitTitleAuthor()` 且主机断言通过）；书架行内角标（留待下一轮）；**收尾小迭代的进度文案**已真机验证两种形态（⑤），仍未覆盖的只剩最长形态 `检查中 20/20 · 19 本未检查` 的真机渲染（架上书数不够，只有以外推）。
   - 关联：换源会重置该书基线（`SourceSwitch` 写 `lastChapterTitle`）⇒ 换源后的书不会被误报，见 T-SWITCH-1。
 
 ## 搜索（Search）

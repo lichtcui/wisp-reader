@@ -6,7 +6,7 @@ import { getShelfBooks, initShelf, ShelfBookRecord } from '../model/ShelfReposit
 import { ShelfEditState } from '../model/ShelfEditState';
 import { sourcesForUrls } from '../model/SourceStore';
 import { ensureSourceStore } from '../model/SourceStoreMigration';
-import { isLocalBook, localSource } from '../model/LocalBook';
+import { isLocalBook, localSource, repairLocalBookMetadata } from '../model/LocalBook';
 import { deriveTotalChapters, shelfProgressText } from '../common/Format';
 import { TtsController } from '../model/TtsController';
 import { FloatingListenButton } from '../ui/common/FloatingListenButton';
@@ -68,7 +68,12 @@ export struct ShelfPage {
     }
     await initShelf(ctx);
     await ensureSourceStore(ctx);
-    const records: ShelfBookRecord[] = await getShelfBooks();
+    const stored: ShelfBookRecord[] = await getShelfBooks();
+    const records: ShelfBookRecord[] = [];
+    for (const record of stored) {
+      const book: Book = await repairLocalBookMetadata(ctx, record.book);
+      records.push({ book: book, progress: record.progress });
+    }
     const urls: string[] = [];
     for (const record of records) {
       urls.push(record.book.sourceUrl);
