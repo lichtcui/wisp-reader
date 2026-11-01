@@ -62,10 +62,14 @@
   `docs/engine.md` / `architecture.md` 只写语义。
 - **动抽屉前先读 [`docs/specs/UI-SPEC.md`](./docs/specs/UI-SPEC.md)**：7 处调用点必须一起改；唯一实现 `ui/common/BottomDrawer.ets`，
   禁止裸 `bindSheet` 与 `if (flag) { BottomDrawer(...) }` 条件挂载（`mode` / `overlay` 细节见 UI-SPEC）。
-- **改完必走闭环**：`make run`（= 编译 → 安装 → `aa force-stop` → 启动）→ 观察（细节见 skill `harmony-device-run`）；
+- **改完必走闭环**：`make run`（= 编译 → 安装 → `aa force-stop` → 启动）→ 观察（细节见 [`docs/development.md`](./docs/development.md)）；
   动 Rust 先 `make test`（不占真机）、改引擎规则优先 `make probe`（不上设备）。
+- **真机互斥**：同一台手机可能被多个 Codex / pi 任务共用。所有 `hdc` / 安装 / 启动 / `uitest` / 日志 / RTF
+  操作必须整段套 `harmony-device-lease`（真机验证闭环见中央技能库 `~/Documents/skills.harmony/`）；
+  主机侧 `make hap/test/probe` 不需要锁。被占用时报 holder，不抢前台。
 - **跨 NAPI / 落盘的 JSON 字段名必须进 `obfuscation-rules.txt`**：release 开了属性混淆，漏一个就是「debug 正常、release 读到 undefined」——
   三处同步（Rust struct / `engine/types.ets` / keep 列表），`make check` 会核对。详见 [`docs/engine.md`](./docs/engine.md) §JSON 契约。
-- **skill 声明**：harmony skill 随仓库放在 `.agents/skills/`（Codex / pi 自动发现），`.pi/settings.json` 不再重复声明；
-  `harmony-device-run` 由根目录 `.harmony-skill.env` 渲染，改命令后跑 `~/Documents/skills.harmony/setup-codex.sh --force .`——详见 [`docs/development.md`](./docs/development.md) §Skill 来源。
+- **skill 声明**：harmony skill 不在本仓库提交，唯一真源是中央技能库 `~/Documents/skills.harmony/`，
+  `setup-codex.sh` 注入到本项目的 `.agents/skills/`（Codex / pi 自动发现）；`.pi/settings.json` 不重复声明，
+  `harmony-device-run` 的命令由根目录 `.harmony-skill.env` 渲染——详见 [`docs/development.md`](./docs/development.md) §Skill 来源。
 - 其余（ArkTS 严格模式、签名凭据、UDID、日志 tag、冲突处理）见 [`docs/development.md`](./docs/development.md)。

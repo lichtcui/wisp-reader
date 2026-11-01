@@ -34,6 +34,8 @@ signature/
 !/.pi/skills/
 !/.pi/skills/**
 !/.pi/settings.json
+# .agents/skills/ 是 setup-codex.sh 的注入产物（真源在 ~/Documents/skills.harmony/），不再入库
+/.agents/skills/
 # Python
 __pycache__/
 *.pyc

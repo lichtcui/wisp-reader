@@ -130,12 +130,14 @@ $HDC shell hilog -x | grep com.lichtcui.sourcereader   # 按 bundle 名筛（= m
 
 ## Skill 来源
 
-本仓库的 skill 全部随仓库走，放在 `.agents/skills/`（Codex 与 pi 都会自动发现）：
+harmony skill **不再随本仓库提交**：唯一真源是中央技能库 `~/Documents/skills.harmony/`，
+`setup-codex.sh` 按项目注入到 `.agents/skills/`（Codex 与 pi 都会自动发现，该目录已加入 `.gitignore`）：
 
 | 类型 | 位置 | 维护方式 |
 |---|---|---|
-| **项目专属**（`harmony-device-run`：真机验证闭环） | `.agents/skills/harmony-device-run/`；模板在 `~/Documents/skills.harmony/harmony-device-run/`，本仓库命令在 `.harmony-skill.env` | 脚本按 `bundleName` + `.harmony-skill.env` 渲染；已存在则 `KEEP`，`--force` 才覆盖（旧文件备份到 `$TMPDIR`） |
-| **通用 harmony**（`harmonyos-build-doctor`、`harmony-next`、`harmonyos-project-audit`、`harmonyos-release-*`） | `.agents/skills/<name>` → 软链到 `~/Documents/skills.harmony/<name>` | 中央库仍为唯一真源；更新后项目立即生效 |
+| **项目专属**（`harmony-device-run`：真机验证闭环） | 模板在 `~/Documents/skills.harmony/harmony-device-run/`，本仓库命令在 `.harmony-skill.env`（随仓库提交） | 脚本按 `bundleName` + `.harmony-skill.env` 渲染出 `.agents/skills/harmony-device-run/`；已存在则 `KEEP`，`--force` 才覆盖（旧文件备份到 `$TMPDIR`） |
+| **项目专属**（`harmony-single-device-pipeline`：多任务主机并行、单手机串行验收） | 中央库 `~/Documents/skills.harmony/`（**尚未入库**） | 真机段复用 `harmony-device-lease`；新增或修改后跑 `quick_validate.py` |
+| **通用 harmony**（`harmonyos-build-doctor`、`harmony-next`、`harmonyos-project-audit`、`harmonyos-release-*`） | `~/Documents/skills.harmony/<name>` | 中央库为唯一真源；更新后重跑 `setup-codex.sh` 注入即生效 |
 
 ```bash
 ~/Documents/skills.harmony/setup-codex.sh .          # 注入 / 校验
@@ -148,13 +150,13 @@ $HDC shell hilog -x | grep com.lichtcui.sourcereader   # 按 bundle 名筛（= m
 例如只在构建排障时注入 `SKILLS=harmonyos-build-doctor setup-codex.sh .`。
 
 `harmony-device-run` 属项目专属：bundle 名从 `AppScope/app.json5` 读取，
-构建 / 安装 / 启动 / 日志命令来自根目录 `.harmony-skill.env`（随仓库提交）。
-改命令后跑 `setup-codex.sh --force .` 重新渲染；`.agents/skills/` 本身也随仓库提交，
-新克隆无需注入即可被 Codex / pi 发现（软链目标需本机存在中央库）。
+构建 / 安装 / 启动 / 日志命令来自根目录 `.harmony-skill.env`（随仓库提交，是渲染输入）。
+改命令后跑 `setup-codex.sh --force .` 重新渲染。`.agents/skills/` 是 `setup-codex.sh` 的**产物**，
+不再进仓库：新克隆必须先注入一次，Codex / pi 才有 harmony skill 可发现。
 
 **skill 没加载时的排查顺序**：
 
-1. `.agents/skills/` 是否存在、软链是否断（`ls -la .agents/skills/`）；
+1. `.agents/skills/` 是否存在（新克隆要先跑一次 `setup-codex.sh`，该目录不再随仓库提交）；
 2. 是否已 `/reload`（pi）或新开会话（Codex skill 列表是启动快照）；
 3. `~/Documents/skills.harmony/` 是否存在（换机后需重新 `git clone` 中央库）。
 
