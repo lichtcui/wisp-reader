@@ -33,7 +33,7 @@ export PATH := $(DEVECO)/Contents/tools/node/bin:$(DEVECO)/Contents/tools/ohpm/b
 DAEMON_FLAG := $(if $(NO_DAEMON),--no-daemon,)
 
 .DEFAULT_GOAL := help
-.PHONY: help rust test test-pregen test-detect probe native-fresh hap hap-release app-release verify-app verify-profile daemon-status daemon-stop install restart run run-release log devices doctor check docs-toc
+.PHONY: help rust test test-pregen test-detect probe native-fresh hap hap-release app-release verify-app verify-profile daemon-status daemon-stop install restart run run-release log devices doctor check docs-toc tts-probe-build tts-probe-models tts-probe-run
 
 help: ## 显示所有可用命令
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -58,6 +58,15 @@ test-pregen: ## 主机上跑 TTS 预生成「客户端纯逻辑」仿真（路�
 
 test-detect: ## 主机上跑检测作业状态机与 fingerprint 契约测试（秒级）
 	python3 scripts/detect-job-sim.py
+
+tts-probe-build: ## 构建鸿蒙 TTS RTF 探针（OHOS arm64，不安装 App）
+	scripts/tts-probe/build-ohos.sh
+
+tts-probe-models: ## 下载 TTS 候选模型到仓库外缓存（约 400 MB）
+	scripts/tts-probe/download-models.sh
+
+tts-probe-run: ## 在唯一已连接设备上跑 TTS RTF 矩阵（ARGS 可附加参数）
+	python3 scripts/tts-probe/run_device.py $(ARGS)
 
 ## ── HAP ─────────────────────────────────────────────────────────────────────
 

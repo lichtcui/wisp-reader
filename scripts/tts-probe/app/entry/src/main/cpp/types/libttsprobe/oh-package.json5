@@ -1,0 +1,6 @@
+{
+  "name": "libttsprobe.so",
+  "types": "./index.d.ts",
+  "version": "0.1.0",
+  "description": "On-device sherpa-onnx TTS RTF probe"
+}
