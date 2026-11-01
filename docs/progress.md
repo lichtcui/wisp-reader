@@ -19,7 +19,7 @@
 - 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L115
 - 在办：书源管理改造（3000 条） — L149
 - 未决 / 风险 — L264
-- 交接备忘 — L384
+- 交接备忘 — L393
 <!-- TOC:END -->
 
 ---
@@ -312,6 +312,15 @@ Checkpoint 2 除“与人对齐后再进 Phase 4”外已通过。Phase 3 的 `T
   修法：新增 `RuleToken::TextContains` + `html_extractor::apply_text_filter`（自身文本包含关键字、大小写不敏感）；`make test` **56 → 58 项全过**、`probe search 剑来` 零回归、`make rust` 成功。
   **设备侧已于 2026-10-12 复验**（换源时旧缓存被清、重爬得 1308 章，见上文「换源」条）；同批定性的「《大唐》目录加载失败」在主机侧无法复现（`probe toc` 正常 1449 条）⇒ 非引擎缺陷。
   证据 → [`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §17、[`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-READ-4、[`PITFALLS.md`](./PITFALLS.md)。
+- **T-READ-5 长章节首屏冻结（2026-10-30 真机实证并修复）**：打开《剑来》第 25 章要 5s 才出字，系统日志 `WMSMain OnVsyncTimeOut` 同步报单帧 **2.63s**。两支根因：
+  ① 内置 `小说`（yetianlian.info）源 `ruleContent.nextContentUrl = text.下一章@href` —— 语义应是「本章**分页**的下一页」，实际匹配到「下一章」，
+  引擎 `content_inner` 顺链追到 `MAX_PAGES = 30 页` 全拼进同一章（设备缓存 `chapters/4b445f13_25.json` = **394KB / 133,983 字 / 2405 段**，内嵌 30 条链接，相邻章重复 29 章；
+  站点单页正文实测 **4.3k 字**、无分页标记 ⇒ 该规则多余），已删；
+  ② `rebuildWindow` 每次全量重排上/本/下三章（413 页 / 6674 次 measure / 604ms），暖载邻章后又整体重建一次（1244 页 / 19,978 次 / 1942ms），
+  修法：按章缓存分页结果（`pageCache` + `chapterPages` + `layoutKey`，排版参数变化即整体失效）+ Swiper `ForEach` → `LazyForEach`（新 `common/PageDataSource.ets`，`PageSeg` 抽到 `common/PageSeg.ets`）。
+  **真机复验（设备 `33Z0224424136564`，debug）**：首屏 604ms/6674 测 → **27ms/209 测**，暖载后 1942ms → **209ms**，**vsync 超时 1 次 → 0 次**，正文就绪 **~2.7s → 0.77s**；
+  缓存直证（同章二次排版）`measures=0`。未修：转场 + 迁移列表仍有 ~4s（该源目录被站点重排，迁移在解析旧快照）、该源目录后半段倒序；
+  release 未复跑（无新增 JSON 字段，未动 keep）。证据 → [`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §22、[`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-READ-5。
 - **书架编辑模式（多选删除）**：已实施并真机验证（2026-10-07，D1–D21）—— 见上文同名节；
   计划 / 逐步代码 / DoD 逐条证据见 [`archive/SHELF-EDIT-PLAN.md`](./archive/SHELF-EDIT-PLAN.md)（§7 / §8 / §10 / §12.3），
   五轮审计轨迹原文见 [`archive/PROGRESS-HISTORY.md`](./archive/PROGRESS-HISTORY.md) §附。

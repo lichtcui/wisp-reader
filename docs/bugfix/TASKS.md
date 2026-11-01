@@ -621,6 +621,35 @@
     书源 id 一次调用 `sourcesForEngine(ids)`，并把 `getBooks()` / `getAllProgress()` 的列下标解析移出逐行循环。
     同 URL 孪生源继续优先取启用行，书架条目与返回顺序不变。
 
+- [x] **T-READ-5（P1）长章节首屏冻结（真机实证，已修）**：打开《剑来》第 25 章要 **5s 才出字**，系统日志同时刻出现
+  `WMSMain OnVsyncTimeOut` + `Vsync PrintRequestTs: recv vsync timeout ... timeInterval:2630443928ns`（= **单帧 2.63s**）。
+  - **根因（两支）**：
+    ① **书源规则**：内置 `小说`（yetianlian.info）的 `ruleContent.nextContentUrl = text.下一章@href` —— `nextContentUrl` 的语义是
+    「**本章**正文分页的下一页」，而 `text.下一章` 匹配的是**下一章**的链接。引擎 `content_inner` 会顺着它追到 `MAX_PAGES = 30`
+    并**全部拼进同一章**，于是每章 = 30 章正文（设备侧章节缓存 `4b445f13_25.json` = **394KB / 133,983 字 / 2405 段**，内嵌
+    `649743..649772` 共 30 个链接；相邻章**重复 29 章**，ch26 首句出现在 ch25 第 71 行），换一章还要顺序发 30 个 HTTP 请求。
+    站点每页正文实测 ~4.3k 字，`div#content.showtxt` 已是完整一章，**该站根本没有分页** ⇒ 该规则纯属多余。
+    ② **分页算法**：长章节下 `rebuildWindow` 要同时排 上/本/下 三章全部页流（413 页 / 6674 次 `measureTextSize` / 604ms），
+    且暖载邻章回来后 `warmNeighbors` 再整体重建一次（1244 页 / 19,978 次 measure / **1942ms**，其中约 600ms 是把本章重排一遍的纯重复劳动）。
+    ⇒ 这是「规则错得更狠时也不会冻」的兜底缺口，与 ① 分开修。
+  - 修法：① 删掉该源 `ruleContent.nextContentUrl`（主机 `probe` 复核：`正文：4305 字，nextUrl=（无）`）；
+    ② `Reader.paginateChapter` 结果按章缓存（`pageCache` / `chapterPages` / `layoutKey`，排版参数 = 宽 × 高 @ 字号 / 行距，任一变化整体失效；
+    `resetContentState` 与 `applyChapter` 同步清理）—— 只这一处就把「本章排两遍」降成排一遍；
+    ③ Swiper 内 `ForEach` → `LazyForEach`（新 `common/PageDataSource.ets`，`PageSeg` 抽到 `common/PageSeg.ets`），其余页不实例化。
+  - **真机验证（2026-10-30 · 设备 `33Z0224424136564` · debug · `make run`）**：修复前 `rebuildWindow pages=413 measures=6674
+    measureMs=604` + `(from warmNeighbors) 1942ms`、**vsync timeout 1 次 / 2630ms**；修复后首屏 `pages=14 measures=209 measureMs=27`、
+    暖载后 `pages=52 measures=548 measureMs=209`、**vsync timeout 0 次**。缓存生效的直接证据：同一章因邻章 warm 而重排时，
+    短章从 `pages=7 measures=94 → pages=21 measures=210` 变为 `pages=15 measures=0 → pages=23 measures=134`（**0 次重测**）；
+    字号 18→20 连按两次只测 362 / 425 次（无缓存时单章约 2000 次）。章内时间线：toc 4ms / refreshDownloadState 32ms /
+    fetchContent 657ms / sanitize 2ms / 首次排版 27ms，全部就绪 **0.77s**。
+  - 未覆盖：剩余 ~4s 在转场与「迁移列表」判定（该源目录已被站点重排，`index 25` 现是「第十四章 五月初五」，迁移在解析**旧**快照），
+    属另一条链路，本轮不动；release 包未复跑（不涉混淆面，无新增 JSON 字段 ⇒ 未动 keep 列表）。
+  - 顺带记录（未修）：该源目录后半段是 `第84章 / 第83章 / 第82章 …` 倒序，疑似站点目录分页本身倒排（`tocs/4b445f13.json` 1321
+    条目首尾可见），与本次冻结无关。
+  - 证据：`entry/src/main/resources/rawfile/bundled-sources.json`（`小说` 源 `ruleContent`）、`rust/legado-engine/src/runtime.rs`
+    `content_inner`（`MAX_PAGES` 追链循环）、`entry/src/main/ets/pages/Reader.ets`（`pageCache` / `chapterPages` / `layoutKey` /
+    `contentPager`）、`entry/src/main/ets/common/PageDataSource.ets`、`entry/src/main/ets/common/PageSeg.ets`
+
 ## 听书（Listening / TTS）
 
 - [x] **T-TTS-1（R6）单例与引擎释放**：`stop()` 释放 `engine`（`shutdown`）并考虑重置单例；`onDestroy` 后不复用失效 `ctx`。

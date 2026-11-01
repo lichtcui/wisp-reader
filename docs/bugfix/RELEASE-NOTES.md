@@ -919,3 +919,80 @@ JSON 的 `stringify` / `parse` 与备份事务语义未变。
 - 未单独复测「全新导入一份重复 TXT」这一条路径，以避免向用户书架增加测试书；旧行修复已走真机，
   新导入与旧行修复共用同一套已通过主机断言的解析与规范化函数。该修复只规范本地书元数据，不会自动把
   `local://` 书绑定到在线书源。
+
+---
+
+## 22. 增量（2026-10-30）：长章节首屏冻结（T-READ-5）—— ✅ 真机实证并修复
+
+### 22. T-READ-5 现象与取证
+
+打开《剑来》第 25 章，正文出现要 **5s**；同一时刻系统日志报
+`WMSMain OnVsyncTimeOut` + `Vsync PrintRequestTs: recv vsync timeout ... timeInterval:2630443928ns`，
+即**单个渲染帧耗时 2.63s**。应用侧临时埋点（`rg -n "TEMP PERF|PERF " entry/src/main/ets`）给出链路：
+
+| 阶段 | 修复前 |
+|---|---|
+| `getCachedToc` / `loadToc HIT` | 读 1ms + parse 1ms / 2ms（1321 章，163KB，**未走网络**） |
+| `buildTocItems` | 4ms |
+| `refreshDownloadState` | 44ms |
+| `sanitizeText` | 14ms，**paras=2405 chars=133983** ← 异常 |
+| 首次 `rebuildWindow` | **604ms**（6674 次 measure，413 页） |
+| `warmNeighbors → rebuildWindow` | **1942ms**（19,978 次 measure，1244 页） |
+| 累计到正文 | **2719ms** |
+
+### 22.1 根因一：书源规则把 30 章拼成一章
+
+内置 `小说`（`http://www.yetianlian.info`）的 `ruleContent.nextContentUrl = text.下一章@href`。
+`nextContentUrl` 的语义是「**本章**正文分页的下一页」，而 `text.下一章` 匹配的是**下一章**；引擎
+`rust/legado-engine/src/runtime.rs` `content_inner` 会顺着它最多追 `MAX_PAGES = 30` 页并全部拼进同一章。
+
+设备侧取证（`hdc file recv .../files/chapters/4b445f13_2{4,5,6}.json`）：
+
+| 章节 | 字节 | 段数 | 内嵌链接 |
+|---|---|---|---|
+| ch24 | 136,376 | 2439 | 30 个（`649742..649771`） |
+| ch25 | 133,983 | 2404 | 30 个（`649743..649772`） |
+| ch26 | 133,612 | 2387 | 30 个（`649744..649773`） |
+
+ch26 首句出现在 ch25 第 71 行 ⇒ **相邻章重复 29 章正文**。主机 `curl` 实测单页正文 **4,309 字**、页面内
+`下一页` / `下页` / `_2.html` 命中 **0 次** ⇒ 该站根本不存在正文分页，这条规则纯属多余。
+
+修法：删掉该源 `ruleContent.nextContentUrl`。主机 `make probe` 复核：修前返回多页拼接体；修后
+`正文：4305 字，nextUrl=（无）`。旧缓存按域名作废（`chapters/4b445f13_*.json` 已清，缓存在下一次打开时重新生成）。
+
+### 22.2 根因二：分页窗口每次重建都全量重排
+
+严重度与篇幅强相关，但它是**兜底缺口**：上游再错一次（或遇到天然超长章）仍会冻。`rebuildWindow` 一次要排
+上/本/下三章**全部**页流，而 `warmNeighbors` 暖载完邻章后还要整体重排一次 —— 本次章在这一步里被**重排两遍**。
+
+修法：`pages = F(章文本, 排版参数)`，其中排版参数 = 内容宽 × 高 @ 字号 / 行距。
+1. `Reader.pageCache: Map<number, PageSeg[][]>` + `chapterPages(index, paras)`：命中直接返回；
+   `layoutKey()` 指纹变化（含 `onAreaChange` 尺寸变化、`changeFont`、`changeLineHeight`）→ 整体清空。
+   `applyChapter`（正文可能变）与 `resetContentState`（换源 / 换书）分别 `delete` / `clear`，不留脏页。
+2. `Swiper` 内 `ForEach` → `LazyForEach`：新 `common/PageDataSource.ets`（`IDataSource`，`onDataReloaded` 通知），
+   `PageSeg` 从 `Reader.ets` 抽到 `common/PageSeg.ets` 供两者共用。原先一次性实例化整本页流（本页 413，warm 后 1244）。
+
+### 22.3 真机验证（2026-10-30 · 设备 `33Z0224424136564` · debug · `make run`）
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| 首屏 `rebuildWindow` | pages=413 / measures=6674 / **604ms** | pages=14 / measures=209 / **27ms** |
+| `warmNeighbors` 后重建 | pages=1244 / measures=19,978 / **1942ms** | pages=52 / measures=548 / **209ms** |
+| vsync timeout（2.63s 丢帧） | **1 次** | **0 次** |
+| 正文就绪 | ~2.7s（+ 转场 → 5s） | **0.77s** |
+
+- 章内时间线（修复后）：toc 4ms / `refreshDownloadState` 32ms / `fetchContent` 657ms / `sanitizeText` 2ms / 首次排版 27ms → **769ms**。
+- **缓存生效的直接证据**（同一次进入里同一章被重排）：
+  短章节 `pages=7 measures=94`（邻章暖载前）→ `pages=21 measures=210`（暖载后拼接重排）；
+  再进一章 `pages=15 measures=0` → `pages=23 measures=134` ⇒ **本章 0 次重测**，只排了增量邻章。
+  无缓存时单章约 2,000 次 measure；连按两次字号 18→20 只测 362 / 425 次。
+- 顺带：该源一本书的章节磁盘缓存由 30×~394KB 降为单章级，换章请求数 30 → 1。
+
+### 22.4 未覆盖 / 顺带记录（未修）
+
+- 修复后仍有约 **4s** 在「转场 + 迁移列表」判定：该源目录已被站点重排（`tocs/4b445f13.json` 1321 条里 `index 25`
+  现是「第一卷 笼中雀 第十四章 五月初五」，而 `index 0` 是「第84章 上升地」），迁移在解析旧进度快照。
+  属另一条链路（进度迁移），本次不动。
+- 该源目录后半段 `第84章 / 第83章 / 第82章 …` **倒序**，疑似站点目录分页本身倒排，与本次冻结无关。
+- release 包未复跑：纯 ArkTS + 资源改动，**无新增 JSON 字段** ⇒ 未动 `obfuscation-rules.txt` keep 列表；`make check` 待跑。
+- 埋点仍在（`PERF` 前缀，样例日志见上）—— 复验后按需删除；不影响卡顿（均在微秒~毫秒级或已排到正文之后）。

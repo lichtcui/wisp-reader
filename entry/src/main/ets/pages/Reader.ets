@@ -7,7 +7,8 @@
 //             （正文清洗不在本文件：统一走 model/BookContent.sanitizeText，见 T-READ-1）
 //   章内导航：isReadable / firstReadable / nextReadable / prevReadable / prevChapter / nextChapter / prevPage / nextPage / onPageChanged
 //   分页测算（横向分页核心）：availWidthPx / availHeightPx / measureOptions / measureHeight / maxCharsFit / paraMargin
-//                             paginateChapter / rebuildWindow / flatIndexOf / pageIdFor / indexOfPageId / PageSeg
+//                             paginateChapter / chapterPages / layoutKey / rebuildWindow / flatIndexOf / pageIdFor / indexOfPageId
+//                             （PageSeg 与 Swiper 的懒数据源在 common/PageSeg.ets、common/PageDataSource.ets）
 //   进度持久化：persistProgress / locateCurrentToc / tocPosition
 //   主题：systemDark / resolveColorHex / applyFullScreen / toggleNight / bgColor / textColor / dimColor
 //         changeFont / changeLineHeight
@@ -25,6 +26,8 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { bookEngine } from '../engine/BookEngineNapi';
 import { Book, BookSearchItem, BookSource, Chapter, ReadProgress } from '../engine/types';
 import { ChapterDataSource } from '../common/ChapterDataSource';
+import { PageDataSource } from '../common/PageDataSource';
+import { PageSeg } from '../common/PageSeg';
 import { BookCover } from '../components/BookCover';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 import {
@@ -80,24 +83,6 @@ const DOMAIN: number = 0x0000;
 const TAG: string = 'SourceReaderReader';
 const PANEL_SETTINGS: string = 'settings';
 const PANEL_SOURCE: string = 'source';
-
-/** 一页中的一个段落片段：指向某章某段落的一段字符区间（段落可跨页拆分）。 */
-class PageSeg {
-  /** 所属章节在 this.chapters 里的下标（跨章连续页流需要据此取对应章的段落文本）。 */
-  chapterIndex: number;
-  para: number;
-  start: number;
-  end: number;
-
-  constructor(chapterIndex: number, para: number, start: number, end: number) {
-    this.chapterIndex = chapterIndex;
-    this.para = para;
-    this.start = start;
-    this.end = end;
-  }
-}
-
-
 
 @ComponentV2
 export struct ReaderPage {
@@ -168,6 +153,17 @@ export struct ReaderPage {
   private tocSession: number = 0;
   /** 各章已 sanitize 的段落缓存（key=章节下标）。跨章连续页流需要同时分页上一章/本章/下一章。 */
   private paraCache: Map<number, string[]> = new Map();
+  /**
+   * 分页结果缓存：章号 → 该章的页流。
+   *
+   * `rebuildWindow` 每次都会重排窗口内三章（上/本/下），暖载邻章回来还要再整体重排一次；
+   * 没有缓存时本章在一次进入里会被排两遍（实测 25 万字级章节 ≈ 600ms × 2）。
+   * 失效条件是**排版参数**（宽度/高度/字号/行距）任一变化，见 `layoutKey`。
+   */
+  private pageCache: Map<number, PageSeg[][]> = new Map();
+  private pageCacheKey: string = '';
+  /** Swiper 的懒加载数据源：页流变化时 `setItems` 通知重建，不再一次性挂载全部页。 */
+  private pageSource: PageDataSource = new PageDataSource();
   /**
    * 在飞的引擎请求（key = `bookId#index`，与 `ChapterCache.memoryKey` 同形）。
    * 频繁切章时同一章会被多个调用方同时索要（新章 + 上一次 `warmNeighbors()` 的邻居 +
@@ -695,6 +691,8 @@ export struct ReaderPage {
     this.chapterIndex = index;
     this.paragraphs = paragraphs;
     this.paraCache.set(index, paragraphs);
+    // 正文可能变了（重试 / 换源 / 章节内容更新），旧页流不能再复用。
+    this.pageCache.delete(index);
     this.sliderValue = index + 1;
     this.paragraphIndex = restoreAtEnd
       ? (paragraphs.length > 0 ? paragraphs.length - 1 : 0)
@@ -711,6 +709,7 @@ export struct ReaderPage {
       this.rebuildWindow(restoreAtEnd);
     } else {
       this.pages = [];
+      this.pageSource.setItems([]);
     }
   }
 
@@ -885,6 +884,33 @@ export struct ReaderPage {
    * 容量用 vp2px(可用高度)、段下边距同样 vp2px 换算，保持与渲染完全一致：
    * 既不会页面排不满，也不会末行被裁。
    */
+  /** 排版参数指纹：任一变化都必须废弃全部分页缓存（否则页数/截断点会对不上渲染）。 */
+  private layoutKey(): string {
+    return this.contentWidth.toString() + 'x' + this.contentHeight.toString() +
+      '@' + this.fontSize.toString() + '/' + this.lineHeight.toString();
+  }
+
+  /**
+   * 取某章的页流（带缓存）。
+   *
+   * 缓存是**必要**而非优化：窗口内三章每次 `rebuildWindow` 都会重排，而暖载邻章完成后
+   * 还会整体再排一次，本章在单次进入里要排两遍；实测 13 万字/2400 段级章节单章 ≈ 600ms。
+   */
+  private chapterPages(chapterIndex: number, paras: string[]): PageSeg[][] {
+    const key: string = this.layoutKey();
+    if (key !== this.pageCacheKey) {
+      this.pageCache.clear();
+      this.pageCacheKey = key;
+    }
+    const hit: PageSeg[][] | undefined = this.pageCache.get(chapterIndex);
+    if (hit !== undefined) {
+      return hit;
+    }
+    const pages: PageSeg[][] = this.paginateChapter(paras, chapterIndex);
+    this.pageCache.set(chapterIndex, pages);
+    return pages;
+  }
+
   private paginateChapter(paras: string[], chapterIndex: number): PageSeg[][] {
     const capacity: number = this.getUIContext().vp2px(this.availHeightPx());
     const pages: PageSeg[][] = [];
@@ -1010,17 +1036,18 @@ export struct ReaderPage {
     if (prev >= 0) {
       const p: string[] | undefined = this.paraCache.get(prev);
       if (p !== undefined && p.length > 0) {
-        flat = flat.concat(this.paginateChapter(p, prev));
+        flat = flat.concat(this.chapterPages(prev, p));
       }
     }
-    flat = flat.concat(this.paginateChapter(this.paragraphs, this.chapterIndex));
+    flat = flat.concat(this.chapterPages(this.chapterIndex, this.paragraphs));
     if (next >= 0) {
       const n: string[] | undefined = this.paraCache.get(next);
       if (n !== undefined && n.length > 0) {
-        flat = flat.concat(this.paginateChapter(n, next));
+        flat = flat.concat(this.chapterPages(next, n));
       }
     }
     this.pages = flat;
+    this.pageSource.setItems(flat);
     if (atEnd) {
       this.pageIndex = this.lastIndexOf(this.chapterIndex);
       const segs: PageSeg[] | undefined = this.pages[this.pageIndex];
@@ -1317,9 +1344,12 @@ export struct ReaderPage {
     this.loadGen = this.loadGen + 1;
     this.tocSession = this.tocSession + 1;
     this.paraCache.clear();
+    this.pageCache.clear();
+    this.pageCacheKey = '';
     this.inflight.clear();
     this.currentPageId = '';
     this.pages = [];
+    this.pageSource.setItems([]);
     this.pageIndex = 0;
     this.paragraphs = [];
     this.paragraphIndex = 0;
@@ -1799,7 +1829,9 @@ export struct ReaderPage {
   @Builder
   contentPager() {
     Swiper(this.swiperController) {
-      ForEach(this.pages, (page: PageSeg[], pageIdx: number) => {
+      // LazyForEach：只实例化可视页与预加载页。原先的 ForEach 在长章节（单章可达数百页）下
+      // 会一次性挂载整个页流，首帧代价随页数线性增长。
+      LazyForEach(this.pageSource, (page: PageSeg[], pageIdx: number) => {
         Column() {
           ForEach(page, (seg: PageSeg) => {
             Text(this.paragraphsOf(seg.chapterIndex)[seg.para].substring(seg.start, seg.end))

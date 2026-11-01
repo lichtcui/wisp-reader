@@ -74,8 +74,7 @@
       "coverUrl": "img@src"
     },
     "ruleContent": {
-      "content": "div#content.showtxt@text",
-      "nextContentUrl": "text.下一章@href"
+      "content": "div#content.showtxt@text"
     },
     "ruleToc": {
       "chapterList": "dd",
