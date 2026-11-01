@@ -650,6 +650,19 @@
     `content_inner`（`MAX_PAGES` 追链循环）、`entry/src/main/ets/pages/Reader.ets`（`pageCache` / `chapterPages` / `layoutKey` /
     `contentPager`）、`entry/src/main/ets/common/PageDataSource.ets`、`entry/src/main/ets/common/PageSeg.ets`
 
+- [x] **T-READ-6（P2）目录正/倒序切换把抽屉整个重挂载（重播开启动画）**：阅读页打开目录后点「正序/倒序」，抽屉会消失再从底部上滑一次（**用户 2026-11-02 反馈**：「点正序/倒序会触发重新打开抽屉」）。
+  - 根因（两层）：① `Reader.build()` 用 `if (this.tocDescending) { BottomDrawer(...) } else { BottomDrawer(...) }` **两个分支**挂载同一个目录抽屉（`bd2a343` → `0eb1e1c`，为绕过 V2 下 `@BuilderParam` 内容不随父组件普通 `@Local` 重跑）；② ArkUI 的 `if/else` 是**结构性**节点 —— 条件翻转 = 旧分支销毁 + 新分支新建，新实例的 `@Local`（`overlayShown` / `panelShown` / `panelHeight` / `panelMeasured`）全部复位，而 `visible: this.panel === PANEL_TOC` **仍为 `true`** ⇒ `aboutToAppear()` 直接 `openOverlay()`，从 `panelSlideOut()` 重播 `OVERLAY_OPEN_MS = 260ms` 上滑动画；旧实例的 `visible` 从未变成 `false` ⇒ 连关闭动画都没有（观感 = 面板闪一下再滑上来）。
+  - 修法（一处状态源）：`pages/Reader.ets` 恢复**单处常驻挂载** + 新增 `@Local tocContentRevision`，`toggleTocOrder()` 改序后自增；`ui/common/BottomDrawer.ets` 新增 `@Param contentRevision`，并在内容区读取它（`contentArea()` 的 `padding.top`，恒为 `contentRevision * 0`）登记依赖 ⇒ revision 变化时抽屉**原地**重渲染，`content()` 重跑（表头「正序/倒序」+ LazyForEach 重键），`overlayShown` / `panelHeight` 保留、无动画重播。列表顺序仍由 `buildTocItems()` 的 `setItems()`（`onDataReloaded`）负责，与该参数无关。
+  - 验证（主机侧 2026-11-02）：`make hap` **BUILD SUCCESSFUL in 19s**（`.hvigor/outputs/build-logs/build.log`），`Reader.ets` / `BottomDrawer.ets` 无新增 ArkTS 告警。转译产物直证机制 —— `…/esmodule/debug/…/pages/Reader.ts` 目录抽屉只剩**一处** `BottomDrawer(this, {… contentRevision: this.tocContentRevision …})`，父侧更新走 `updateStateVarsOfChildByElmtId`；`…/ui/common/BottomDrawer.ts` 的 `contentArea()` 里 `this.content.bind(this)()` 在 `observeComponentCreation2` **之外**无条件执行 ⇒ 组件重渲染必然重跑内容 builder。`scripts/check-keep-props` / `check-hilog-format` / `check-source-consumers` / `check-t16-bench` 全 ✓（`make check` 仍因**既有** `docs/research/BOOKSOURCE-REVAMP-TODO.md` 指向已过期的 `/tmp` 证据文件而失败，与本改动无关）；调用点计数 8 → 7（UI-SPEC §2 同步）。
+  - **真机验证（2026-11-02 · 设备 `33Z0224424136564` · debug · `make run` 强制重编后安装）**：打开《剑来》→ 目录抽屉打开（`正序`）→ 点「正序」：
+    ① **标签原地翻转**：`正序` → `倒序`，且两次切换（正→倒→正）该 Text 的 `accessibilityId` **恒为 136**（未重建）；
+    ② **抽屉宿主未重建**：抽屉根链 `Stack 114 → Column 116/118/119/123/124 → Row 131 / List 137` 在切换前后 elmtId **完全一致**；
+    ③ **列表顺序确实翻转**：`第84章…第73章 → 第一章/第二章` ⇄ `第二章/第一章 → 第73章…`（切回后复原）；
+    ④ **切换瞬间无可视重开动画**：点击前后连拍 16 帧（`uitest screenCap`，约 0.5s/帧，点击落在第 2–3 帧之间）逐帧 OCR —— `f01/f02` = `正序`、`f03–f16` = `倒序`，**每一帧都能读到抽屉表头的「定位」**，且没有任何一帧读到只属于正文的段落文字（如「幽冥剑」「陈非凡」）⇒ 面板从未消失或上滑；
+    ⑤ 收尾：点遮罩可关闭（`定位` 消失、正文回归）、关闭后页面仍可点击（再点中央顶栏章节名 `第80章 一一风荷举` + 进度条出现）；`make log` 无 JSCRASH/应用级 error（仅一条既有 `AceTheme … slider_pixels_per_inch` 警告）。
+  - 未覆盖：release 包未复跑（不涉混淆面，无新增 JSON 字段 ⇒ 未动 keep）；下拉拖拽关闭未在切换后单独复验（该手势路径未改）。
+  - 证据：`entry/src/main/ets/pages/Reader.ets`（`tocDescending` / `tocContentRevision` / `toggleTocOrder` / `buildTocItems` / `build()` 目录抽屉调用点）、`entry/src/main/ets/ui/common/BottomDrawer.ets`（`contentRevision` / `contentArea` / `aboutToAppear` / `openOverlay` / `OVERLAY_OPEN_MS`）、`docs/specs/UI-SPEC.md` §1.1「内容刷新」/ §2 / §3。
+
 ## 听书（Listening / TTS）
 
 - [x] **T-TTS-1（R6）单例与引擎释放**：`stop()` 释放 `engine`（`shutdown`）并考虑重置单例；`onDestroy` 后不复用失效 `ctx`。

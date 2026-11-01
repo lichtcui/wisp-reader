@@ -1,7 +1,7 @@
 // ─── 文件索引（改本文件先看这里；本文件约 1426 行）──────────────────────────
 // 下面只列**成员名**，不列行号（行号会漂）；定位用 `grep -n "<名字>" entry/src/main/ets/pages/Reader.ets`。
 //   状态（@Local）：chapters / chapterIndex / paragraphs / paragraphIndex / pages / pageIndex / sliderValue
-//                   menuVisible / panel / tocDescending / fontSize / lineHeight / nightMode / oneHandMode / tts
+//                   menuVisible / panel / tocDescending / tocContentRevision / fontSize / lineHeight / nightMode / oneHandMode / tts
 //   生命周期：aboutToAppear / aboutToDisappear / onTtsProgress（@Monitor 听书进度 → 高亮 + 跟随滚动）
 //   加载正文：loadToc / refreshToc / load / loadChapter / applyChapter / fetchContent / fetchRemote / cachedContent / warmNeighbors
 //             （正文清洗不在本文件：统一走 model/BookContent.sanitizeText，见 T-READ-1）
@@ -113,6 +113,12 @@ export struct ReaderPage {
   @Local menuVisible: boolean = false;
   @Local panel: string = PANEL_NONE;
   @Local tocDescending: boolean = false;
+  // 目录抽屉的内容版本号：顺序状态在抽屉**外**（本组件），而 V2 下父组件普通 `@Local`
+  // 变化不会让 `@BuilderParam` 内容重跑（子组件没变脏）→ 表头「正序/倒序」与列表仍旧。
+  // 曾经靠 `if (this.tocDescending)` 分支重挂载整个抽屉绕过，代价是每次切序重播一次
+  // 上滑开启动画（用户反馈「点正序/倒序又重开一次抽屉」）。改为切序时自增此值，
+  // 抽屉因自己的 `@Param` 变化**原地**重渲染 → 内容刷新，开合状态不动。
+  @Local tocContentRevision: number = 0;
   @Local fontSize: number = READER_FONT_SIZE_DEFAULT;
   @Local lineHeight: number = READER_LINE_HEIGHT_DEFAULT;
   @Local nightMode: boolean = READER_NIGHT_DEFAULT;
@@ -1472,6 +1478,8 @@ export struct ReaderPage {
   private toggleTocOrder(): void {
     this.tocDescending = !this.tocDescending;
     this.buildTocItems();
+    // 通知常驻的目录抽屉原地重渲染（表头标签 + LazyForEach 重键）；见 `tocContentRevision`。
+    this.tocContentRevision += 1;
     // Keep the current chapter in view after the list flips order.
     setTimeout(() => {
       try {
@@ -1966,37 +1974,24 @@ export struct ReaderPage {
         })
       }
 
-      // @BuilderParam content is not re-evaluated on plain state change under
-      // V2, so flip between two drawer instances to re-run the LazyForEach with
-      // the freshly ordered data source.
-      if (this.tocDescending) {
-        BottomDrawer({
-          visible: this.panel === PANEL_TOC,
-          sheetSize: 'large',
-          mode: 'overlay',
-          showHeader: false,
-          panelBackground: this.bgColor(),
-          lineColor: this.lineColor(),
-          onClose: () => {
-            this.panel = PANEL_NONE;
-          }
-        }) {
-          this.tocDrawerContent()
+      // 目录抽屉**常驻挂载**（UI-SPEC §1.1）：顺序刷新由 `buildTocItems()` 的
+      // `setItems()` 完成，内容重建交给 `contentRevision`（原地重渲染）。
+      // 曾经用 `if (this.tocDescending)` 分支持序重挂载：那会把整个抽屉销毁重建，
+      // 新实例的 `@Local` 复位、`visible` 仍为 true ⇒ `aboutToAppear` 重播 260ms
+      // 上滑开启动画（真机观感 = 点正序/倒序时抽屉又「重开」一次）。
+      BottomDrawer({
+        visible: this.panel === PANEL_TOC,
+        sheetSize: 'large',
+        mode: 'overlay',
+        showHeader: false,
+        contentRevision: this.tocContentRevision,
+        panelBackground: this.bgColor(),
+        lineColor: this.lineColor(),
+        onClose: () => {
+          this.panel = PANEL_NONE;
         }
-      } else {
-        BottomDrawer({
-          visible: this.panel === PANEL_TOC,
-          sheetSize: 'large',
-          mode: 'overlay',
-          showHeader: false,
-          panelBackground: this.bgColor(),
-          lineColor: this.lineColor(),
-          onClose: () => {
-            this.panel = PANEL_NONE;
-          }
-        }) {
-          this.tocDrawerContent()
-        }
+      }) {
+        this.tocDrawerContent()
       }
 
       BottomDrawer({

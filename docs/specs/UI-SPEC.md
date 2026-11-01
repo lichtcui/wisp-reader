@@ -23,6 +23,7 @@
 | `mode` | **固定 `'overlay'`**。`'system'`（`bindSheet`）分支保留仅为兼容，**新代码禁止使用** |
 | 直接 `bindSheet` | **禁止**（裸 `bindSheet` 视为缺陷）；`bindMenu` 不算抽屉，不在此范围 |
 | 挂载方式 | **常驻挂载**：`BottomDrawer({ visible: this.flag })`，`@Monitor('visible')` 驱动动画。**禁止** `if (this.flag) { BottomDrawer({ visible: true }) }`（首帧即最终态 → 无上滑动画） |
+| 内容刷新 | 抽屉内容（`@BuilderParam`）依赖**抽屉外**状态时，父组件自增 `@Param contentRevision` 触发**原地**重渲染（builder 重跑，`overlayShown` / `panelHeight` 保留）。**禁止**用 `if (flag) { BottomDrawer(...) }` 分支重挂载刷内容 —— 新实例 `@Local` 全部复位而 `visible` 仍为 `true`，`aboutToAppear` 会**重播开启动画** |
 | 显隐动画 | 打开 `260ms` / 关闭 `200ms`，`Curve.FastOutSlowIn`。**禁止按页面自定义时长**（常量 `OVERLAY_OPEN_MS` / `OVERLAY_CLOSE_MS`） |
 
 ### 1.2 打开/关闭行为（「从屏幕最底部上滑」）
@@ -159,25 +160,27 @@
 
 ---
 
-## 2. 调用点清单（**共 8 处，样式改动必须全部同步**）
+## 2. 调用点清单（**共 7 处，样式改动必须全部同步**）
 
-| # | 位置（快照 `6054929`） | 场景 | `sheetSize` | `showHeader` | 背景 |
+| # | 位置（快照 `6054929`；行号已漂） | 场景 | `sheetSize` | `showHeader` | 背景 |
 |---|---|---|---|---|---|
-| 1 | `pages/Reader.ets:1383` | 阅读页 · 目录（倒序） | `large` | `false` | `this.bgColor()` |
-| 2 | `pages/Reader.ets:1396` | 阅读页 · 目录（正序） | `large` | `false` | `this.bgColor()` |
-| 3 | `pages/Reader.ets:1410` | 阅读页 · 阅读设置 | `fit` | `false` | `this.bgColor()` |
-| 4 | `pages/SearchResult.ets:633` | 搜索结果 · 源状态 | `large` | 默认 `true` | 默认 |
-| 5 | `pages/SearchResult.ets:645` | 搜索结果 · 选择来源 | `large` | 默认 `true` | 默认 |
-| 6 | `pages/BookSourceManage.ets:1875` | 书源管理 · 书源详情（整行 / 菜单共用） | `large` | 默认 `true` | 默认 |
-| 7 | `pages/Listening.ets:382` | 听书页 · 目录 | `large` | 默认 `true` | 默认 |
-| 8 | `pages/Reader.ets`（`grep -n "PANEL_SOURCE"`） | 阅读页 · 换源（v1.1） | `large` | `true`（传 `titleColor` / `iconColor`） | `this.bgColor()` |
+| 1 | `pages/Reader.ets`（`grep -n "PANEL_TOC"`） | 阅读页 · 目录（正/倒序**共用一处**） | `large` | `false` | `this.bgColor()` |
+| 2 | `pages/Reader.ets:1410` | 阅读页 · 阅读设置 | `fit` | `false` | `this.bgColor()` |
+| 3 | `pages/SearchResult.ets:633` | 搜索结果 · 源状态 | `large` | 默认 `true` | 默认 |
+| 4 | `pages/SearchResult.ets:645` | 搜索结果 · 选择来源 | `large` | 默认 `true` | 默认 |
+| 5 | `pages/BookSourceManage.ets:1875` | 书源管理 · 书源详情（整行 / 菜单共用） | `large` | 默认 `true` | 默认 |
+| 6 | `pages/Listening.ets:382` | 听书页 · 目录 | `large` | 默认 `true` | 默认 |
+| 7 | `pages/Reader.ets`（`grep -n "PANEL_SOURCE"`） | 阅读页 · 换源（v1.1） | `large` | `true`（传 `titleColor` / `iconColor`） | `this.bgColor()` |
 
-> #6 是单源详情：点整行与行尾菜单「详情」共用同一个常驻抽屉，展示名称、地址、分组、启停、
+> #5 是单源详情：点整行与行尾菜单「详情」共用同一个常驻抽屉，展示名称、地址、分组、启停、
 > 最近检测（状态 / 耗时 / 时间）与规则字段只读内容；删除入口仍复用现有二次确认。
 > 行号会漂移；**以命令为准**：`grep -rn "BottomDrawer({" entry/src/main/ets/pages/`
-> 行 1 / 2 / 3 / 8（阅读页 4 处）除了 `panelBackground: this.bgColor()`，还必须传 `lineColor: this.lineColor()`
+> 行 1 / 2 / 7（阅读页 3 处）除了 `panelBackground: this.bgColor()`，还必须传 `lineColor: this.lineColor()`
 > （漏传 = 系统深色 + 阅读白天时标题下发一条黑线）。
-> 新增抽屉（第 8 处）必须同时登记到本表。
+> 新增抽屉必须同时登记到本表（当前 7 处）。
+> **#1（阅读页目录）是唯一「内容随抽屉外状态变化」的调用点**：父组件传 `contentRevision`（切正/倒序时自增）
+> 做原地重渲染。2026-11-02 之前它是 `if (tocDescending)` 的两个分支（上表第 1、2 行），切序会把抽屉
+> 销毁重建 → 重播 260ms 上滑开启动画（用户反馈「点正序/倒序又重开一次抽屉」）——**不要再改回那个写法**。
 
 ---
 
@@ -187,12 +190,13 @@
 
 - [ ] `mode` 仍为 `'overlay'`；没有新增裸 `bindSheet`
 - [ ] 调用点仍为**常驻挂载**（`visible: this.flag`），没有被改成 `if (flag) { ... }`
+- [ ] 抽屉内容若依赖抽屉外状态：走 `contentRevision` 原地重渲染，没有用 `if (flag) { BottomDrawer(...) }` 分支重挂载刷内容
 - [ ] §1.4 三处命中测试齐全（改完必须真机确认**页面可滚动、可点击**）
 - [ ] §1.2.1 屏内抽屉（`overlay`）宿主有 `ignoreLayoutSafeArea(...BOTTOM)` **且** `expandSafeArea(...BOTTOM)`；tab 页内抽屉（`cover`）面板底边 = 屏幕物理底边，且**打开/关闭全程底部 tab 栏位置不变**
 - [ ] §1.2.2 关闭后抽屉**不参与绘制**（`overlay`：`panelShown = false` / `visibility(Hidden)`；`cover`：整个模态层卸载），屏幕底部**无阴影残影**
 - [ ] 阴影在 `clip(true)` 之前；圆角 20 可见
 - [ ] 打开/关闭时长未被单独覆盖
-- [ ] §2 的 8 处调用点**全部同步**（样式改动不分页面，一处改即全改）
+- [ ] §2 的 7 处调用点**全部同步**（样式改动不分页面，一处改即全改）
 - [ ] `showHeader` 约定未被破坏
 - [ ] 新增/改名的 JSON 字段（若有）已加进 `entry/obfuscation-rules.txt`
 - [ ] 真机闭环：编译 → 安装 → `aa force-stop` → `aa start` → 观察（见 `docs/development.md`）
@@ -227,6 +231,7 @@ sips -s format bmp /tmp/u1.jpeg --out /tmp/u1.bmp       # 纯 Python 解析 BMP�
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-02 | **目录抽屉改回常驻挂载：切正/倒序不再重播开启动画**（用户反馈「点正序/倒序抽屉又重开一次」）。根因：`pages/Reader.ets` 曾用 `if (this.tocDescending) { BottomDrawer } else { BottomDrawer }` 分支持序重挂载，来绕过 V2 下 `@BuilderParam` 内容不随父组件普通 `@Local` 重跑（`bd2a343` → `0eb1e1c`）；分支翻转 = 旧抽屉销毁 + 新实例 `@Local` 复位，而 `visible` 仍为 `true` ⇒ `aboutToAppear` 重播 260ms 上滑开启动画。修法：恢复**单处**常驻挂载 + `ui/common/BottomDrawer.ets` 新增 `@Param contentRevision`（内容区读它登记依赖，见 §1.1「内容刷新」），`toggleTocOrder()` 自增该值触发**原地**重渲染。**§2 调用点 8 处 → 7 处**（目录正/倒序合并为一行）；动效常量、样式与令牌未动。文件：`ui/common/BottomDrawer.ets`、`pages/Reader.ets`。**真机已验证（2026-11-02 · 设备 `33Z0224424136564`）**：切序时抽屉宿主链 elmtId 不变（`Stack 114 → Column 124 → Row 131 / List 137`）、标签 Text 恒为 elmtId 136，连拍 16 帧逐帧 OCR 每帧都有「定位」且标签在第 2–3 帧之间原地由「正序」变「倒序」⇒ 面板全程未消失/未上滑；遮罩关闭与页面点击仍正常 |
 | 2026-10-24 | **书架「更新」混合书架进度只统计网络书并精简文案**：`shelfProgressText(done,total,failed,local)` 不再把本地书同时计入进度分子和数量；`local > 0` 时显示 `网络 0/1 · 本地 2`，失败时追 ` · N 本未检查`，仅本地书时显示 `本地 2`。**样式与令牌未动**（13fp `text_3` / `maxLines(1)`）。文件：`pages/Index.ets`、`model/ShelfUpdater.ets`。主机仿真断言通过；真机（设备 `33Z0224424136564`）截图 OCR 已确认新进度文案与结束 toast |
 | 2026-10-23 | **书架「更新」进度分母包含本地书、无章节名源回退目录**：`shelfProgressText(done,total,failed,local)` 改为按架上总书数显示，并标注 `本地书 N 本跳过`（如 `检查中 1/2 · 本地书 1 本跳过`）；结束 toast 统一由 `shelfUpdateResultText(outcome)` 生成，混合书架全失败时显示「网络书检查失败，请检查网络或书源」，无新章时说明本地书跳过。**样式与令牌未动**（13fp `text_3` / `maxLines(1)`；「更新」仍 16fp `brand` + 44 热区 + `accessibilityText`），无新组件。文件：`pages/Index.ets`、`model/ShelfUpdater.ets`。主机侧 55 断言 `ALL PASS` + `make hap` / `make check` 通过；真机进度与 toast 待设备连接后复验 |
 | 2026-10-13 | **书架「更新」进行中进度行显示未检查数**（T-SHELF-7 收尾小迭代）：`shelfNormalHeader()` 的进度文案由硬拼 `检查中 done/total` 改为 `ShelfUpdater.shelfProgressText(done,total,failed)`（新导出纯函数）—— 无失败 `检查中 1/2`，有失败 `检查中 1/2 · 1 本未检查`，`total = 0` 时 `检查中…`；进度回调相应由 `(done,total)` 扩为 `(done,total,failed)`（累计失败数，不含 `skipped`）。**样式与令牌未动**（13fp `text_3` / `maxLines(1)`；「更新」仍 16fp `brand` + 44 热区 + `accessibilityText` = `更新全部书籍` / `正在检查更新`），无新组件。文件：`pages/Index.ets`、`model/ShelfUpdater.ets`。**主机侧 30 断言 `ALL PASS` + `make hap` 通过；真机 2026-10-13 已拍到两种形态**（无失败 `检查中 1/2` 实测宽 211px；有失败 `检查中 1/2 · 1 本未检查` 在失败源注入下中途上屏）；最长文案 `检查中 20/20 · 19 本未检查` 按实测字宽外推 ≈550px vs 可用 ≈710px ⇒ 余量 ~80vp、不截断，但该最长形态未在真机出现（架上网络书不够） |

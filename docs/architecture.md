@@ -116,7 +116,7 @@ rust/legado-core/    薄 NAPI 层（cdylib），依赖 legado-engine
 
 | 你要改什么 | 动哪些文件（先读） |
 |---|---|
-| 底部抽屉（样式/高度/打开方式） | **先读 [`specs/UI-SPEC.md`](./specs/UI-SPEC.md)**；`ui/common/BottomDrawer.ets`（唯一实现）+ 8 处调用点 |
+| 底部抽屉（样式/高度/打开方式） | **先读 [`specs/UI-SPEC.md`](./specs/UI-SPEC.md)**；`ui/common/BottomDrawer.ets`（唯一实现）+ 7 处调用点 |
 | 阅读页翻页 / 分页测算 / 排版 / 字号行距 | `pages/Reader.ets`（顶部有文件索引）、`common/ReaderTheme.ets`、`common/ChapterDataSource.ets` |
 | 整书下载 / 离线正文 / 下载任务 / TXT 导出 | `pages/Reader.ets`（右上角菜单与状态）、`model/BookDownloader.ets`（进程内串行作业、后台长时任务、取消；不持久化任务，中断后下一次手动下载从头开始）、`model/DownloadStore.ets`（`filesDir/downloads/<bookId>/` 的逐章 JSON 与完成清单；仅有效清单允许目录更新时复用章节）、`model/BookTxtExport.ets`（把完整下载流式导出为 `书名 作者：作者.txt`，不改变下载缓存格式）、`model/BookContent.ets`（阅读与听书共用的离线优先级）；删书、换源、备份恢复分别在 `model/BookRemoval.ets`、`model/SourceSwitch.ets`、`model/BackupRecovery.ets` 清理 |
 | 听书 / 播放 / 锁屏卡片 / 后台 / 音色 / 预生成缓存 | `model/TtsController.ets`（顶部有文件索引）、`model/TtsPregen.ets` + `model/TtsPregenRunner.ets` + `model/PregAudioSource.ets`（预生成：契约/纯函数/作业跟踪/缓存音频读盘，主机仿真 `make test-pregen`）、`pages/Listening.ets`、`pages/ListeningSettings.ets`、`model/RemoteTtsClient.ets`、`model/BookContent.ets`、`entryability/EntryAbility.ets`（退出释放）、`src/main/module.json5`（`backgroundModes`） |

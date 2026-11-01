@@ -29,6 +29,15 @@ export struct BottomDrawer {
   @Param sheetSize: AppSheetSize = 'medium';
   @Param mode: AppSheetMode = 'system';
   @Param showHeader: boolean = true;
+  // Content revision: for a drawer whose `@BuilderParam` content depends on state
+  // that lives *outside* this component (e.g. the reader's TOC sort order).
+  // Under V2 a plain `@Local` change in the host does not re-run the builder passed
+  // here — this component is not marked dirty, so its content goes stale. Remounting
+  // the whole drawer (the old `if (flag) { BottomDrawer(...) }` workaround) does
+  // refresh it, but replays the open animation because every `@Local` here resets.
+  // The host bumps this value instead: the drawer re-renders in place, the builder
+  // re-runs, and `overlayShown` / `panelHeight` (i.e. the open state) are kept.
+  @Param contentRevision: number = 0;
   @Param panelBackground: Resource = $r('app.color.bg_page');
   // Separator lines drawn inside the panel: the title divider and the drag
   // indicator. Defaults to the app token. A drawer whose panel follows the
@@ -238,7 +247,16 @@ export struct BottomDrawer {
     }
     .layoutWeight(this.sheetSize === 'fit' ? 0 : 1)
     .width('100%')
-    .padding({ left: 16, right: 16, bottom: 24 })
+    .padding({
+      left: 16,
+      right: 16,
+      bottom: 24,
+      // Always 0. `contentRevision` is read here only so the framework registers
+      // this component's dependency on it (see the param's comment): a bump
+      // re-renders the drawer in place, which re-runs `content()` above with the
+      // host's current state — without the panel ever leaving its open position.
+      top: this.contentRevision * 0
+    })
   }
 
   @Builder
