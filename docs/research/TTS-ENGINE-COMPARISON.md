@@ -273,7 +273,7 @@ sherpa 的 `InitLexicon` **保留首次出现**（另 1,376 条日文重复项�
 
 ## 9. 复现与维护入口
 
-VPS（`ssh -p 40860 root@103.236.96.53`）上 `/root/tts/genshin-vits/`：
+VPS（`ssh -p 40860 root@103.236.93.55`）上 `/root/tts/genshin-vits/`：
 
 | 文件 | 用途 |
 |---|---|

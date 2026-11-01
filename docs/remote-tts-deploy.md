@@ -1,7 +1,7 @@
 # 远端 TTS 部署与运维（VPS + sherpa-onnx VITS）
 
 服务端代码：仓库 `server/`（`app.py` / `requirements.txt` / `tts.service` / `deploy.sh`）。
-VPS：`ssh -p 40860 root@103.236.96.53`（Ubuntu 22.04 / 4C Xeon 8173M / 3925 MB + **6 GB swap**：`/swapfile` 2G + `/swap2` 4G）。
+VPS：`ssh -p 40860 root@103.236.93.55`（Ubuntu 22.04 / 4C Xeon 8173M / 3925 MB + **6 GB swap**：`/swapfile` 2G + `/swap2` 4G）。
 
 > **引擎选型、三个已修 bug（词典 / `rule_fsts` / 停顿）与全部实测数据见
 > [`research/TTS-ENGINE-COMPARISON.md`](./research/TTS-ENGINE-COMPARISON.md)。**
@@ -21,7 +21,7 @@ VPS：`ssh -p 40860 root@103.236.96.53`（Ubuntu 22.04 / 4C Xeon 8173M / 3925 MB
 远端是**可选增强，默认关闭**：默认仍是系统 TTS，断网/失败自动回退系统 TTS。
 
 - 入口：`我的 → 设置 → 听书设置 → 朗读引擎`，选「远端」后填 `服务器地址` + `API Key`。
-- 建议值：`http://103.236.96.53:39680`，Key 取 VPS 上 `tts.service` 的 `X_API_KEY`。
+- 建议值：`http://103.236.93.55:39680`，Key 取 VPS 上 `tts.service` 的 `X_API_KEY`。
 - 相关代码：`entry/src/main/ets/model/RemoteTtsClient.ets`（`POST /tts` + 剥 RIFF）、
   `model/TtsController.ets`（引擎分派 / `ensureRemoteSynthesized` / `fallbackToSystem`）、
   `common/Const.ets`（`TTS_ENGINE_*` / `KEY_TTS_SERVER` / `KEY_TTS_API_KEY`）。
@@ -93,9 +93,9 @@ X_API_KEY=<你的密钥> bash deploy.sh          # 装 unit + 起服务
 
 # 改代码后（改完先本地 py_compile，别把语法错误推上去）
 cd <repo> && python3 -m py_compile server/app.py
-scp -P 40860 server/app.py root@103.236.96.53:/root/tts/server/
-scp -P 40860 server/tts.service root@103.236.96.53:/etc/systemd/system/
-ssh -p 40860 root@103.236.96.53 'systemctl daemon-reload && systemctl restart tts && journalctl -u tts -f'
+scp -P 40860 server/app.py root@103.236.93.55:/root/tts/server/
+scp -P 40860 server/tts.service root@103.236.93.55:/etc/systemd/system/
+ssh -p 40860 root@103.236.93.55 'systemctl daemon-reload && systemctl restart tts && journalctl -u tts -f'
 ```
 
 启动约 **3s**（含 warmup），日志应出现：
@@ -156,11 +156,11 @@ engine=vits post: enabled=True eq=(off) target=-18.0dBFS ceiling=-1.0dBFS
 
 ## 6. 网络（已落定：公网映射 39680）
 
-VPS 是**端口映射型 NAT**（内网 `172.16.0.38`，公网 `103.236.96.53`）。公网只暴露有限端口，
+VPS 是**端口映射型 NAT**（内网 `172.16.0.38`，公网 `103.236.93.55`）。公网只暴露有限端口，
 服务端内网 `9880` 已映射到**公网 `39680`**：
 
 ```
-设备直连：http://103.236.96.53:39680
+设备直连：http://103.236.93.55:39680
 鉴权：X-API-Key（与 /etc/systemd/system/tts.service 的 X_API_KEY 一致）
 ```
 

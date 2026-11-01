@@ -462,7 +462,7 @@ d) 部署 tts-job.service（disabled）→ 用 285 字样本跑 IMPL §4.1 的 1
 e) 整章 8741 字跑一次，对账 audio/synth/RTF 与 meta.chunks
 f) 真机听书一章做线上回归（skill harmony-device-run）
 
-VPS：ssh -n -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -p 40860 -o BatchMode=yes root@103.236.96.53
+VPS：ssh -n -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -p 40860 -o BatchMode=yes root@103.236.93.55
 （4C / 3.9 G RAM + 6 G swap / 磁盘紧；线上 tts.service 端口 9880，对外 39680，X_API_KEY 在 /etc/systemd/system/tts.service）
 注意：ssh 易挂——后台任务要 setsid nohup 且完整重定向（< /dev/null > /dev/null 2>&1），轮询用短命令；
 VPS 只装了 grep（无 rg）；日志用 grep -a 过滤，别 tail（有上万字符的 missing_keys）。
@@ -523,7 +523,7 @@ make run → uitest dumpLayout 确认设置项渲染 → 点「预生成 N 章�
 服务端：systemctl start tts-job（**默认 disabled**，跑完 systemctl stop；重启用前先 systemctl reset-failed）。
 验收客户端：python3 /root/tts/server/pregen_test.py stats|item|verify|delete（stdout 是给人看的，别改契约字段）。
 
-VPS：ssh -n -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -p 40860 -o BatchMode=yes root@103.236.96.53
+VPS：ssh -n -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -p 40860 -o BatchMode=yes root@103.236.93.55
 （4C / 3.9 G RAM + 6 G swap；线上 tts.service 端口 9880 / 对外 39680，缓存 /root/tts/cache/）
 注意：ssh 易挂 —— 后台任务要 setsid nohup 且完整重定向，轮询用短命令；VPS 只装了 grep（无 rg），日志用 grep -a（有上万字符的单行）。
 
