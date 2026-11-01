@@ -33,10 +33,10 @@
 |---|---|---|
 | 1 | 交付范围 | **全五层**（含分层预检 + 增量） |
 | 2 | 「后台运行」语义 | **系统长时任务：息屏继续**（需权限 + 常驻通知） |
-| 3 | 检测策略 | **分层预检 + 增量 + 分组/多选** |
+| 3 | 检测策略 | **分层预检 + 增量**（分组 / 多选范围已于 2026-11-02 撤，见 §5） |
 | 4 | 书源存储 | **迁到 SQLite 表**（复用 `relationalStore` 先例） |
-| 5 | 页面布局 | **布局 2 两段式：书源 / 检测**（[`SPEC-BOOKSOURCE-LAYOUT.md`](./SPEC-BOOKSOURCE-LAYOUT.md) §3） |
-| 6 | 3000 条默认视图 | **启用 + 检测异常置顶**（同上 §3.2） |
+| 5 | 页面布局 | **单一主体（书源列表）+ 检测任务态**（[`SPEC-BOOKSOURCE-LAYOUT.md`](./SPEC-BOOKSOURCE-LAYOUT.md) §3；2026-11-02 取代「布局 2 两段式」） |
+| 6 | 3000 条默认视图 | **全量 + 检测异常置顶**（同上 §3.2；2026-11-02 起不再默认筛「启用」） |
 | 7 | 单源操作入口 | **行尾「⋯」菜单 + 确认弹窗**（详情用抽屉，同上 §3.2） |
 
 ## 3. Capability map
@@ -45,9 +45,9 @@
 |---|---|---|
 | `source-store` | 书源持久化层：SQLite 表取代 preferences 单键；单行读写；分页/筛选查询；轻量行投影 | — |
 | `detect-engine` | 分层检测策略：L1 预检 / L2 完整链路两档；`respondTime` 接回 | — |
-| `source-list` | 大列表 UI：`LazyForEach` + 搜索/筛选/分组 + 行操作（含危险操作确认） | `source-store` |
+| `source-list` | 大列表 UI：`LazyForEach` + 三档排序 + 行操作（含危险操作确认）；搜索 / 筛选已于 2026-11-02 撤 | `source-store` |
 | `detect-job` | 后台任务：分批派发、进度、取消、增量落盘、重启续跑、长时任务 | `source-store`、`detect-engine` |
-| `detect-ui` | 进度与结果呈现：进行中/已完成态、结果筛选、一键清理、检测范围入口 | `detect-job`、`source-list` |
+| `detect-ui` | 进度与结果呈现：任务态进度卡、完成摘要、一键清理、检测范围入口（范围与计数写进 `⋯` 菜单项） | `detect-job`、`source-list` |
 
 依赖方向单向、无环。边界契约（表结构、作业状态机、落盘格式、NAPI 签名）写在**提供方**模块的 spec 内。
 
@@ -79,11 +79,13 @@ make log           # 抓日志
 entry/src/main/ets/model/SourceStore.ets        ← 新  source-store：SQLite 表（建表/迁移/查询/单行写）
 entry/src/main/ets/model/DetectJob.ets          ← 新  detect-job：作业契约 + 纯函数（可主机仿真）
 entry/src/main/ets/model/DetectJobRunner.ets    ← 新  detect-job：进程级单例（仿 TtsPregenRunner）
-entry/src/main/ets/components/SourceRows.ets    ← 新  source-list：行 / 搜索框 / 筛选条 / 分组头
+entry/src/main/ets/components/SourceRows.ets    ← 新  source-list：行组件 + 三档排序
 entry/src/main/ets/components/SourceDetailPanel.ets
                                                 ← 新  单源详情抽屉内容（替代现「书源状态」抽屉）
-entry/src/main/ets/components/DetectPanel.ets   ← 新  detect-ui：检测段（范围 / 作业卡 / 结果面）
-entry/src/main/ets/pages/BookSourceManage.ets   ← 改  壳：段选择器 + 底部作业条 + 组装
+entry/src/main/ets/components/DetectProgressCard.ets
+                                                ← 新  detect-ui：任务态进度卡 + 完成摘要
+                                                    （2026-11-02 取代 `DetectPanel.ets`）
+entry/src/main/ets/pages/BookSourceManage.ets   ← 改  壳：头行（汇总 + `⋯`）+ 任务态切换 + 组装
 entry/src/main/ets/ui/common/BottomDrawer.ets   ← 不改  仍 8 处调用点（第 6 处改名「书源详情」）
 docs/specs/UI-SPEC.md                          ← 改  第 6 处调用点的名称与用途
 entry/src/main/ets/pages/{Shelf,SearchResult,BackupManage,Index}.ets
@@ -171,24 +173,25 @@ export class DetectJobRunner {
 
 1. 3000 条书源下进入书源管理页，**首帧不阻塞**、数据就绪 ≤ 300 ms（现为每次主线程 parse 5–7 MB）。
 2. 单条 toggle / 删除落盘为 O(1)：不序列化全量，UI 无可见卡顿（≤ 16 ms）。
-3. 3000 行列表滚动无可感知掉帧；搜索输入到列表更新 ≤ 100 ms。
+3. 3000 行列表滚动无可感知掉帧。（~~搜索输入到列表更新 ≤ 100 ms~~ —— 2026-11-02 随搜索一起撤除。）
 4. L1 预检 3000 源，8 并发下**现实 ≤ 20 分钟**（对比现状 1–5 小时），全程有进度、可取消。
 5. 检测中途强杀进程 → 重启 → 从落盘进度续跑，**已完成结果不丢**、不从头重跑。
 6. 长时任务：息屏 10 分钟期间检测继续推进（真机验证）。
 7. 备份导出 JSON 与 `BACKUP_SCHEMA_VERSION` 既有格式**逐字段兼容**，旧备份文件仍可导入。
 8. release 包下所有新增落盘字段可读（`make check` + `make run-release` 通过）。
 9. `make test` 与 `make check` 通过。
-10. 3000 条下打开书源页：**默认视图为「启用」且异常态置顶**，搜索框与筛选条在首屏可见
-    （而不是 3000 行无差别列表）。
+10. 3000 条下打开书源页：**全量列表且检测异常态置顶**，页面体不含第二组工具栏
+    （2026-11-02 起不再默认筛「启用」，也不再有搜索框 / 筛选条 / 分段）。
 
 ## 10. Open Questions（批准前需答）
 
 **阻塞实现（必须先定）**
 
-1. ~~页面信息架构~~ **已定（2026-10-14）**：布局 2 两段式（书源 / 检测）+ 默认视图「启用 +
-   检测异常置顶」+ 行内「⋯」菜单。见 [`SPEC-BOOKSOURCE-LAYOUT.md`](./SPEC-BOOKSOURCE-LAYOUT.md) §3，
-   剩余细节问题见该文件 §6。
-2. **检测范围怎么选。** 分组检测的「分组」来源：`bookSourceGroup` 字段、用户勾选、还是两者都要？
+1. ~~页面信息架构~~ **已定（2026-11-02 改版）**：单一主体（书源列表）+ 检测任务态 + 页内头行单一
+   `⋯`；搜索 / 筛选 / 分段 / 底部作业条已撤。见
+   [`SPEC-BOOKSOURCE-LAYOUT.md`](./SPEC-BOOKSOURCE-LAYOUT.md) §3 与 §7（改版理由与已知代价）。
+2. ~~**检测范围怎么选。**~~ **已收敛（2026-11-02）**：范围与计数写进 `⋯` 菜单项
+   （`检测书源（增量 N）` / `全部重测（M）`），不再有范围条；**分组检测已撤**（分组选择器随之撤除）。
 3. **并发上限提到多少。** Rust 现为 `clamp(1, 8)`（`runtime.rs:452`），`BookEngineNapi` 传 4。
    3000 源场景下 8 明显偏低，但提高并发有站点压力与被 ban 风险，需要显式决定目标值与依据。
 4. **`BackgroundMode.DATA_TRANSFER` 是否存在且可用。** 现仓库只用过 `AUDIO_PLAYBACK`

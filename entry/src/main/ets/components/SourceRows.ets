@@ -26,18 +26,6 @@ export function sourceRowMeta(source: SourceRow, mode: string = 'full'): string 
   return group + ' · ' + state + ' · ' + source.respondMs.toString() + 'ms';
 }
 
-/** Case-insensitive match over the three fields exposed by SourceRow. */
-export function sourceRowMatchesQuery(source: SourceRow, query: string): boolean {
-  const needle: string = query.trim().toLowerCase();
-  if (needle.length === 0) {
-    return true;
-  }
-  const group: string = source.group.length > 0 ? source.group : '默认';
-  return source.name.toLowerCase().indexOf(needle) >= 0 ||
-    source.url.toLowerCase().indexOf(needle) >= 0 ||
-    group.toLowerCase().indexOf(needle) >= 0;
-}
-
 /**
  * Manage-list order: hard failures first, then states that need a recheck,
  * then usable sources. Buckets preserve SourceStore's import order.

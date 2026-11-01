@@ -739,6 +739,26 @@
 
 ## 书源管理（BookSourceManage）
 
+- [x] **T-SRC-4（2026-11-02）书源管理改版：单一主体（书源列表）+ 检测任务态**：撤掉搜索框、筛选 chips
+  （全部/启用/停用/未测/失败）、分组选择器、`书源/检测` 分段、底部作业条与检测结果面；页面级动作
+  （导入·文件/链接、导出、检测·增量/全部、规则调试器、恢复内置）全部收进页内头行单一 `⋯`，范围与
+  计数写进菜单项（`检测书源（增量 N）` / `全部重测（M）`）。检测改为任务态：进行中整页只剩进度卡，
+  结束后原地变摘要 +「返回书源列表」，失败源靠三档排序浮到列表最前；关闭/删除不可用搬到摘要卡
+  （仍走 `setEnabledMany` / `removeMany` 批量事务 + 二次确认）；空态给「导入书源」主按钮。
+  - 文件：改 `pages/BookSourceManage.ets`、`components/SourceRows.ets`（删 `sourceRowMatchesQuery`）；
+    新 `components/DetectProgressCard.ets`；删 `components/DetectPanel.ets`。`BottomDrawer` 仍 8 处、无新路由。
+  - 规范：[`../specs/SPEC-BOOKSOURCE-LAYOUT.md`](../specs/SPEC-BOOKSOURCE-LAYOUT.md) §3 / §7（改版理由与
+    已知代价：3000 条下无搜索、无筛选，只能滚动查找；恢复的最小形态是头行加搜索图标）。
+  - 状态（2026-11-02）：**主机侧 + 真机均通过**。`make hap` 通过；`check-keep-props` /
+    `check-hilog-format` / `check-source-consumers` / `check-t16-bench` 通过；编译产物已确认含新代码、
+    旧符号归零。真机（debug `33Z0224424136564`）：常态 = 头行 + 列表（反例扫描 0 命中）；`⋯` 菜单 7 项
+    （debug 8 项）且 `检测书源（增量 2）`/`全部重测（13）` 计数正确；检测后整页只剩进度卡
+    （运行 / 完成 / 取消三态均取证）；「返回书源列表」回到列表；hilog 无 JS/ArkTS 异常。
+    顺带修真机暴露的一处布局抖动：取消后 `canResume` 约 1s 才转真，原按它切换「单按钮 ↔ 双按钮」会让
+    按钮位置跳动；改为 `cancelled` / `failed` 固定双按钮 + 置灰「继续本轮」。
+  - 证据：`pages/BookSourceManage.ets`（`moreMenuItems` / `startDetect` / `detectBody`）、
+    `components/DetectProgressCard.ets`；改版记载见 [`../progress.md`](../progress.md) §「2026-11-02 布局改版」。
+
 - [x] **T-SRC-1 导入持久化回归**：核对「启停/删除/恢复内置」后的 `preferences` 落盘与列表 key 稳定性。
   - 状态（2026-10-07）：**已实现 + release 真机复验通过**——key = `bookSourceUrl#index#enabled`（`pages/BookSourceManage.ets:661`）。
     取证：先从本机 release 导出的备份 JSON 确认库内确有同 URL 两条（`bbiquge8` / `笔趣阁8` → `http://m.bbiquge8.net`，均 `enabled`），

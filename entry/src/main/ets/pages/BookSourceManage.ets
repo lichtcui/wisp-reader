@@ -26,20 +26,19 @@ import {
 } from '../model/SourceStoreBench';
 import { T16ReadyResult, T16RestoreResult, T16SeedResult } from '../model/SourceStoreBenchTypes';
 import { ensureSourceStore } from '../model/SourceStoreMigration';
-import { SegmentedCell } from '../components/ListCells';
-import { DetectPanel } from '../components/DetectPanel';
-import {
-  SourceManageRow,
-  sourceRowMatchesQuery,
-  sortSourceRowsForManage
-} from '../components/SourceRows';
+import { DetectProgressCard } from '../components/DetectProgressCard';
+import { SourceManageRow, sortSourceRowsForManage } from '../components/SourceRows';
 import {
   SourceDetailData,
   SourceDetailPanel
 } from '../components/SourceDetailPanel';
 import { BottomDrawer } from '../ui/common/BottomDrawer';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
-import { DEFAULT_DETECT_KEYWORD, ENGINE_FETCH_TIMEOUT_MS } from '../common/Const';
+import {
+  DEFAULT_DETECT_KEYWORD,
+  DETECT_INCREMENTAL_WINDOW_MS,
+  ENGINE_FETCH_TIMEOUT_MS
+} from '../common/Const';
 import {
   DETECT_BACKGROUND_INACTIVE,
   DetectJobRunner
@@ -47,18 +46,8 @@ import {
 import {
   DETECT_MODE_FULL,
   DETECT_MODE_PROBE,
-  DETECT_STATUS_CANCELLED,
-  DETECT_STATUS_DONE,
-  DETECT_STATUS_FAILED,
   DETECT_STATUS_RUNNING
 } from '../model/DetectJob';
-
-const SEARCH_DEBOUNCE_MS: number = 150;
-const SOURCE_FILTER_ALL: number = 0;
-const SOURCE_FILTER_ENABLED: number = 1;
-const SOURCE_FILTER_DISABLED: number = 2;
-const SOURCE_FILTER_UNTESTED: number = 3;
-const SOURCE_FILTER_FAILED: number = 4;
 
 function detailPad2(value: number): string {
   return value < 10 ? '0' + value.toString() : value.toString();
@@ -167,39 +156,16 @@ class SourceManageDataSource implements IDataSource {
   }
 }
 
-@ComponentV2
-struct ManageFilterChip {
-  @Param label: string = '';
-  @Param selected: boolean = false;
-  @Event onSelect: () => void = () => {};
-
-  build() {
-    Text(this.label)
-      .fontSize(13)
-      .fontWeight(this.selected ? FontWeight.Medium : FontWeight.Normal)
-      .fontColor(this.selected ? $r('app.color.on_brand') : $r('app.color.text_2'))
-      .backgroundColor(this.selected ? $r('app.color.brand') : $r('app.color.bg_pill'))
-      .height(32)
-      .padding({ left: 14, right: 14 })
-      .borderRadius(16)
-      .onClick(() => this.onSelect())
-  }
-}
-
+/**
+ * 书源管理页：页面主体只有书源列表。
+ *
+ * 所有页面级动作（导入 / 导出 / 检测 / 恢复内置 / 调试器）收进标题下的单一 `⋯` 功能键；
+ * 检测进行中时整页切成任务态，只保留进度卡与取消。
+ * 约定见 docs/specs/SPEC-BOOKSOURCE-LAYOUT.md §3。
+ */
 @ComponentV2
 export struct BookSourceManagePage {
   @Local rows: SourceRow[] = [];
-  @Local activeSegment: number = 0;
-  @Local sourceQuery: string = '';
-  @Local sourceAppliedQuery: string = '';
-  @Local sourceFilter: number = SOURCE_FILTER_ENABLED;
-  @Local sourceGroup: string | undefined = undefined;
-  @Local sourceGroups: string[] = [];
-  @Local sourceChipTotal: number = 0;
-  @Local sourceChipEnabled: number = 0;
-  @Local sourceChipDisabled: number = 0;
-  @Local sourceChipUntested: number = 0;
-  @Local sourceChipFailed: number = 0;
   @Local sourceListCount: number = 0;
   @Local enabledRows: number = 0;
   @Local totalRows: number = 0;
@@ -211,13 +177,15 @@ export struct BookSourceManagePage {
   @Local urlInput: string = '';
   @Local busy: boolean = false;
   @Local runner: DetectJobRunner = DetectJobRunner.instance();
+  @Local detectView: boolean = false;
   @Local detectMode: string = DETECT_MODE_FULL;
   @Local detectClockNow: number = Date.now();
   @Local detectLaunching: boolean = false;
   @Local detectCanResume: boolean = false;
   @Local detectBackgroundState: string = DETECT_BACKGROUND_INACTIVE;
-  @Local jobOkCount: number = 0;
-  @Local jobUnavailableCount: number = 0;
+  @Local detectIncrementCount: number = 0;
+  @Local detectEnabledCount: number = 0;
+  @Local unavailableCount: number = 0;
   @Local statusVisible: boolean = false;
   @Local selectedSource: SourceRow | undefined = undefined;
   @Local sourceDetail: SourceDetailData | undefined = undefined;
@@ -230,18 +198,19 @@ export struct BookSourceManagePage {
   private detectRestoreStarted: boolean = false;
   private sourceDs: SourceManageDataSource = new SourceManageDataSource();
   private sourceScroller: Scroller = new Scroller();
-  private sourceDebounceId: number = -1;
   private sourceDetailRequest: number = 0;
   private detectClockId: number = -1;
 
   @Monitor('runner.updatedAt', 'runner.status')
   onDetectJobChanged(): void {
     this.syncDetectJobView();
+    if (this.runner.status === DETECT_STATUS_RUNNING) {
+      this.detectView = true;
+    }
     this.reload();
   }
 
   aboutToAppear(): void {
-    this.activeSegment = 0;
     this.pageStartedAt = Date.now();
     this.detectClockNow = this.pageStartedAt;
     this.startDetectClock();
@@ -249,10 +218,6 @@ export struct BookSourceManagePage {
   }
 
   aboutToDisappear(): void {
-    if (this.sourceDebounceId >= 0) {
-      clearTimeout(this.sourceDebounceId);
-      this.sourceDebounceId = -1;
-    }
     if (this.detectClockId >= 0) {
       clearInterval(this.detectClockId);
       this.detectClockId = -1;
@@ -291,32 +256,38 @@ export struct BookSourceManagePage {
       this.rows = next;
       this.totalRows = next.length;
       this.enabledRows = this.countEnabled(next);
-      this.sourceGroups = this.collectGroups(next);
-      this.resetStaleGroups();
-      this.refreshSourceProjection();
-      this.refreshJobCounts();
+      this.refreshProjection();
+      this.refreshDetectCounts();
     } catch (err) {
       this.rows = [];
-      this.sourceGroups = [];
       this.totalRows = 0;
       this.enabledRows = 0;
-      this.refreshSourceProjection();
-      this.refreshJobCounts();
+      this.refreshProjection();
+      this.refreshDetectCounts();
     }
   }
 
-  private refreshJobCounts(): void {
-    let ok: number = 0;
+  /** Menu labels and the cleanup entry share one pass over the projection. */
+  private refreshDetectCounts(): void {
+    const now: number = Date.now();
+    let enabled: number = 0;
+    let increment: number = 0;
     let unavailable: number = 0;
     for (const row of this.rows) {
-      if (row.detectState === 'ok') {
-        ok += 1;
-      } else if (row.detectState === 'unavailable') {
+      if (row.detectState === 'unavailable') {
         unavailable += 1;
       }
+      if (!row.enabled) {
+        continue;
+      }
+      enabled += 1;
+      if (this.inIncrementalScope(row, now)) {
+        increment += 1;
+      }
     }
-    this.jobOkCount = ok;
-    this.jobUnavailableCount = unavailable;
+    this.detectEnabledCount = enabled;
+    this.detectIncrementCount = increment;
+    this.unavailableCount = unavailable;
   }
 
   private countEnabled(rows: SourceRow[]): number {
@@ -329,142 +300,52 @@ export struct BookSourceManagePage {
     return count;
   }
 
-  private collectGroups(rows: SourceRow[]): string[] {
-    const seen: Set<string> = new Set<string>();
-    const groups: string[] = [];
-    for (const row of rows) {
-      const group: string = row.group.trim();
-      if (!seen.has(group)) {
-        seen.add(group);
-        groups.push(group);
-      }
+  private inIncrementalScope(row: SourceRow, now: number): boolean {
+    if (!row.enabled) {
+      return false;
     }
-    groups.sort((a: string, b: string): number => {
-      const left: string = a.length > 0 ? a : '默认';
-      const right: string = b.length > 0 ? b : '默认';
-      return left < right ? -1 : (left > right ? 1 : 0);
-    });
-    return groups;
+    if (row.detectState.length === 0 || row.detectState === 'unavailable') {
+      return true;
+    }
+    return row.detectAt <= 0 || now - row.detectAt >= DETECT_INCREMENTAL_WINDOW_MS;
   }
 
-  private resetStaleGroups(): void {
-    if (this.sourceGroup !== undefined && this.sourceGroups.indexOf(this.sourceGroup) < 0) {
-      this.sourceGroup = undefined;
-    }
-  }
-
-  private contextRows(rows: SourceRow[], query: string, group: string | undefined): SourceRow[] {
-    const out: SourceRow[] = [];
-    for (const row of rows) {
-      if (!sourceRowMatchesQuery(row, query)) {
-        continue;
-      }
-      if (group !== undefined && row.group.trim() !== group) {
-        continue;
-      }
-      out.push(row);
-    }
-    return out;
-  }
-
-  private sourceFilterMatches(row: SourceRow): boolean {
-    if (this.sourceFilter === SOURCE_FILTER_ENABLED) {
-      return row.enabled;
-    }
-    if (this.sourceFilter === SOURCE_FILTER_DISABLED) {
-      return !row.enabled;
-    }
-    if (this.sourceFilter === SOURCE_FILTER_UNTESTED) {
-      return row.detectState.length === 0;
-    }
-    if (this.sourceFilter === SOURCE_FILTER_FAILED) {
-      return row.detectState === 'unavailable';
-    }
-    return true;
-  }
-
-  private refreshSourceProjection(): void {
-    const context: SourceRow[] = this.contextRows(this.rows, this.sourceAppliedQuery, this.sourceGroup);
-    let enabled: number = 0;
-    let disabled: number = 0;
-    let untested: number = 0;
-    let failed: number = 0;
-    for (const row of context) {
-      if (row.enabled) {
-        enabled += 1;
-      } else {
-        disabled += 1;
-      }
-      if (row.detectState.length === 0) {
-        untested += 1;
-      } else if (row.detectState === 'unavailable') {
-        failed += 1;
-      }
-    }
-    this.sourceChipTotal = context.length;
-    this.sourceChipEnabled = enabled;
-    this.sourceChipDisabled = disabled;
-    this.sourceChipUntested = untested;
-    this.sourceChipFailed = failed;
-    if ((this.sourceFilter === SOURCE_FILTER_DISABLED && disabled === 0) ||
-      (this.sourceFilter === SOURCE_FILTER_UNTESTED && untested === 0) ||
-      (this.sourceFilter === SOURCE_FILTER_FAILED && failed === 0)) {
-      this.sourceFilter = SOURCE_FILTER_ALL;
-    }
-
-    const visible: SourceRow[] = [];
-    for (const row of context) {
-      if (this.sourceFilterMatches(row)) {
-        visible.push(row);
-      }
-    }
-    const next: SourceRow[] = sortSourceRowsForManage(visible);
+  /** One flat list: the detection states that need work sort to the front. */
+  private refreshProjection(): void {
+    const next: SourceRow[] = sortSourceRowsForManage(this.rows);
     this.sourceDs.setItems(next);
     this.sourceListCount = next.length;
   }
 
-  private scheduleSourceQuery(value: string): void {
-    this.sourceQuery = value;
-    if (this.sourceDebounceId >= 0) {
-      clearTimeout(this.sourceDebounceId);
+  private enabledIds(): string[] {
+    const ids: string[] = [];
+    for (const row of this.rows) {
+      if (row.enabled) {
+        ids.push(row.id.toString());
+      }
     }
-    this.sourceDebounceId = setTimeout((): void => {
-      this.sourceDebounceId = -1;
-      this.sourceAppliedQuery = value;
-      this.refreshSourceProjection();
-    }, SEARCH_DEBOUNCE_MS);
+    return ids;
   }
 
-  private clearSourceQuery(): void {
-    if (this.sourceDebounceId >= 0) {
-      clearTimeout(this.sourceDebounceId);
-      this.sourceDebounceId = -1;
+  private incrementalIds(): string[] {
+    const now: number = Date.now();
+    const ids: string[] = [];
+    for (const row of this.rows) {
+      if (this.inIncrementalScope(row, now)) {
+        ids.push(row.id.toString());
+      }
     }
-    this.sourceQuery = '';
-    this.sourceAppliedQuery = '';
-    this.refreshSourceProjection();
+    return ids;
   }
 
-  private selectSourceFilter(index: number): void {
-    this.sourceFilter = index;
-    this.refreshSourceProjection();
-  }
-
-  private selectSourceGroup(group: string | undefined): void {
-    this.sourceGroup = group;
-    this.refreshSourceProjection();
-  }
-
-  private clearSourceCriteria(): void {
-    if (this.sourceDebounceId >= 0) {
-      clearTimeout(this.sourceDebounceId);
-      this.sourceDebounceId = -1;
+  private unavailableIds(): number[] {
+    const ids: number[] = [];
+    for (const row of this.rows) {
+      if (row.detectState === 'unavailable') {
+        ids.push(row.id);
+      }
     }
-    this.sourceQuery = '';
-    this.sourceAppliedQuery = '';
-    this.sourceFilter = SOURCE_FILTER_ALL;
-    this.sourceGroup = undefined;
-    this.refreshSourceProjection();
+    return ids;
   }
 
   private async preparePage(): Promise<void> {
@@ -495,6 +376,8 @@ export struct BookSourceManagePage {
       const previousUpdatedAt: number = this.runner.updatedAt;
       await this.runner.restore(ctx);
       this.syncDetectJobView();
+      // 冷启动回到本页时，只有真在跑的作业才进入任务态；已完成/已取消的轮次不占屏。
+      this.detectView = this.runner.status === DETECT_STATUS_RUNNING;
       if (this.runner.status !== previousStatus || this.runner.updatedAt !== previousUpdatedAt) {
         await this.reload();
       }
@@ -628,10 +511,10 @@ export struct BookSourceManagePage {
 
   private dateStr(): string {
     const date: Date = new Date();
-    const monthNumber: number = date.getMonth() + 1;
-    const month: string = monthNumber < 10 ? '0' + monthNumber.toString() : monthNumber.toString();
-    const dayNumber: number = date.getDate();
-    const day: string = dayNumber < 10 ? '0' + dayNumber.toString() : dayNumber.toString();
+    const monthValue: number = date.getMonth() + 1;
+    const month: string = monthValue < 10 ? '0' + monthValue.toString() : monthValue.toString();
+    const dayValue: number = date.getDate();
+    const day: string = dayValue < 10 ? '0' + dayValue.toString() : dayValue.toString();
     return date.getFullYear().toString() + '-' + month + '-' + day;
   }
 
@@ -647,18 +530,15 @@ export struct BookSourceManagePage {
     try {
       const sources: BookSource[] = await exportAll();
       const json: string = JSON.stringify(sources, null, 2);
-      const savePicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(ctx);
+      const documentPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(ctx);
       const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
       options.newFileNames = ['book-sources_' + this.dateStr() + '.json'];
       options.fileSuffixChoices = ['JSON|.json'];
-      const uris: string[] = await savePicker.save(options);
+      const uris: string[] = await documentPicker.save(options);
       if (uris.length === 0) {
         return;
       }
-      const file: fileIo.File = fileIo.openSync(
-        uris[0],
-        fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC
-      );
+      const file: fileIo.File = fileIo.openSync(uris[0], fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
       try {
         fileIo.writeSync(file.fd, json);
       } finally {
@@ -686,10 +566,8 @@ export struct BookSourceManagePage {
       this.rows = next;
       this.totalRows = next.length;
       this.enabledRows = this.countEnabled(next);
-      this.sourceGroups = this.collectGroups(next);
-      this.resetStaleGroups();
-      this.refreshSourceProjection();
-      this.refreshJobCounts();
+      this.refreshProjection();
+      this.refreshDetectCounts();
       if (this.selectedSource !== undefined && this.selectedSource.id === row.id) {
         this.statusVisible = false;
         this.selectedSource = undefined;
@@ -740,8 +618,8 @@ export struct BookSourceManagePage {
         }
       }
       this.enabledRows = this.countEnabled(this.rows);
-      this.refreshSourceProjection();
-      this.refreshJobCounts();
+      this.refreshProjection();
+      this.refreshDetectCounts();
       this.rows = this.rows.slice();
     } catch (err) {
       this.summary = '保存启用状态失败';
@@ -823,8 +701,7 @@ export struct BookSourceManagePage {
   private confirmResetBundled(): void {
     this.getUIContext().showAlertDialog({
       title: '替换全部书源',
-      message: '将删除当前 ' + this.totalRows.toString() +
-        ' 条书源，并用内置书源替换。此操作不可撤销。',
+      message: '将删除当前 ' + this.totalRows.toString() + ' 条书源，并用内置书源替换。此操作不可撤销。',
       autoCancel: true,
       primaryButton: {
         value: '取消',
@@ -853,17 +730,31 @@ export struct BookSourceManagePage {
     this.loadSourceDetail(row, request);
   }
 
-  private async launchDetect(mode: string, sourceIds: string[]): Promise<void> {
-    if (this.detectLaunching) {
-      return;
-    }
+  /** 菜单入口：先切任务态，启动被拒绝时再退回列表。 */
+  private async startDetect(mode: string, sourceIds: string[]): Promise<void> {
     if (sourceIds.length === 0) {
       this.summary = '当前范围没有可检测的书源';
       return;
     }
+    this.detectView = true;
+    const accepted: boolean = await this.launchDetect(mode, sourceIds);
+    if (!accepted) {
+      this.detectView = false;
+    }
+  }
+
+  private async launchDetect(mode: string, sourceIds: string[]): Promise<boolean> {
+    if (this.detectLaunching) {
+      return false;
+    }
+    if (sourceIds.length === 0) {
+      this.summary = '当前范围没有可检测的书源';
+      return false;
+    }
     this.detectLaunching = true;
+    let accepted: boolean = false;
     try {
-      const accepted: boolean = await this.runner.start(mode, DEFAULT_DETECT_KEYWORD, sourceIds);
+      accepted = await this.runner.start(mode, DEFAULT_DETECT_KEYWORD, sourceIds);
       this.syncDetectJobView();
       if (accepted) {
         this.summary = '';
@@ -874,6 +765,7 @@ export struct BookSourceManagePage {
       this.detectLaunching = false;
       this.syncDetectJobView();
     }
+    return accepted;
   }
 
   private async cancelDetect(): Promise<void> {
@@ -950,36 +842,9 @@ export struct BookSourceManagePage {
       source.detectState + '#' + source.respondMs.toString();
   }
 
-  private groupLabel(group: string | undefined): string {
-    if (group === undefined) {
-      return '分组';
-    }
-    return '分组 · ' + (group.length > 0 ? group : '默认');
-  }
-
-  private groupMenuItems(groups: string[], onSelect: (next: string | undefined) => void): MenuElement[] {
+  /** 单一功能键：页面级 / 批量 / 破坏性动作都在这里，列表上方不再有常驻工具栏。 */
+  private moreMenuItems(): MenuElement[] {
     const items: MenuElement[] = [
-      {
-        value: '全部分组',
-        action: () => onSelect(undefined)
-      }
-    ];
-    for (const item of groups) {
-      items.push({
-        value: item.length > 0 ? item : '默认',
-        action: () => onSelect(item)
-      });
-    }
-    return items;
-  }
-
-  private sourceGroupMenuItems(): MenuElement[] {
-    return this.groupMenuItems(this.sourceGroups,
-      (next: string | undefined) => this.selectSourceGroup(next));
-  }
-
-  private addMenuItems(): MenuElement[] {
-    return [
       {
         value: '从文件导入',
         action: () => {
@@ -993,19 +858,28 @@ export struct BookSourceManagePage {
         }
       },
       {
-        value: '规则调试器',
-        action: () => this.onOpenDebugger()
-      }
-    ];
-  }
-
-  private moreMenuItems(): MenuElement[] {
-    const items: MenuElement[] = [
-      {
         value: '导出书源',
         action: () => {
           this.exportSources();
         }
+      },
+      {
+        value: '检测书源（增量 ' + this.detectIncrementCount.toString() + '）',
+        enabled: this.detectIncrementCount > 0,
+        action: () => {
+          this.startDetect(DETECT_MODE_PROBE, this.incrementalIds());
+        }
+      },
+      {
+        value: '全部重测（' + this.detectEnabledCount.toString() + '）',
+        enabled: this.detectEnabledCount > 0,
+        action: () => {
+          this.startDetect(DETECT_MODE_FULL, this.enabledIds());
+        }
+      },
+      {
+        value: '规则调试器',
+        action: () => this.onOpenDebugger()
       },
       {
         value: '恢复内置',
@@ -1171,89 +1045,29 @@ export struct BookSourceManagePage {
     return parts.join('、');
   }
 
-  private jobModeLabel(): string {
-    return this.runner.mode === DETECT_MODE_PROBE ? '预检' : '完整检测';
-  }
-
-  private jobBarTitle(): string {
-    if (this.runner.status === DETECT_STATUS_RUNNING) {
-      return this.runner.done.toString() + '/' + this.runner.total.toString() + ' · ' + this.jobModeLabel();
+  private headerSummary(): string {
+    if (this.totalRows === 0) {
+      return '还没有书源';
     }
-    if (this.runner.status === DETECT_STATUS_DONE) {
-      return this.runner.mode === DETECT_MODE_PROBE ? '预检完成' : '检测完成';
-    }
-    if (this.runner.status === DETECT_STATUS_CANCELLED) {
-      return '已取消';
-    }
-    if (this.runner.status === DETECT_STATUS_FAILED) {
-      return '检测失败';
-    }
-    return '检测书源…';
-  }
-
-  private jobBarMeta(): string {
-    if (this.runner.status === DETECT_STATUS_RUNNING) {
-      return '检测中 · 每批 ' + this.runner.batchSize.toString() + ' 个';
-    }
-    if (this.runner.status === DETECT_STATUS_DONE) {
-      const okLabel: string = this.runner.mode === DETECT_MODE_PROBE ? '预检通过' : '可用';
-      return okLabel + ' ' + this.jobOkCount.toString() + ' / 不可用 ' +
-        this.jobUnavailableCount.toString();
-    }
-    if (this.runner.status === DETECT_STATUS_CANCELLED ||
-      this.runner.status === DETECT_STATUS_FAILED) {
-      return '已测 ' + this.runner.done.toString() + ' / ' + this.runner.total.toString();
-    }
-    return '选择范围后开始检测';
-  }
-
-  private jobBarDotColor(): ResourceColor {
-    if (this.runner.status === DETECT_STATUS_RUNNING) {
-      return $r('app.color.info');
-    }
-    if (this.runner.status === DETECT_STATUS_FAILED) {
-      return $r('app.color.warning');
-    }
-    if (this.runner.status === DETECT_STATUS_DONE) {
-      return $r('app.color.brand');
-    }
-    return $r('app.color.text_4');
+    return this.totalRows.toString() + ' 个书源 · ' + this.enabledRows.toString() + ' 启用';
   }
 
   @Builder
-  segmentHeader() {
-    Row({ space: 4 }) {
-      Column() {
-        SegmentedCell({
-          options: ['书源', '检测'],
-          selected: this.activeSegment,
-          onSelect: (index: number) => {
-            this.activeSegment = index;
-          }
-        })
-      }
-      .layoutWeight(1)
-
-      Row() {
-        Text('+')
-          .fontSize(28)
-          .fontWeight(FontWeight.Lighter)
-          .fontColor($r('app.color.text_2'))
-      }
-      .width(44)
-      .height(44)
-      .justifyContent(FlexAlign.Center)
-      .accessibilityText('添加书源')
-      .accessibilityLevel('yes')
-      .bindMenu(this.addMenuItems())
-
+  pageHeader() {
+    Row() {
+      Text(this.headerSummary())
+        .fontSize(13)
+        .fontColor($r('app.color.text_3'))
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
       MoreMenuButton({
         items: this.moreMenuItems(),
-        label: '更多书源操作'
+        label: '书源操作'
       })
     }
     .width('100%')
-    .height(52)
+    .height(48)
     .padding({ left: 16, right: 4 })
     .alignItems(VerticalAlign.Center)
   }
@@ -1339,63 +1153,37 @@ export struct BookSourceManagePage {
   }
 
   @Builder
-  sourceSearchBar() {
-    Row() {
-      SymbolGlyph($r('sys.symbol.magnifyingglass'))
-        .fontSize(18)
-        .fontColor([$r('app.color.text_4')])
-      TextInput({ text: this.sourceQuery, placeholder: '搜索名称 / 地址 / 分组' })
-        .layoutWeight(1)
-        .height(44)
-        .fontSize(15)
-        .fontColor($r('app.color.text_1'))
-        .placeholderColor($r('app.color.text_5'))
-        .backgroundColor(Color.Transparent)
-        .padding({ left: 8, right: 0 })
-        .onChange((value: string) => {
-          this.scheduleSourceQuery(value);
-        })
-      if (this.sourceQuery.length > 0) {
-        Text('✕')
-          .fontSize(14)
-          .fontColor($r('app.color.text_4'))
-          .padding({ left: 6, right: 4, top: 8, bottom: 8 })
-          .onClick(() => {
-            this.clearSourceQuery();
-          })
-      }
-    }
-    .width('100%')
-    .height(44)
-    .padding({ left: 14, right: 8 })
-    .backgroundColor($r('app.color.bg_card'))
-    .borderRadius(22)
-  }
-
-  @Builder
   emptyState() {
     Column({ space: 10 }) {
-      Text(this.totalRows === 0 ? '还没有书源' : '没有匹配的书源')
+      Text('还没有书源')
         .fontSize(16)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_1'))
-      Text(this.totalRows === 0 ? '导入书源，或恢复内置书源。' : '换个关键词、筛选或分组试试。')
+      Text('导入书源文件，或恢复内置书源。')
         .fontSize(13)
         .fontColor($r('app.color.text_4'))
-      Button(this.totalRows === 0 ? '恢复内置' : '清除搜索和筛选')
-        .height(36)
-        .fontSize(14)
-        .fontColor(this.totalRows === 0 ? $r('app.color.on_brand') : $r('app.color.brand'))
-        .backgroundColor(this.totalRows === 0 ? $r('app.color.brand') : $r('app.color.bg_pill'))
-        .borderRadius(18)
-        .margin({ top: 4 })
-        .onClick(() => {
-          if (this.totalRows === 0) {
+      Row({ space: 10 }) {
+        Button('导入书源')
+          .height(36)
+          .fontSize(14)
+          .fontColor($r('app.color.on_brand'))
+          .backgroundColor($r('app.color.brand'))
+          .borderRadius(18)
+          .margin({ top: 4 })
+          .onClick(() => {
+            this.importFromFile();
+          })
+        Button('恢复内置')
+          .height(36)
+          .fontSize(14)
+          .fontColor($r('app.color.text_2'))
+          .backgroundColor($r('app.color.bg_pill'))
+          .borderRadius(18)
+          .margin({ top: 4 })
+          .onClick(() => {
             this.confirmResetBundled();
-          } else {
-            this.clearSourceCriteria();
-          }
-        })
+          })
+      }
     }
     .width('100%')
     .height('100%')
@@ -1404,240 +1192,91 @@ export struct BookSourceManagePage {
   }
 
   @Builder
-  sourceSegment() {
-    Column() {
-      Column({ space: 8 }) {
-        this.sourceSearchBar()
-        Scroll() {
-          Row({ space: 8 }) {
-            ManageFilterChip({
-              label: '全部 ' + this.sourceChipTotal.toString(),
-              selected: this.sourceFilter === SOURCE_FILTER_ALL,
-              onSelect: () => this.selectSourceFilter(SOURCE_FILTER_ALL)
+  sourceList() {
+    Stack() {
+      List({ scroller: this.sourceScroller }) {
+        LazyForEach(this.sourceDs, (source: SourceRow) => {
+          ListItem() {
+            SourceManageRow({
+              source: source,
+              detectMode: this.detectMode,
+              onDetail: (source: SourceRow) => {
+                this.openSourceDetail(source);
+              },
+              onToggle: (source: SourceRow, on: boolean) => {
+                this.toggleSource(source, on);
+              },
+              onDelete: (source: SourceRow) => {
+                this.confirmRemoveSource(source);
+              }
             })
-            ManageFilterChip({
-              label: '启用 ' + this.sourceChipEnabled.toString(),
-              selected: this.sourceFilter === SOURCE_FILTER_ENABLED,
-              onSelect: () => this.selectSourceFilter(SOURCE_FILTER_ENABLED)
-            })
-            if (this.sourceChipDisabled > 0) {
-              ManageFilterChip({
-                label: '停用 ' + this.sourceChipDisabled.toString(),
-                selected: this.sourceFilter === SOURCE_FILTER_DISABLED,
-                onSelect: () => this.selectSourceFilter(SOURCE_FILTER_DISABLED)
-              })
-            }
-            if (this.sourceChipUntested > 0) {
-              ManageFilterChip({
-                label: '未测 ' + this.sourceChipUntested.toString(),
-                selected: this.sourceFilter === SOURCE_FILTER_UNTESTED,
-                onSelect: () => this.selectSourceFilter(SOURCE_FILTER_UNTESTED)
-              })
-            }
-            if (this.sourceChipFailed > 0) {
-              ManageFilterChip({
-                label: '失败 ' + this.sourceChipFailed.toString(),
-                selected: this.sourceFilter === SOURCE_FILTER_FAILED,
-                onSelect: () => this.selectSourceFilter(SOURCE_FILTER_FAILED)
-              })
-            }
-            Text(this.groupLabel(this.sourceGroup))
-              .fontSize(13)
-              .fontColor(this.sourceGroup === undefined ? $r('app.color.text_2') : $r('app.color.brand'))
-              .backgroundColor($r('app.color.bg_pill'))
-              .height(32)
-              .padding({ left: 14, right: 14 })
-              .borderRadius(16)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .bindMenu(this.sourceGroupMenuItems())
           }
-          .padding({ right: 16 })
-        }
-        .width('100%')
-        .height(32)
-        .scrollable(ScrollDirection.Horizontal)
-        .scrollBar(BarState.Off)
+        }, (source: SourceRow) => this.sourceRowKey(source))
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 4, bottom: 8 })
-
-      Row() {
-        Text(`显示 ${this.sourceListCount} / ${this.totalRows} 条 · ${this.enabledRows} 启用`)
-          .fontSize(12)
-          .fontColor($r('app.color.text_4'))
-      }
-      .width('100%')
-      .height(32)
-      .padding({ left: 16, right: 16 })
-
-      Stack() {
-        List({ scroller: this.sourceScroller }) {
-          LazyForEach(this.sourceDs, (source: SourceRow) => {
-            ListItem() {
-              SourceManageRow({
-                source: source,
-                detectMode: this.detectMode,
-                onDetail: (source: SourceRow) => {
-                  this.openSourceDetail(source);
-                },
-                onToggle: (source: SourceRow, on: boolean) => {
-                  this.toggleSource(source, on);
-                },
-                onDelete: (source: SourceRow) => {
-                  this.confirmRemoveSource(source);
-                }
-              })
-            }
-          }, (source: SourceRow) => this.sourceRowKey(source))
-        }
-        .width('100%')
-        .height('100%')
-        .divider({
-          strokeWidth: 1,
-          color: $r('app.color.divider'),
-          startMargin: 16
-        })
-        .cachedCount(8)
-        .scrollBar(BarState.Off)
-        .visibility(this.sourceListCount === 0 ? Visibility.Hidden : Visibility.Visible)
-
-        if (this.sourceListCount === 0) {
-          this.emptyState()
-        }
-      }
-      .layoutWeight(1)
-      .width('100%')
-    }
-    .width('100%')
-    .height('100%')
-    .visibility(this.activeSegment === 0 ? Visibility.Visible : Visibility.Hidden)
-  }
-
-  @Builder
-  detectSegment() {
-    DetectPanel({
-      rows: this.rows,
-      status: this.runner.status,
-      mode: this.runner.mode,
-      total: this.runner.total,
-      done: this.runner.done,
-      startedAt: this.runner.startedAt,
-      updatedAt: this.runner.updatedAt,
-      message: this.runner.message,
-      backgroundState: this.detectBackgroundState,
-      clockNow: this.detectClockNow,
-      launching: this.detectLaunching,
-      canResume: this.detectCanResume,
-      onStart: (mode: string, sourceIds: string[]) => {
-        this.launchDetect(mode, sourceIds);
-      },
-      onCancel: () => {
-        this.cancelDetect();
-      },
-      onResume: () => {
-        this.resumeDetect();
-      },
-      onDetail: (source: SourceRow) => {
-        this.openSourceDetail(source);
-      },
-      onToggle: (source: SourceRow, on: boolean) => {
-        this.toggleSource(source, on);
-      },
-      onDelete: (source: SourceRow) => {
-        this.confirmRemoveSource(source);
-      },
-      onDisableUnavailable: (sourceIds: number[]) => {
-        this.confirmDisableUnavailable(sourceIds);
-      },
-      onDeleteUnavailable: (sourceIds: number[]) => {
-        this.confirmDeleteUnavailable(sourceIds);
-      }
-    })
-    .width('100%')
-    .height('100%')
-    .visibility(this.activeSegment === 1 ? Visibility.Visible : Visibility.Hidden)
-  }
-
-  @Builder
-  jobBar() {
-    Row({ space: 10 }) {
-      Row({ space: 8 }) {
-        Row()
-          .width(7)
-          .height(7)
-          .borderRadius(4)
-          .backgroundColor(this.jobBarDotColor())
-        Column({ space: 4 }) {
-          Text(this.jobBarTitle())
-            .fontSize(13)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_2'))
-            .width('100%')
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          if (this.runner.status === DETECT_STATUS_RUNNING) {
-            Progress({
-              value: this.runner.done,
-              total: this.runner.total > 0 ? this.runner.total : 1,
-              type: ProgressType.Linear
-            })
-              .width('100%')
-              .height(3)
-              .color($r('app.color.brand'))
-              .backgroundColor($r('app.color.bg_pill'))
-          } else {
-            Text(this.jobBarMeta())
-              .fontSize(12)
-              .fontColor($r('app.color.text_4'))
-              .width('100%')
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-          }
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-      }
-      .layoutWeight(1)
       .height('100%')
-      .alignItems(VerticalAlign.Center)
-      .accessibilityText(this.jobBarTitle() + '，' + this.jobBarMeta())
-      .accessibilityLevel('yes')
-      .onClick(() => {
-        this.activeSegment = 1;
+      .divider({
+        strokeWidth: 1,
+        color: $r('app.color.divider'),
+        startMargin: 16
       })
+      .cachedCount(8)
+      .scrollBar(BarState.Off)
+      .visibility(this.sourceListCount === 0 ? Visibility.Hidden : Visibility.Visible)
 
-      if (this.runner.status === DETECT_STATUS_RUNNING) {
-        Button(this.detectLaunching ? '正在停止…' : '取消')
-          .height(32)
-          .fontSize(13)
-          .fontColor($r('app.color.text_2'))
-          .backgroundColor($r('app.color.bg_pill'))
-          .borderRadius(16)
-          .enabled(!this.detectLaunching)
-          .accessibilityText('取消检测')
-          .onClick(() => {
-            this.cancelDetect();
-          })
-      } else {
-        SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(18)
-          .fontColor([$r('app.color.text_4')])
+      if (this.sourceListCount === 0) {
+        this.emptyState()
       }
     }
+    .layoutWeight(1)
     .width('100%')
-    .height(60)
-    .padding({ left: 16, right: 12 })
-    .alignItems(VerticalAlign.Center)
-    .backgroundColor($r('app.color.bg_card'))
-    .borderRadius(10)
-    .margin({ left: 16, right: 16, top: 6, bottom: 8 })
+    .visibility(this.detectView ? Visibility.Hidden : Visibility.Visible)
+  }
+
+  @Builder
+  detectBody() {
+    Column() {
+      DetectProgressCard({
+        status: this.runner.status,
+        mode: this.runner.mode,
+        total: this.runner.total,
+        done: this.runner.done,
+        startedAt: this.runner.startedAt,
+        updatedAt: this.runner.updatedAt,
+        message: this.runner.message,
+        backgroundState: this.detectBackgroundState,
+        clockNow: this.detectClockNow,
+        launching: this.detectLaunching,
+        canResume: this.detectCanResume,
+        unavailableCount: this.unavailableCount,
+        onCancel: () => {
+          this.cancelDetect();
+        },
+        onResume: () => {
+          this.resumeDetect();
+        },
+        onBack: () => {
+          this.detectView = false;
+        },
+        onDisableUnavailable: () => {
+          this.confirmDisableUnavailable(this.unavailableIds());
+        },
+        onDeleteUnavailable: () => {
+          this.confirmDeleteUnavailable(this.unavailableIds());
+        }
+      })
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .visibility(this.detectView ? Visibility.Visible : Visibility.Hidden)
   }
 
   build() {
     Stack() {
       Column() {
-        this.segmentHeader()
+        if (!this.detectView) {
+          this.pageHeader()
+        }
         if (this.showUrl) {
           this.urlImportBar()
         }
@@ -1645,12 +1284,11 @@ export struct BookSourceManagePage {
           this.summaryBanner()
         }
         Stack() {
-          this.sourceSegment()
-          this.detectSegment()
+          this.sourceList()
+          this.detectBody()
         }
         .layoutWeight(1)
         .width('100%')
-        this.jobBar()
       }
       .width('100%')
       .height('100%')

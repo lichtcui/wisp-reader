@@ -11,15 +11,16 @@
 > 本目录由 `make docs-toc` 自动生成，**勿手改**（行号是生成时快照）。
 
 <!-- TOC:BEGIN -->
-- 里程碑状态 — L27
-- M5 结果（2026-09-25，真机验证） — L44
-- 整书下载（2026-10-23，核心流程已真机验证） — L84
-- 书架下拉刷新（2026-10-23，已真机验证） — L98
-- 书架「更新」计数与目录兜底（2026-10-23，已真机验证） — L104
-- 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L115
-- 在办：书源管理改造（3000 条） — L149
-- 未决 / 风险 — L264
-- 交接备忘 — L393
+- 里程碑状态 — L28
+- M5 结果（2026-09-25，真机验证） — L45
+- 整书下载（2026-10-23，核心流程已真机验证） — L85
+- 书架下拉刷新（2026-10-23，已真机验证） — L99
+- 书架「更新」计数与目录兜底（2026-10-23，已真机验证） — L105
+- 书架编辑模式（多选删除）（2026-10-07，已真机验证 D1–D21） — L116
+- 在办：书源管理改造（3000 条） — L150
+  - 2026-11-02 布局改版：单一主体 + 检测任务态（代码已合，真机验收待补） — L178
+- 未决 / 风险 — L297
+- 交接备忘 — L426
 <!-- TOC:END -->
 
 ---
@@ -174,9 +175,41 @@ Checkpoint 2 除“与人对齐后再进 Phase 4”外已通过。Phase 3 的 `T
 检测态 / 耗时 / 时间、四类规则及删除二次确认均与选中源一致，取消删除未写入。`make test`
 65 passed、`make check` 与 `make run` 通过，`BottomDrawer` 仍 8 处且无新增裸 `bindSheet`。**
 
+### 2026-11-02 布局改版：单一主体 + 检测任务态（代码已合，真机验收待补）
+
+真机反馈「书源管理 UI 混乱」→ 诊断根因是**状态源重复**：「我在看什么」被段选择器、筛选 chips、
+底部作业条三处重复表达，搜索框出现两次（书源段一次、检测结果面一次），同一份检测进度有两份。
+权威记载：[`specs/SPEC-BOOKSOURCE-LAYOUT.md`](./specs/SPEC-BOOKSOURCE-LAYOUT.md) §3（新布局）与
+§7（改版理由 + 已知代价）。
+
+- **撤**：搜索框（`sourceRowMatchesQuery` 随之从 `components/SourceRows.ets` 删除）、筛选 chips
+  （全部/启用/停用/未测/失败）、分组选择器、`书源/检测` 分段、底部作业条、检测结果面及其结果搜索。
+- **立**：页面主体 = 书源列表（全量 + 三档排序，失败源自然置顶）；页面级动作全进页内头行单一 `⋯`
+  （从文件导入 / 从链接导入 / 导出书源 / 检测书源（增量 N）/ 全部重测（M）/ 规则调试器 / 恢复内置 /
+  `[DEBUG]` T1.6 造数）；检测改为**任务态**——进行中整页只有进度卡
+  （新 `components/DetectProgressCard.ets`），结束后原地变摘要 +「返回书源列表」。
+- **能力不丢**：关闭/删除不可用（`setEnabledMany` / `removeMany` 批量事务 + 二次确认）搬到摘要卡；
+  空态给「导入书源」主按钮 +「恢复内置」次按钮。
+- **删除**：`components/DetectPanel.ets`。`BottomDrawer` 仍 8 处调用点，无新路由。
+- **主机侧门禁**：`make hap` 通过；`check-keep-props` / `check-hilog-format` / `check-source-consumers` /
+  `check-t16-bench` 均通过。`make check` 仍在 `check-docs-links` 中断——31 条失效链接全部在既有未提交
+  改动的 `research/BOOKSOURCE-REVAMP-TODO.md`（指向已过期的 `/tmp` 证据），与本次改动无关。
+- **真机验收通过（2026-11-02，debug `33Z0224424136564`）**：常态 = 头行 `13 个书源 · 13 启用` + 列表 + `⋯`
+  （反例扫描 `搜索名称`/`全部 N`/`启用 N`/`分组 ·` 等 **0 命中**；旧符号在编译产物里归零）；
+  `⋯` 菜单 7 项（debug 8 项），`检测书源（增量 2）`/`全部重测（13）` 计数与头行一致；
+  点检测后**整页只剩进度卡**（`检测中 · 完整检测 | 0 / 13 | 取消检测`；
+  `检测完成 · 预检 | 2 / 2 | 本轮已检测 2 个书源；当前 2 个不可用，已排到列表最前。`）；
+  取消 → `已取消 · 0 / 13` + 固定双按钮；「返回书源列表」回到列表；全程 hilog 无 JS/ArkTS 异常。
+- **真机顺带修掉一处抖动**：取消后 `canResume` 要约 1s 才转真，原实现按它切换「单按钮 ↔ 双按钮」布局，
+  按钮位置会跳（`[返回书源列表]` 全宽 → `[继续本轮][返回书源列表]`），用户可能误点「继续本轮」。
+  改为 `cancelled` / `failed` **固定**双按钮、只把「继续本轮」置灰；两次 dump 按钮边界一致（已复验）。
+- **已知语义（非缺陷）**：取消后同范围再点「全部重测」= 续跑同一轮（`startedAt` 与结果文件保留），
+  所以进度页的已用时长会接着上一段累计，而不是从 00:00 重新计时。
+
 - 设计（索引）：[`specs/SPEC-BOOKSOURCE-REVAMP.md`](./specs/SPEC-BOOKSOURCE-REVAMP.md)（capability map + 共享契约）
   + 五份模块 spec（`source-store` / `source-list` / `detect-engine` / `detect-job` / `detect-ui`）
-  + [`specs/SPEC-BOOKSOURCE-LAYOUT.md`](./specs/SPEC-BOOKSOURCE-LAYOUT.md)（布局 2 两段式）
+  + [`specs/SPEC-BOOKSOURCE-LAYOUT.md`](./specs/SPEC-BOOKSOURCE-LAYOUT.md)（**布局：单一主体 + 检测任务态**，
+  2026-11-02 改版，参见其 §3 / §7）
 - 计划：[`research/BOOKSOURCE-REVAMP-PLAN.md`](./research/BOOKSOURCE-REVAMP-PLAN.md)（A1–A12 架构决定 / 依赖图 / 风险表）
 - 任务：[`research/BOOKSOURCE-REVAMP-TODO.md`](./research/BOOKSOURCE-REVAMP-TODO.md)（20 任务 / 6 检查点 / 两会话并行分工）
 - **`T0.2` 并发 / 超时实测已完成（2026-10-15，Ask first 已确认）**：并发 **16**、L1 超时 **8 s**
