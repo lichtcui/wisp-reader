@@ -19,6 +19,12 @@ export const ROUTE_CACHE_MANAGE: string = 'CacheManage';
 export const ROUTE_RULE_DEBUGGER: string = 'RuleDebugger';
 export const ROUTE_BACKUP_MANAGE: string = 'BackupManage';
 
+/**
+ * Temporary product switch: hide every user-reachable listening entry.
+ * TTS pages, routes and engine code stay in place so the feature can be restored later.
+ */
+export const LISTENING_FEATURE_ENABLED: boolean = false;
+
 // T1.6 debug-only storage benchmark. Dataset/backup files live in the app sandbox and
 // are intentionally never committed to the repository.
 export const T16_BENCH_ROW_COUNT: number = 3000;

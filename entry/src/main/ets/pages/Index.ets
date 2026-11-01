@@ -15,6 +15,7 @@ import {
   ROUTE_READING_SETTINGS,
   ROUTE_RULE_DEBUGGER,
   ROUTE_SOURCE_MANAGE,
+  LISTENING_FEATURE_ENABLED,
   TAB_SHELF,
   TAB_SEARCH,
   TAB_SETTINGS
@@ -80,7 +81,9 @@ struct Index {
     } else if (title === '通用设置') {
       this.pathStack.pushPath({ name: ROUTE_GENERAL_SETTINGS });
     } else if (title === '听书设置') {
-      this.pathStack.pushPath({ name: ROUTE_LISTENING_SETTINGS });
+      if (LISTENING_FEATURE_ENABLED) {
+        this.pathStack.pushPath({ name: ROUTE_LISTENING_SETTINGS });
+      }
     } else if (title === '清理缓存') {
       this.pathStack.pushPath({ name: ROUTE_CACHE_MANAGE });
     } else if (title === '备份与恢复') {
@@ -91,6 +94,9 @@ struct Index {
   }
 
   private openListening(param?: ListenParam): void {
+    if (!LISTENING_FEATURE_ENABLED) {
+      return;
+    }
     this.pathStack.pushPath({ name: ROUTE_LISTENING, param: param });
   }
 
@@ -470,7 +476,9 @@ struct Index {
       .backgroundColor($r('app.color.bg_page'))
     } else if (name === ROUTE_LISTENING_SETTINGS) {
       NavDestination() {
-        ListeningSettingsPage()
+        if (LISTENING_FEATURE_ENABLED) {
+          ListeningSettingsPage()
+        }
       }
       .title('听书设置')
       .backgroundColor($r('app.color.bg_page'))
@@ -482,10 +490,12 @@ struct Index {
       .backgroundColor($r('app.color.bg_page'))
     } else if (name === ROUTE_LISTENING) {
       NavDestination() {
-        ListeningPage({
-          param: param as ListenParam,
-          onBack: () => this.pathStack.pop()
-        })
+        if (LISTENING_FEATURE_ENABLED) {
+          ListeningPage({
+            param: param as ListenParam,
+            onBack: () => this.pathStack.pop()
+          })
+        }
       }
       .hideTitleBar(true)
       .backgroundColor($r('app.color.listen_bg'))

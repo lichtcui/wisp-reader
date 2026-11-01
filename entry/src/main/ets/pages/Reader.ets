@@ -34,6 +34,7 @@ import {
   KEY_READER_LINE_HEIGHT,
   KEY_READER_NIGHT,
   KEY_READER_ONE_HAND_PAGE,
+  LISTENING_FEATURE_ENABLED,
   ListenParam,
   READER_FONT_SIZE_DEFAULT,
   READER_LINE_HEIGHT_DEFAULT,
@@ -1329,6 +1330,9 @@ export struct ReaderPage {
   }
 
   private openListening(): void {
+    if (!LISTENING_FEATURE_ENABLED) {
+      return;
+    }
     const src: BookSource | undefined = this.source;
     const book: Book | undefined = this.book;
     if (src === undefined || book === undefined || this.chapters.length === 0) {
@@ -1594,8 +1598,10 @@ export struct ReaderPage {
       Row() {
         this.funcButton($r('sys.symbol.line_3_horizontal'), '目录', this.panel === PANEL_TOC,
           () => this.openPanel(PANEL_TOC))
-        this.funcButton($r('sys.symbol.headphones'), '听书', this.tts.active,
-          () => this.openListening())
+        if (LISTENING_FEATURE_ENABLED) {
+          this.funcButton($r('sys.symbol.headphones'), '听书', this.tts.active,
+            () => this.openListening())
+        }
         this.funcButton(this.nightMode ? $r('sys.symbol.sun_max') : $r('sys.symbol.moon'),
           this.nightMode ? '日间模式' : '夜间模式', false, () => this.toggleNight())
         this.funcButton($r('sys.symbol.gearshape'), '设置', this.panel === PANEL_SETTINGS,
@@ -1921,7 +1927,7 @@ export struct ReaderPage {
 
       // Quick return to the listening page once a session is running. Kept
       // below the drawers so their mask covers it.
-      if (this.tts.active) {
+      if (LISTENING_FEATURE_ENABLED && this.tts.active) {
         FloatingListenButton({
           visible: true,
           onTap: () => this.onOpenListening()

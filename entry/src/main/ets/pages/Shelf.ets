@@ -8,6 +8,7 @@ import { sourcesForUrls } from '../model/SourceStore';
 import { ensureSourceStore } from '../model/SourceStoreMigration';
 import { isLocalBook, localSource, repairLocalBookMetadata } from '../model/LocalBook';
 import { deriveTotalChapters, shelfProgressText } from '../common/Format';
+import { LISTENING_FEATURE_ENABLED } from '../common/Const';
 import { TtsController } from '../model/TtsController';
 import { FloatingListenButton } from '../ui/common/FloatingListenButton';
 
@@ -130,7 +131,7 @@ export struct ShelfPage {
       .height('100%')
       .backgroundColor($r('app.color.bg_page'))
 
-      if (this.tts.active && !this.edit.editing) {
+      if (LISTENING_FEATURE_ENABLED && this.tts.active && !this.edit.editing) {
         FloatingListenButton({
           visible: true,
           onTap: () => this.onOpenListening()

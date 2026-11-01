@@ -2,6 +2,7 @@ import { bundleManager, common } from '@kit.AbilityKit';
 import { GroupTitle, InsetDivider, NavCell } from '../components/ListCells';
 import { readThemeMode, themeModeLabel } from '../common/Theme';
 import { formatBytes } from '../common/Format';
+import { LISTENING_FEATURE_ENABLED } from '../common/Const';
 import { getCacheStats } from '../model/CacheRepository';
 
 @ComponentV2
@@ -67,13 +68,15 @@ export struct SettingsPage {
             showArrow: true,
             onTap: () => this.onNavigate('阅读设置')
           })
-          InsetDivider()
-          NavCell({
-            label: '听书设置',
-            value: '',
-            showArrow: true,
-            onTap: () => this.onNavigate('听书设置')
-          })
+          if (LISTENING_FEATURE_ENABLED) {
+            InsetDivider()
+            NavCell({
+              label: '听书设置',
+              value: '',
+              showArrow: true,
+              onTap: () => this.onNavigate('听书设置')
+            })
+          }
           InsetDivider()
           NavCell({
             label: '书源管理',
