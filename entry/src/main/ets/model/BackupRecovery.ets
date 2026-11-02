@@ -422,8 +422,6 @@ export async function applyRestorePayload(
   await initSourceStore(ctx);
   await initShelf(ctx);
   await replaceAll(payload.sources, payload.sources.length);
-  // TEMP ACCEPTANCE PROBE: fail after source store replacement.
-  throw new Error('injected restore failure after source replace');
   await replaceShelf(payload.books, payload.progress);
 
   const sourceCount: number = (await countRows()).total;
