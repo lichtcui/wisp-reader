@@ -1,4 +1,4 @@
-// ─── 文件索引（改本文件先看这里；本文件约 1426 行）──────────────────────────
+// ─── 文件索引（改本文件先看这里；本文件约 2240 行）──────────────────────────
 // 下面只列**成员名**，不列行号（行号会漂）；定位用 `grep -n "<名字>" entry/src/main/ets/pages/Reader.ets`。
 //   状态（@Local）：chapters / chapterIndex / paragraphs / paragraphIndex / pages / pageIndex / sliderValue
 //                   menuVisible / panel / tocDescending / tocContentRevision / fontSize / lineHeight / nightMode / oneHandMode / tts
@@ -8,6 +8,8 @@
 //   章内导航：isReadable / firstReadable / nextReadable / prevReadable / prevChapter / nextChapter / prevPage / nextPage / onPageChanged
 //   分页测算（横向分页核心）：availWidthPx / availHeightPx / measureOptions / measureHeight / maxCharsFit / paraMargin / firstLineIndentFp
 //                             paginateChapter / chapterPages / layoutKey / rebuildWindow / flatIndexOf / pageIdFor / indexOfPageId
+//   翻页手势守卫（T-READ-7 手势路径）：beginSwipe / releaseSwipeGuard / scheduleWindowRebuild / settleSwipe / finishSwipe
+//                                      （落点挂在 contentPager 的 .onTouch / .onAnimationStart / .onAnimationEnd）
 //                             （PageSeg 与 Swiper 的懒数据源在 common/PageSeg.ets、common/PageDataSource.ets）
 //   进度持久化：persistProgress / locateCurrentToc / tocPosition
 //   主题：systemDark / resolveColorHex / applyFullScreen / toggleNight / bgColor / textColor / dimColor
@@ -84,6 +86,8 @@ const DOMAIN: number = 0x0000;
 const TAG: string = 'SourceReaderReader';
 const PANEL_SETTINGS: string = 'settings';
 const PANEL_SOURCE: string = 'source';
+/** 滑动手势守卫的兜底时长：某次触摸没走到 onChange / onAnimationEnd 时别让守卫永久卡住。 */
+const SWIPE_WATCHDOG_MS: number = 2000;
 
 @ComponentV2
 export struct ReaderPage {
@@ -149,6 +153,18 @@ export struct ReaderPage {
   private tocScroller: Scroller = new Scroller();
   /** 滑动手势开始时所在页，用于判定边界翻章（区分正常翻页与末页/首页回弹）。 */
   private swipeStartPage: number = 0;
+  /**
+   * 手势/翻页动画是否在飞（T-READ-7 手势路径的守卫）。在飞期间**冻结窗口重排**：
+   * `warmNeighbors()` 回来重排会把「上一章」prepend 进页流、当前页下标整体平移，
+   * 而 `.index(this.pageIndex)` 是声明式活 setter ⇒ Swiper 被拽回原页。
+   */
+  private swipeBusy: boolean = false;
+  /** 因手势在飞而挂起的窗口重排，落定后由 `finishSwipe()` 补做（不丢）。 */
+  private rebuildPending: boolean = false;
+  /** 手势起始时的 `loadGen`：手势期间若发生显式载章，页流与锚点归 `applyChapter`，落定不再按旧落点改写。 */
+  private gestureLoadGen: number = 0;
+  /** 守卫兜底定时器（见 `beginSwipe`）。 */
+  private swipeWatchdog: number = -1;
   @Local dataSource: ChapterDataSource = new ChapterDataSource();
   /** Monotonic token so a slow chapter fetch cannot overwrite a newer one. */
   private loadGen: number = 0;
@@ -235,8 +251,9 @@ export struct ReaderPage {
   }
 
   aboutToDisappear(): void {
-    // 页面已离开：作废还在飞的目录重爬，避免它回来写已销毁组件的状态。
+    // 页面已离开：作废还在飞的目录重爬与手势守卫兜底定时器，避免它们回来写已销毁组件的状态。
     this.tocSession = this.tocSession + 1;
+    this.releaseSwipeGuard();
     setLayoutFullScreen(false);
     setWindowBackgroundColor(this.resolveColorHex($r('app.color.bg_page')));
     setStatusBarContentColor(this.systemDark() ? '#FFFFFF' : '#000000');
@@ -715,6 +732,8 @@ export struct ReaderPage {
     // 首次进入时尺寸尚未测出（contentWidth/Height 还是默认值），若立即 rebuildWindow
     // 会用错误的默认尺寸排版，onAreaChange 再重排一次，就会先闪一帧“未铺满”页面。
     // 所以：尺寸未测出时先清空 pages，由 onAreaChange 用真实尺寸完成首次分页。
+    // 本次整体重排已覆盖被手势冻结挂起的那次窗口重排。
+    this.rebuildPending = false;
     if (this.sized) {
       this.rebuildWindow(restoreAtEnd);
     } else {
@@ -750,7 +769,8 @@ export struct ReaderPage {
       }
     }
     if (gen === this.loadGen && this.sized) {
-      this.rebuildWindow(false);
+      // 手势/动画在飞时只挂起：立即重排会平移下标，把还在滑动的 Swiper 拽回原页（T-READ-7 手势路径）。
+      this.scheduleWindowRebuild();
     }
   }
 
@@ -816,6 +836,7 @@ export struct ReaderPage {
     this.pageIndex = index;
     if (index < 0 || index >= this.pages.length || this.pages[index].length === 0) {
       this.persistProgress();
+      this.finishSwipe();
       return;
     }
     const seg: PageSeg = this.pages[index][0];
@@ -836,6 +857,8 @@ export struct ReaderPage {
       this.paragraphIndex = seg.para;
     }
     this.persistProgress();
+    // 落定：解除手势冻结并补做被挂起的窗口重排（T-READ-7 手势路径）。
+    this.finishSwipe();
   }
 
   /** 可用内容宽度（去左右 padding 各 20），单位 vp，与 measure 约束宽度、渲染宽度对齐。 */
@@ -1079,6 +1102,97 @@ export struct ReaderPage {
     const seg: PageSeg = segs[0];
     this.currentPageId = this.pageIdFor(seg);
     this.paragraphIndex = seg.para;
+  }
+
+  /**
+   * 手势守卫（T-READ-7 的手势路径）：手指落下即冻结窗口重排，落定后再补做（见 `finishSwipe`）。
+   *
+   * 为什么落手就要冻结：跟手拖动期间 `pageIndex` / `currentPageId` 都还停在**被拖走的那一页**
+   * —— 带动画的 index 变化要等落定后才由 `onChange` → `onPageChanged` 回写。此时若
+   * `warmNeighbors()` 回来重排窗口，prepend 上一章会让当前页下标整体平移，而
+   * `.index(this.pageIndex)` 是声明式活 setter ⇒ Swiper 被拽回原页（真机观感 = 滑着滑着突然回弹）。
+   */
+  private beginSwipe(): void {
+    this.swipeBusy = true;
+    this.gestureLoadGen = this.loadGen;
+    if (this.swipeWatchdog >= 0) {
+      clearTimeout(this.swipeWatchdog);
+    }
+    // 兜底：某次触摸没走到 `onChange` / `onAnimationEnd` 时别让守卫永久卡住。只解除冻结、
+    // **不**补做挂起的重排 —— 万一手势其实还在飞，补做会当场把 Swiper 拽回去。
+    this.swipeWatchdog = setTimeout(() => {
+      this.swipeWatchdog = -1;
+      this.swipeBusy = false;
+    }, SWIPE_WATCHDOG_MS);
+  }
+
+  /** 解除手势冻结（不补做挂起的重排；挂起的重排留给下一次落定补做）。 */
+  private releaseSwipeGuard(): void {
+    if (this.swipeWatchdog >= 0) {
+      clearTimeout(this.swipeWatchdog);
+      this.swipeWatchdog = -1;
+    }
+    this.swipeBusy = false;
+  }
+
+  /** 补做被手势冻结的窗口重排（`warmNeighbors()` 的异步重排只挂起、不丢）。 */
+  private flushWindowRebuild(): void {
+    if (!this.rebuildPending) {
+      return;
+    }
+    this.rebuildPending = false;
+    this.rebuildWindow(false);
+  }
+
+  /** 手势落定收尾：解除冻结并补做挂起的窗口重排。 */
+  private finishSwipe(): void {
+    this.releaseSwipeGuard();
+    this.flushWindowRebuild();
+  }
+
+  /**
+   * `warmNeighbors()` 的异步窗口重排：手势/翻页动画在飞时只挂起，落定后由 `finishSwipe()` 补做；
+   * 静止时照旧立即重排（与修复前一致）。
+   */
+  private scheduleWindowRebuild(): void {
+    if (this.swipeBusy) {
+      this.rebuildPending = true;
+      return;
+    }
+    this.rebuildWindow(false);
+  }
+
+  /**
+   * Swiper 落定（`onAnimationEnd`）：按实际落点收尾手势。
+   *
+   * - 落点换了页：`onChange` 随后会带同一个 index 回来，由 `onPageChanged` 做完整重锚
+   *   （跨章还会整体重排）。这里**不能**先补做重排 —— 下标一旦平移，随后的 `onChange(index)`
+   *   就会指到别的页。
+   * - 落点没换页（拖动没过阈值、spring-back，`onChange` 不触发）：把 `onAnimationStart` 可能
+   *   提前挪到「没到达的目标页」的锚点还原回当前页，再补做挂起的重排。
+   */
+  private settleSwipe(index: number): void {
+    if (!this.swipeBusy) {
+      return;
+    }
+    // 手势期间发生过显式载章：锚点与页流归 `applyChapter` 说了算，别用旧落点覆盖。
+    if (this.loadGen !== this.gestureLoadGen) {
+      this.finishSwipe();
+      return;
+    }
+    if (index !== this.pageIndex) {
+      // 保持冻结：`onChange` 随后回来才由 `onPageChanged` 结清。这里若解冻，`onChange` 到达前
+      // 落下的一次重排就会平移下标，让随后的 `onChange(index)` 指到别的页。万一 `onChange`
+      // 没来，`beginSwipe` 的兜底定时器最多 2s 后解冻（挂起的重排留给下一次落定补做）。
+      return;
+    }
+    // 页流在手势期间被冻结（异步重排只挂起、显式载章已被上面挡掉），这里的下标仍有效。
+    if (index >= 0 && index < this.pages.length && this.pages[index].length > 0) {
+      const seg: PageSeg = this.pages[index][0];
+      this.currentPageId = this.pageIdFor(seg);
+      this.paragraphIndex = seg.para;
+    }
+    this.finishSwipe();
   }
 
   /**
@@ -1410,6 +1524,8 @@ export struct ReaderPage {
     this.pageCache.clear();
     this.pageCacheKey = '';
     this.inflight.clear();
+    this.releaseSwipeGuard();
+    this.rebuildPending = false;
     this.currentPageId = '';
     this.pages = [];
     this.pageSource.setItems([]);
@@ -1927,6 +2043,22 @@ export struct ReaderPage {
     .onChange((index: number) => {
       this.onPageChanged(index);
     })
+    // 手指落下即冻结窗口重排（T-READ-7 手势路径）；落定由 onAnimationEnd / onChange 结清。
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.beginSwipe();
+      }
+    })
+    // 松手起动画时把页身份提前挪到**目标页**（与 nextPage / prevPage 同一套锚点）：
+    // 万一手势期间仍有重排走到这里（兜底定时器 / 竞态），映射的也是目标页而不是原页。
+    .onAnimationStart((index: number, targetIndex: number) => {
+      if (this.swipeBusy && this.loadGen === this.gestureLoadGen) {
+        this.anchorToPage(targetIndex);
+      }
+    })
+    .onAnimationEnd((index: number) => {
+      this.settleSwipe(index);
+    })
     .onAreaChange((oldValue: Area, newValue: Area) => {
       const w: number = Number(newValue.width);
       const h: number = Number(newValue.height);
@@ -1944,6 +2076,8 @@ export struct ReaderPage {
       PanGesture({ direction: PanDirection.Horizontal, distance: 20 })
         .onActionStart(() => {
           this.swipeStartPage = this.pageIndex;
+          // 20vp 阈值之后才触发；手指刚落下的那段由 Swiper 的 onTouch(Down) 兜住。
+          this.beginSwipe();
         })
         .onActionEnd((event: GestureEvent) => {
           if (this.menuVisible || this.panel !== PANEL_NONE || this.loading || this.failed.length > 0) {
