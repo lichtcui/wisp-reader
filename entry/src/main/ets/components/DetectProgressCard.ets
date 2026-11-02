@@ -8,7 +8,11 @@ import {
 } from '../model/DetectJob';
 
 /**
- * 书源管理页的「任务态」主体：检测进行 / 结束时它取代书源列表。
+ * 书源管理页的「任务态」主体：检测进行 / 结束时它整页取代书源列表。
+ *
+ * 2026-11-02 二次改版：不再是垂直居中的浮卡（观感像弹窗），改为**整页版式**——
+ * 页内头行（`书源检测` + 模式）+ 全宽进度 / 摘要分区 + 底部常驻操作区；
+ * 内容顶对齐，进度卡不再有居中、圆角卡片与左右留白。
  *
  * 页面持有作业状态（`DetectJobRunner` 单例），本组件只渲染——
  * 一次检测只出现在一个地方，不再有「底部作业条 + 检测段作业卡」两份进度。
@@ -44,20 +48,21 @@ export struct DetectProgressCard {
     return this.mode === DETECT_MODE_PROBE ? '预检' : '完整检测';
   }
 
-  private title(): string {
+  /** 状态标题；模式移到头行的独立胶囊，这里只报作业本身的状态。 */
+  private statusTitle(): string {
     if (this.running()) {
-      return '检测中 · ' + this.modeLabel();
+      return '检测中';
     }
     if (this.status === DETECT_STATUS_DONE) {
-      return '检测完成 · ' + this.modeLabel();
+      return '检测完成';
     }
     if (this.status === DETECT_STATUS_CANCELLED) {
-      return '已取消 · ' + this.modeLabel();
+      return '已取消';
     }
     if (this.status === DETECT_STATUS_FAILED) {
-      return '检测失败 · ' + this.modeLabel();
+      return '检测失败';
     }
-    return this.modeLabel();
+    return '检测';
   }
 
   private dotColor(): ResourceColor {
@@ -120,6 +125,10 @@ export struct DetectProgressCard {
     return '仅前台运行';
   }
 
+  private backgroundDegraded(): boolean {
+    return this.backgroundState === 'degraded';
+  }
+
   private cancelText(): string {
     if (this.launching) {
       return '正在停止…';
@@ -148,44 +157,161 @@ export struct DetectProgressCard {
     return '已保留本轮结果。' + (this.canResume ? '继续时只处理剩余书源。' : '重新开始会建立新一轮。');
   }
 
+  /** 页内头行：整页身份（标题 + 本轮模式），任务态下书源页头行整行不渲染。 */
   @Builder
-  statusLine() {
-    if (this.running()) {
+  headerBar() {
+    Row() {
+      Text('书源检测')
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_1'))
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      Text(this.modeLabel())
+        .fontSize(12)
+        .fontColor($r('app.color.text_3'))
+        .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+        .backgroundColor($r('app.color.bg_pill'))
+        .borderRadius(12)
+    }
+    .width('100%')
+    .height(48)
+    .padding({ left: 16, right: 16 })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /**
+   * 状态分区：状态点 + 标题 + 已用时长，全宽进度条与计数；
+   * 进行中追加后台态与预计剩余。全部顶对齐、无卡片包裹。
+   */
+  @Builder
+  statusBlock() {
+    Column({ space: 12 }) {
+      Row({ space: 8 }) {
+        Row()
+          .width(8)
+          .height(8)
+          .borderRadius(4)
+          .backgroundColor(this.dotColor())
+        Text(this.statusTitle())
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_1'))
+          .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.startedAt > 0) {
+          Text(this.durationText(this.elapsedMs()))
+            .fontSize(13)
+            .fontColor($r('app.color.text_3'))
+        }
+      }
+      .width('100%')
+
+      Row({ space: 10 }) {
+        Progress({
+          value: this.done,
+          total: this.progressTotal(),
+          type: ProgressType.Linear
+        })
+          .layoutWeight(1)
+          .height(6)
+          .color($r('app.color.brand'))
+          .backgroundColor($r('app.color.bg_pill'))
+        Text(this.done.toString() + ' / ' + this.total.toString())
+          .fontSize(13)
+          .fontColor($r('app.color.text_2'))
+      }
+      .width('100%')
+      .accessibilityText(this.statusTitle() + '，已完成 ' + this.done.toString() + ' / ' + this.total.toString())
+      .accessibilityLevel('yes')
+
       Row() {
         Text(this.backgroundLabel())
           .fontSize(12)
-          .fontColor(this.backgroundState === 'degraded' ?
-            $r('app.color.warning') : $r('app.color.text_4'))
+          .fontColor(this.backgroundDegraded() ? $r('app.color.warning') : $r('app.color.text_4'))
         Blank()
-        if (this.remainingMs() > 0) {
+        if (this.running() && this.remainingMs() > 0) {
           Text('预计剩余 ' + this.durationText(this.remainingMs()))
             .fontSize(12)
             .fontColor($r('app.color.text_4'))
         }
       }
       .width('100%')
-    } else if (this.status === DETECT_STATUS_DONE) {
+    }
+    .width('100%')
+  }
+
+  /** 结束态说明分区（进行中不渲染）。 */
+  @Builder
+  noteBlock() {
+    if (this.status === DETECT_STATUS_DONE) {
       Text(this.doneSummary())
-        .fontSize(12)
-        .fontColor($r('app.color.text_4'))
+        .fontSize(13)
+        .fontColor($r('app.color.text_3'))
         .width('100%')
     } else if (this.status === DETECT_STATUS_CANCELLED) {
       Text(this.cancelledSummary())
-        .fontSize(12)
-        .fontColor($r('app.color.text_4'))
+        .fontSize(13)
+        .fontColor($r('app.color.text_3'))
         .width('100%')
     } else if (this.status === DETECT_STATUS_FAILED) {
       Text(this.message.length > 0 ? this.message : '检测作业失败，可继续处理剩余书源。')
-        .fontSize(12)
+        .fontSize(13)
         .fontColor($r('app.color.warning'))
         .width('100%')
-        .maxLines(2)
+        .maxLines(3)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
     }
   }
 
+  /** 不可用源的清理分区：次级样式、写明口径与条数，仍走二次确认。 */
   @Builder
-  actions() {
+  cleanupBlock() {
+    if (!this.running() && this.unavailableCount > 0) {
+      Column({ space: 8 }) {
+        Text('不可用书源')
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_1'))
+          .width('100%')
+        Text('仅「不可用」参与清理；无结果 / 超时不算坏源。')
+          .fontSize(12)
+          .fontColor($r('app.color.text_4'))
+          .width('100%')
+        Row({ space: 10 }) {
+          Button('关闭不可用 ' + this.unavailableCount.toString())
+            .layoutWeight(1)
+            .height(36)
+            .fontSize(13)
+            .fontColor($r('app.color.text_2'))
+            .backgroundColor($r('app.color.bg_pill'))
+            .borderRadius(18)
+            .enabled(!this.launching)
+            .accessibilityText('关闭不可用书源')
+            .onClick(() => this.onDisableUnavailable())
+          Button('删除不可用 ' + this.unavailableCount.toString())
+            .layoutWeight(1)
+            .height(36)
+            .fontSize(13)
+            .fontColor($r('app.color.warning'))
+            .backgroundColor($r('app.color.bg_pill'))
+            .borderRadius(18)
+            .enabled(!this.launching)
+            .accessibilityText('删除不可用书源')
+            .onClick(() => this.onDeleteUnavailable())
+        }
+        .width('100%')
+        .margin({ top: 2 })
+      }
+      .width('100%')
+    }
+  }
+
+  /** 底部常驻操作区：主操作永远在同一位次，不随状态跳动。 */
+  @Builder
+  actionBar() {
     if (this.running()) {
       Button(this.cancelText())
         .width('100%')
@@ -234,89 +360,40 @@ export struct DetectProgressCard {
     }
   }
 
-  @Builder
-  cleanupActions() {
-    if (!this.running() && this.unavailableCount > 0) {
-      Row({ space: 10 }) {
-        Button('关闭不可用 ' + this.unavailableCount.toString())
-          .layoutWeight(1)
-          .height(36)
-          .fontSize(13)
-          .fontColor($r('app.color.text_2'))
-          .backgroundColor($r('app.color.bg_pill'))
-          .borderRadius(18)
-          .enabled(!this.launching)
-          .accessibilityText('关闭不可用书源')
-          .onClick(() => this.onDisableUnavailable())
-        Button('删除不可用 ' + this.unavailableCount.toString())
-          .layoutWeight(1)
-          .height(36)
-          .fontSize(13)
-          .fontColor($r('app.color.warning'))
-          .backgroundColor($r('app.color.bg_pill'))
-          .borderRadius(18)
-          .enabled(!this.launching)
-          .accessibilityText('删除不可用书源')
-          .onClick(() => this.onDeleteUnavailable())
-      }
-      .width('100%')
-    }
-  }
-
   build() {
     Column() {
-      Column({ space: 12 }) {
-        Row({ space: 8 }) {
-          Row()
-            .width(7)
-            .height(7)
-            .borderRadius(4)
-            .backgroundColor(this.dotColor())
-          Text(this.title())
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_1'))
-            .layoutWeight(1)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          if (this.startedAt > 0) {
-            Text(this.durationText(this.elapsedMs()))
-              .fontSize(12)
-              .fontColor($r('app.color.text_4'))
-          }
+      this.headerBar()
+      Divider()
+        .strokeWidth(1)
+        .color($r('app.color.divider'))
+        .margin({ left: 16 })
+
+      Scroll() {
+        Column({ space: 16 }) {
+          this.statusBlock()
+          this.noteBlock()
+          this.cleanupBlock()
         }
         .width('100%')
+        .padding({ left: 16, right: 16, top: 16, bottom: 16 })
+        .alignItems(HorizontalAlign.Start)
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .align(Alignment.Top)
+      .scrollBar(BarState.Off)
 
-        Row({ space: 10 }) {
-          Progress({
-            value: this.done,
-            total: this.progressTotal(),
-            type: ProgressType.Linear
-          })
-            .layoutWeight(1)
-            .height(6)
-            .color($r('app.color.brand'))
-            .backgroundColor($r('app.color.bg_pill'))
-          Text(this.done.toString() + ' / ' + this.total.toString())
-            .fontSize(12)
-            .fontColor($r('app.color.text_3'))
-        }
-        .width('100%')
-        .accessibilityText(this.title() + '，已完成 ' + this.done.toString() + ' / ' + this.total.toString())
-        .accessibilityLevel('yes')
-
-        this.statusLine()
-        this.actions()
-        this.cleanupActions()
+      Divider()
+        .strokeWidth(1)
+        .color($r('app.color.divider'))
+      Column() {
+        this.actionBar()
       }
       .width('100%')
-      .padding(14)
-      .margin({ left: 16, right: 16 })
-      .backgroundColor($r('app.color.bg_card'))
-      .borderRadius(10)
+      .padding({ left: 16, right: 16, top: 12, bottom: 16 })
     }
     .width('100%')
     .height('100%')
-    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.bg_page'))
   }
 }

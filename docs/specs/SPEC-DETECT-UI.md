@@ -3,10 +3,11 @@
 状态：**待批准（draft）** · 归属：[`SPEC-BOOKSOURCE-REVAMP.md`](./SPEC-BOOKSOURCE-REVAMP.md) 模块 `detect-ui`
 Commands / Project Structure / Code Style / Testing Strategy / Boundaries 见 map 文件 §4–§8，本文只写本模块特有内容。
 
-> **布局已改（2026-11-02）**：检测不再是「检测」段，而是**任务态**——进行 / 结束时整页只剩进度卡
+> **布局已改（2026-11-02）**：检测不再是「检测」段，而是**任务态**——进行 / 结束时整页只剩检测视图
 > （`components/DetectProgressCard.ets`），入口全部收进页内头行的 `⋯`（范围与计数写进菜单项），
-> 底部作业条与独立结果面已撤。完整设计见
-> [`SPEC-BOOKSOURCE-LAYOUT.md`](./SPEC-BOOKSOURCE-LAYOUT.md) §3.3、§7。
+> 底部作业条与独立结果面已撤。**2026-11-02 二次修订**：检测视图由「垂直居中浮卡」重排为**整页版式**
+> （自带页内头行 + 全宽分区 + 底部常驻操作区），因为浮卡观感像弹窗。完整设计见
+> [`SPEC-BOOKSOURCE-LAYOUT.md`](./SPEC-BOOKSOURCE-LAYOUT.md) §3.3、§7、§8。
 
 ## Objective
 
@@ -38,7 +39,7 @@ Commands / Project Structure / Code Style / Testing Strategy / Boundaries 见 ma
 ## 关键设计决策
 
 **1. 进度跨页面存活，但只在一个地方显示。** `detect-job` 是进程级单例，因此进度可以跨页面存活。
-落地形态：**任务态进度卡**（整页，`components/DetectProgressCard.ets`；三态定义见
+落地形态：**任务态整页检测视图**（`components/DetectProgressCard.ets`；三态定义见
 [`SPEC-BOOKSOURCE-LAYOUT.md`](./SPEC-BOOKSOURCE-LAYOUT.md) §3.3）；页外可见性由长时任务的系统通知承担。
 必须满足：作业仍在跑时离开书源页再回来 → 自动回到任务态，进度是活的。
 **冷启动只有 `status === running` 才进任务态**，已完成 / 已取消的历史轮次不占屏。
@@ -50,8 +51,8 @@ Commands / Project Structure / Code Style / Testing Strategy / Boundaries 见 ma
 
 - 检测结束后失败源已按 [`SPEC-BOOKSOURCE-LAYOUT.md`](./SPEC-BOOKSOURCE-LAYOUT.md) §3.2 的三档排序
   浮到列表最前；用户点「返回书源列表」即看到结果。没有第二个大列表，也就没有第二套筛选维度。
-- 批量动作：关闭不可用 / 删除不可用 —— 保留但**降权**，挂在**检测摘要卡**上（检测刚结束时正是它
-  最有用的时候）：次级样式 + 二次确认 + 明确条数，仍走 `setEnabledMany` / `removeMany` 批量事务。
+- 批量动作：关闭不可用 / 删除不可用 —— 保留但**降权**，挂在**检测结束态的清理分区**上（检测刚结束时正是它
+  最有用的时候）：次级样式 + 二次确认 + 明确条数 + 口径说明，仍走 `setEnabledMany` / `removeMany` 批量事务。
 - 摘要卡只报**整库口径**的不可用条数（`DetectJobRunner` 没有按轮次暴露结果 API）；
   **不得**把「本轮已检测 N 个」写成「可用 N 个」。
 
@@ -77,7 +78,8 @@ Commands / Project Structure / Code Style / Testing Strategy / Boundaries 见 ma
 2. 作业仍在跑时离开书源页再回来 → 自动回到任务态，进度继续推进（冷启动靠 `DetectJobRunner.restore`）。
 3. 取消可达且立即反馈（按钮进入「正在停止…」态，≤ 1 批内转为已取消），取消后停在摘要卡。
 4. 一键清理入口**只按 `unavailable` 计数**：「无结果 / 超时」不参与，摘要卡文案明确它们不属于不可用。
-5. 常态下整页只有头行 + 书源列表；任务态下整页只有进度卡——同一个作业不会出现两份进度。
+5. 常态下整页只有头行 + 书源列表；任务态下整页只有检测视图（页内头行 + 进度 / 摘要 / 操作）——
+   同一个作业不会出现两份进度，也不出现居中浮卡式的「弹窗」观感。
 6. `检测书源（增量 N）` / `全部重测（M）` 的计数即范围：用户点开菜单就知道这一轮会测多少。
 7. 页外（离开书源页）时，长时任务通知可作为回到进度的入口。
 

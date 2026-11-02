@@ -83,7 +83,7 @@ entry/src/main/ets/components/SourceRows.ets    ← 新  source-list：行组件
 entry/src/main/ets/components/SourceDetailPanel.ets
                                                 ← 新  单源详情抽屉内容（替代现「书源状态」抽屉）
 entry/src/main/ets/components/DetectProgressCard.ets
-                                                ← 新  detect-ui：任务态进度卡 + 完成摘要
+                                                ← 新  detect-ui：任务态整页检测视图 + 完成摘要
                                                     （2026-11-02 取代 `DetectPanel.ets`）
 entry/src/main/ets/pages/BookSourceManage.ets   ← 改  壳：头行（汇总 + `⋯`）+ 任务态切换 + 组装
 entry/src/main/ets/ui/common/BottomDrawer.ets   ← 不改  仍 8 处调用点（第 6 处改名「书源详情」）

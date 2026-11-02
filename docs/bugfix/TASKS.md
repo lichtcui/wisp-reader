@@ -793,6 +793,26 @@
   - 证据：`pages/BookSourceManage.ets`（`moreMenuItems` / `startDetect` / `detectBody`）、
     `components/DetectProgressCard.ets`；改版记载见 [`../progress.md`](../progress.md) §「2026-11-02 布局改版」。
 
+- [x] **T-SRC-5（2026-11-02）检测任务态由浮卡改整页版式**：用户反馈「点检测后显示的更像弹窗而不是页面」。
+  根因：`DetectProgressCard` 只有一个圆角卡片，外层 `Column` 用 `justifyContent(FlexAlign.Center)`
+  垂直居中，卡片还带 `margin{left/right:16}` + `borderRadius(10)`——虽已是页内任务态、无新路由，
+  观感仍是屏幕中央浮着一个弹窗。改法：任务态自带页内头行（左 `书源检测`、右模式胶囊），主体顶对齐、
+  全宽分区（状态 / 摘要 / 不可用清理），主操作收进底部常驻操作区；状态标题串由 `检测中 · 完整检测`
+  拆为头行胶囊 + `检测中`。语义、入口、按钮集合与显隐规则不变，仍无新路由、`BottomDrawer` 仍 8 处。
+  - 文件：改 `components/DetectProgressCard.ets`（重写版式）；`pages/BookSourceManage.ets` 的
+    `detectBody()` 组装不变。
+  - 规范：[`../specs/SPEC-BOOKSOURCE-LAYOUT.md`](../specs/SPEC-BOOKSOURCE-LAYOUT.md) §3.3 / §8。
+  - 状态（2026-11-02）：**主机侧 + 真机均通过**。`make hap` 通过；`check-keep-props` /
+    `check-hilog-format` / `check-source-consumers` / `check-t16-bench` 通过。真机（debug
+    `33Z0224424136564`）dump 三态：`书源检测 | 预检 | 检测完成 | 00:00 | 1 / 1 | …不可用清理分区 |
+    返回书源列表`；`书源检测 | 完整检测 | 检测中 | 0 / 13 | 后台继续运行 | 取消检测`；
+    取消 → `已取消 | 00:09 | 0 / 13` + 固定双按钮（两次 dump 边界一致 `[54,2561][613,2696]` /
+    `[647,2561][1206,2696]`，不跳）；「返回书源列表」→ 回到 `13 个书源 · 13 启用`。
+    版式反例扫描：头行 `[54,365]`、状态 `[108,536]`、进度条 `[54,659][1084,680]`、底部操作区
+    `y=2561` 全顶对齐全宽，**无居中浮卡**，运行中截图复核一致；hilog 无 ArkTS/JS 异常。
+  - 已知形态代价（接受）：运行中状态只有状态分区，进度条与底部操作区之间留大片空白（整页观感，
+    非缺陷）；若后续要填充，可放本轮分档计数或判定口径说明。
+
 - [x] **T-SRC-1 导入持久化回归**：核对「启停/删除/恢复内置」后的 `preferences` 落盘与列表 key 稳定性。
   - 状态（2026-10-07）：**已实现 + release 真机复验通过**——key = `bookSourceUrl#index#enabled`（`pages/BookSourceManage.ets:661`）。
     取证：先从本机 release 导出的备份 JSON 确认库内确有同 URL 两条（`bbiquge8` / `笔趣阁8` → `http://m.bbiquge8.net`，均 `enabled`），
