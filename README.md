@@ -35,7 +35,7 @@ M0–M5 已完成并真机验证；M6 功能已落地，仅余规则调试器真
 ```bash
 make rust        # 交叉编译 .so 并拷进 entry/libs（首次约 10–15 分钟；非首次可跳过）
 make run         # 编译 HAP → 安装 → force-stop → 启动（改完代码走这个）
-make log         # 清日志 + 实时过滤本应用日志
+make log         # 清日志 + 抓本应用日志（按 bundle 名筛，一次性 dump；可加 Q=关键词）
 make test        # 主机上跑引擎单测（cargo test，不碰真机）
 ```
 
