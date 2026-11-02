@@ -198,6 +198,9 @@ export struct ReaderPage {
     if (page >= 0 && page < this.pages.length && page !== this.pageIndex) {
       this.pageIndex = page;
       this.paragraphIndex = this.pages[page][0].para;
+      // 与点击翻页同理：高亮跟随也是带动画跳页，提前把页身份挪到目标页，
+      // 免得动画期间 `warmNeighbors()` 的重排拿旧页当锚点把 Swiper 拉回去（见 anchorToPage）。
+      this.currentPageId = this.pageIdFor(this.pages[page][0]);
       this.swiperController.changeIndex(page, true);
     }
   }
@@ -788,7 +791,9 @@ export struct ReaderPage {
 
   private nextPage(): void {
     if (this.pageIndex < this.pages.length - 1) {
-      this.swiperController.changeIndex(this.pageIndex + 1, true);
+      const target: number = this.pageIndex + 1;
+      this.anchorToPage(target);
+      this.swiperController.changeIndex(target, true);
     } else {
       // 本章最后一页：翻到下一章开头。
       this.nextChapter();
@@ -797,7 +802,9 @@ export struct ReaderPage {
 
   private prevPage(): void {
     if (this.pageIndex > 0) {
-      this.swiperController.changeIndex(this.pageIndex - 1, true);
+      const target: number = this.pageIndex - 1;
+      this.anchorToPage(target);
+      this.swiperController.changeIndex(target, true);
     } else {
       // 越过本章首页继续往回：进入上一章最后一页，保持向后连续阅读。
       this.prevChapterEnd();
@@ -1028,6 +1035,32 @@ export struct ReaderPage {
       }
     }
     return -1;
+  }
+
+  /**
+   * 翻页动画开始前，把「当前可视页身份」提前挪到**目标页**。
+   *
+   * 为什么必须提前：`changeIndex(±1, true)` 是带动画翻页，`onChange`（→ `onPageChanged`）
+   * 要等**动画结束**才回写 `currentPageId` / `paragraphIndex`。而通过目录跳转到一个新章后，
+   * `warmNeighbors()` 会异步暖载上一/下一章，暖载回来就 `rebuildWindow(false)` 重排页流；
+   * 若这次重排正好落在翻页动画进行中，`rebuildWindow` 就会拿**已经被翻走的那一页**当锚点，
+   * 经声明式 `.index(this.pageIndex)` 把 Swiper 拉回原页 —— 真机观感就是「上一页/下一页回弹」。
+   * （目录跳转后邻章通常不在 `paraCache` 里，需真去网络/落盘取，暖载完成时刻随机 ⇒ 「有时」复现。）
+   *
+   * 提前挪锚点后，动画期间的重排会把**目标页**映射到新页流里的正确下标（含 prepend 上一章后的
+   * 位移），动画落点不再被改写；动画正常结束时 `onPageChanged` 再回写一次，值相同。
+   */
+  private anchorToPage(index: number): void {
+    if (index < 0 || index >= this.pages.length) {
+      return;
+    }
+    const segs: PageSeg[] = this.pages[index];
+    if (segs.length === 0) {
+      return;
+    }
+    const seg: PageSeg = segs[0];
+    this.currentPageId = this.pageIdFor(seg);
+    this.paragraphIndex = seg.para;
   }
 
   /**

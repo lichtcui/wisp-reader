@@ -663,6 +663,14 @@
   - 未覆盖：release 包未复跑（不涉混淆面，无新增 JSON 字段 ⇒ 未动 keep）；下拉拖拽关闭未在切换后单独复验（该手势路径未改）。
   - 证据：`entry/src/main/ets/pages/Reader.ets`（`tocDescending` / `tocContentRevision` / `toggleTocOrder` / `buildTocItems` / `build()` 目录抽屉调用点）、`entry/src/main/ets/ui/common/BottomDrawer.ets`（`contentRevision` / `contentArea` / `aboutToAppear` / `openOverlay` / `OVERLAY_OPEN_MS`）、`docs/specs/UI-SPEC.md` §1.1「内容刷新」/ §2 / §3。
 
+- [~] **T-READ-7（P1）目录跳转后「上一页/下一页」偶发回弹（2026-11-02 用户反馈）**：阅读模式下用目录跳到某一章后，点按左/右翻页区（`onContentTap` → `prevPage` / `nextPage`）翻页，**有时**会「翻过去又被弹回原页」。
+  - 根因（异步窗口重排 vs. 翻页动画的锚点竞态）：翻页走 `swiperController.changeIndex(±1, true)` 带动画，而 `currentPageId` / `paragraphIndex` 要等**动画结束** `onChange` → `onPageChanged` 才回写。目录跳到 `paraCache` 里没有邻章的章节后，`loadChapter` 末尾的 `warmNeighbors()` 会去网络/落盘取上一/下一章，回来即 `rebuildWindow(false)` 重排「上一章 + 本章 + 下一章」页流；若这次重排正好落在翻页动画进行中，`rebuildWindow` 就会用**已经被翻走的那一页**当锚点（`indexOfPageId(currentPageId)`），而 `pageIndex` 是声明式 `.index(this.pageIndex)` 的**活 setter** ⇒ Swiper 被拉回原页。邻章必须异步取 ⇒ 暖载完成时刻随机 ⇒「有时」复现（邻章已在盘/内存时重排在点按前就落定，不回弹）。
+  - 修法：新增 `Reader.anchorToPage(index)`；`nextPage` / `prevPage` 在 `changeIndex` **之前**把 `currentPageId` / `paragraphIndex` 提前挪到**目标页**（`onTtsProgress` 的带动画跟随同理）。此后动画期间发生的窗口重排会把**目标页**映射到 prepend 上一章后的正确下标，动画落点不再被改写；动画正常结束时 `onPageChanged` 再回写一次（同值，幂等）。
+  - 验证（主机侧 2026-11-02）：`make hap` **BUILD SUCCESSFUL in 15 s**，`Reader.ets` 无新增 ArkTS 告警（唯一一条 `Reader.ets:1238` 的 `Function may throw exceptions` 是既有 `toast().showToast` 告警）。
+  - **未验（设备离线，`hdc list targets` = `[Empty]`）**：真机复现「目录跳到远处章节 → 立刻点翻页区」不再回弹；`make run` 闭环待设备上线。复现/验收建议：跳到 `paraCache` 里没有邻章的章节（邻章需现抓）→ 在暖载落定前连点右 1/3 区，观察是否回弹；必要时临时 hilog 打印 `rebuildWindow` 的 `currentPageId` / `pageIndex` 与 `anchorToPage` 调用对照。
+  - 残余风险（本次未处理）：**手势拖拽**（非点按）期间若发生同样的异步重排，锚点仍是被拖走的那一页 ⇒ 理论上仍可能「拖回原页」。本次只针对用户反馈的点按翻页（本文件「上一页/下一页」即左/右 1/3 点按区，见 `onContentTap` 注释）。
+  - 证据：`entry/src/main/ets/pages/Reader.ets`（`anchorToPage` / `nextPage` / `prevPage` / `onTtsProgress` / `onPageChanged` / `rebuildWindow` / `contentPager` 的 `.index(this.pageIndex)`）。
+
 ## 听书（Listening / TTS）
 
 - [x] **T-TTS-1（R6）单例与引擎释放**：`stop()` 释放 `engine`（`shutdown`）并考虑重置单例；`onDestroy` 后不复用失效 `ctx`。
@@ -896,6 +904,7 @@
 | T-READ-1 统一正文清洗 | ✅ | **2026-10-08 落地**：`Reader.sanitize` 删除，阅读页与听书共用 `BookContent.sanitizeText`（改动前 `diff` 复核两副本逐字节一致 → 纯重构）；真机验证 `start para=7` = 阅读页 `paragraphIndex`、`play para=8/9/10` 连续推进 |
 | T-READ-2 缓存内存上限 + 死码 | ✅ | `ChapterCache` 加 24 条 LRU（`touchMemory`）；删除死码 `hasCachedChapter`；`BookCover` 加 64 条 PixelMap LRU |
 | T-READ-3 预取去重 | ✅ | 2026-10-08 **已实现**：`fetchContent` 加单飞表 `inflight: Map<bookId#index, Promise<string>>`（引擎请求 + 写盘下沉到 `fetchRemote`），所有取正文入口都走它 ⇒ 同一章只请求一次、只写一次盘；顺带删死代码 `prefetch`。**2026-10-11 真机正/反对照复验通过**：修复后 key `#11` = miss×2 + join×1 + engine×1；修复前对照（旁路 `inflight.set`）key `#39`/`#45` = miss×2 + engine×2、join 0 次 → [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §15 |
+| T-READ-7 目录跳转后翻页回弹 | 🟡 | 2026-11-02 落地：`anchorToPage` 在 `changeIndex(±1, true)` 前把页身份提前挪到目标页，消除「`warmNeighbors` 异步重排落在翻页动画中、用旧页当锚点把 Swiper 拉回」的竞态（`Reader.ets` `nextPage`/`prevPage`/`onTtsProgress`）。`make hap` ✅、无新增告警；**真机复验待设备上线**（详见 §阅读 T-READ-7） |
 | T-TTS-1 引擎释放 | ✅ | `stop()` 增 `engine.shutdown()` 并置空、复位日志位（`TtsController.ets:226-243`） |
 | T-TTS-2 定时器自然结束 | ✅ | 末章播完 `clearTimer()`，避免 1s 定时器空转（`TtsController.ets:825-830`） |
 | T-TTS-3 错误态恢复 | ✅ | `onError` 清 in-flight、停 flush/progress 定时器、停后台；新增 `queueExhausted()`，播完后 `resume()` 可从章首重播 |
