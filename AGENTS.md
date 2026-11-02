@@ -67,6 +67,8 @@
 - **真机互斥**：同一台手机可能被多个 Codex / pi 任务共用。所有 `hdc` / 安装 / 启动 / `uitest` / 日志 / RTF
   操作必须整段套 `harmony-device-lease`（真机验证闭环见中央技能库 `~/Documents/skills.harmony/`）；
   主机侧 `make hap/test/probe` 不需要锁。被占用时报 holder，不抢前台。
+  ⚠️ 该 skill **目前尚未入库**（中央库没有 `harmony-device-lease/` 目录，只有 README 声明，`git log --all` 无历史）⇒
+  补装前没有可用的租约工具；临时做法与汇报口径见 [`docs/development.md`](./docs/development.md) §安装 / 启动 / 日志 →「真机互斥」。
 - **跨 NAPI / 落盘的 JSON 字段名必须进 `obfuscation-rules.txt`**：release 开了属性混淆，漏一个就是「debug 正常、release 读到 undefined」——
   三处同步（Rust struct / `engine/types.ets` / keep 列表），`make check` 会核对。详见 [`docs/engine.md`](./docs/engine.md) §JSON 契约。
 - **skill 声明**：harmony skill 不在本仓库提交，唯一真源是中央技能库 `~/Documents/skills.harmony/`，

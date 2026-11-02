@@ -119,6 +119,20 @@ $HDC shell hilog -x | grep com.lichtcui.sourcereader   # 按 bundle 名筛（= m
 
 **坑**：仅 `aa start` 不会重跑 `aboutToAppear`；要重跑页面逻辑必须先 `aa force-stop`。
 
+### 真机互斥（`harmony-device-lease`）
+
+同一台手机可能被多个 Codex / pi 任务共用。规则（`AGENTS.md` 硬性约定）：所有 `hdc` / 安装 / 启动 / `uitest` /
+日志 / RTF 操作**整段套租约**，被占用时报 holder、不抢前台；主机侧 `make hap/test/probe` 不需要锁。
+
+⚠️ **该 skill 目前尚未入库**：`~/Documents/skills.harmony/` 里没有 `harmony-device-lease/` 目录，
+中央库 `README.md` 声明了它、但 `git log --all -- harmony-device-lease` 无任何历史（2026-11-02 核对）
+⇒ **补装之前，主机侧没有可用的租约工具**。此期间的临时约定（**不要当成长久方案**）：
+
+1. 真机段开始前 `pgrep -fl 'hdc|uitest'` 确认没有别的任务在用同一台手机（本机沙箱里 `ps` 会被拒，`pgrep` 可用）；
+2. 自建显式锁并写进汇报，如 `/tmp/harmony-device-lease/<serial>.lock`（记 holder / purpose / TTL）；
+   但**它与其他任务的工具不互通**，不构成真正的互斥，抢不到前台时以「设备当前是否有人用」为准；
+3. 汇报真机结论时明确写「未使用 `harmony-device-lease`（尚未入库）」，别让读者以为已经互斥过了。
+
 ## 调试要点
 
 - 日志 tag：**每个文件自己一个**（`SourceReaderTts` / `SourceReaderReader` / `SourceReaderCache` / `SourceReaderCover` / `RuleDebugger` 用 `SourceReaderPoC`）⇒
@@ -136,7 +150,7 @@ harmony skill **不再随本仓库提交**：唯一真源是中央技能库 `~/D
 | 类型 | 位置 | 维护方式 |
 |---|---|---|
 | **项目专属**（`harmony-device-run`：真机验证闭环） | 模板在 `~/Documents/skills.harmony/harmony-device-run/`，本仓库命令在 `.harmony-skill.env`（随仓库提交） | 脚本按 `bundleName` + `.harmony-skill.env` 渲染出 `.agents/skills/harmony-device-run/`；已存在则 `KEEP`，`--force` 才覆盖（旧文件备份到 `$TMPDIR`） |
-| **项目专属**（`harmony-single-device-pipeline`：多任务主机并行、单手机串行验收） | 中央库 `~/Documents/skills.harmony/`（**尚未入库**） | 真机段复用 `harmony-device-lease`；新增或修改后跑 `quick_validate.py` |
+| **项目专属**（`harmony-single-device-pipeline`：多任务主机并行、单手机串行验收） | 中央库 `~/Documents/skills.harmony/`（**尚未入库**） | 真机段复用 `harmony-device-lease`（**同样尚未入库**，临时做法见上文「真机互斥」）；新增或修改后跑 `quick_validate.py` |
 | **通用 harmony**（`harmonyos-build-doctor`、`harmony-next`、`harmonyos-project-audit`、`harmonyos-release-*`） | `~/Documents/skills.harmony/<name>` | 中央库为唯一真源；更新后重跑 `setup-codex.sh` 注入即生效 |
 
 ```bash
