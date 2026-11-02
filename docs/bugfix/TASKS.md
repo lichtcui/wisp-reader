@@ -754,6 +754,17 @@
   - 未覆盖：release 包未复跑（纯 ArkUI 属性、无新增 JSON 字段）；改字号/行距后缩进随动未单独截图实测（缩进由 `this.fontSize` 派生、`layoutKey` 含 `fontSize`，机制上必然同变）。
   - 证据：`entry/src/main/ets/pages/Reader.ets`（`firstLineIndentFp` / `measureOptions` / `measureHeight` / `layoutKey` / `contentPager` 的 `Text`）。
 
+- [x] **T-READ-9（P2）分页子页重复章名（2026-11-03 用户反馈）**：阅读页出现两行同名 —— 「第五章 寻找」下面紧跟「第五章 寻找 (第1/3页)」。
+  - 根因：书源用 `nextContentUrl` 把一章拼成多页后，**每个子页的正文首行都会再印一次章名 + 页码后缀**；`BookContent.sanitizeText` 只有「整行 == 章名」一条判定，认不出带后缀的写法。真机缓存（`files/chapters/918a0b10_4.json`，源 URL `http://m.bbiquge8.net/book/176923/tc_5.html`）原始正文 117 行里夹着 `第五章 寻找 (第1/3页)` / `(第2/3页)` / `(第3/3页)` 三行 ⇒ 阅读页于是把章名印了三次（正文标题段落 + 页码标题行 + 顶栏）；同书目录本身干净（`第五章 寻找` 仅一行）⇒ 不是目录重复，是正文拼接产物。全 App 只有 `ruleContent.nextContentUrl` 非空的 4 个内置源会走这条路（bbiquge8 / 笔趣阁8 / 爱下书 / 天堂向左）。
+  - 修法（清洗单点，`model/BookContent.ets`）：新增 `PAGE_MARK_RE`（`（第1/3页）` / `(2/3)` / `第3/3页`），`sanitizeText` 加两条过滤 —— 「章名 + 纯页码尾巴」（`第五章 寻找 (第1/3页)`）与「孤立页码行」（`(第1/3页)`）。**裸 `1/3` 刻意不算**：只要求「章名后面跟一个分数」会把正文里的分数行误删。清洗是阅读页 / 听书（含预生成）/ TXT 导出的唯一入口，一处改三处同时生效；原始正文缓存不动 ⇒ 已缓存的章节不需要失效重下。
+  - 验证（主机侧 2026-11-03）：新增 `make test-content`（`scripts/book-content-sim.py`，切片真实 `PAGE_MARK_RE + sanitizeText` 编译成契约测试）**19 断言全过**；把真机缓存里的同一份原始正文喂进该源码：117 行 → 115 段（3 行页码标题被删、标题段落补 1），`leftover_marks=0`、首段 `第五章 寻找`、次段 `教学楼，四楼。`。`make hap` BUILD SUCCESSFUL。
+  - **真机 A/B（2026-11-03 · 设备 `33Z0224424136564` · debug）**：同一台机、同一本书、同一章（进度滑杆回第 1 章 → 目录第 5 行点入，两次都落在章首），唯一变量是这一处清洗 ——
+    - 修复前（`git stash` 掉改动重装，`uitest dumpLayout`）：页首三行依次为 `第五章 寻找` / **`第五章 寻找 (第1/3页)`** / `教学楼，四楼。`，`第五章 寻找` 共出现 **3** 次（正文标题 + 页码标题 + 顶栏）；
+    - 修复后：页首依次 `第五章 寻找` / `教学楼，四楼。` / `“呼——”`，页码行 **0** 处；连翻第 2 / 3 页同样 0 处（第 2、3 个子页的页码标题原本分别落在后两页的正文流里）；
+    - 原始正文缓存**未改**（`918a0b10_4.json` 仍含 3 行页码标题）⇒ 修复发生在渲染前的清洗，已缓存章节无需重下；`make log` 无 JSCRASH / CPPCRASH / 应用级 error。
+  - 未覆盖：release 包未复跑（纯 ArkTS 文本逻辑、无新增 JSON 字段 ⇒ 不涉 keep 列表 / 混淆面）；「老进度恰好停在页码标题行上」的极端定位未单独验（本修复只删行，段落下标整体前移，受影响的书可能偏移 1–2 段）；**修复前已预生成的听书音频**仍按旧段落数入缓存，这类章（既要拼页、又被预生成过）的高亮时间轴可能偏一段，`pregTimeline` 对超界块锚点做了钳制、不会崩，重算一次即自愈。
+  - 证据：`entry/src/main/ets/model/BookContent.ets`（`PAGE_MARK_RE` / `sanitizeText`）、`scripts/book-content-sim.py`、`Makefile`（`make test-content`）。
+
 ## 听书（Listening / TTS）
 
 - [x] **T-TTS-1（R6）单例与引擎释放**：`stop()` 释放 `engine`（`shutdown`）并考虑重置单例；`onDestroy` 后不复用失效 `ctx`。
@@ -1039,6 +1050,7 @@
 | T-READ-3 预取去重 | ✅ | 2026-10-08 **已实现**：`fetchContent` 加单飞表 `inflight: Map<bookId#index, Promise<string>>`（引擎请求 + 写盘下沉到 `fetchRemote`），所有取正文入口都走它 ⇒ 同一章只请求一次、只写一次盘；顺带删死代码 `prefetch`。**2026-10-11 真机正/反对照复验通过**：修复后 key `#11` = miss×2 + join×1 + engine×1；修复前对照（旁路 `inflight.set`）key `#39`/`#45` = miss×2 + engine×2、join 0 次 → [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §15 |
 | T-READ-7 目录跳转后翻页回弹 | ✅ | 2026-11-02 落地 + **真机闭环**：`anchorToPage` 在 `changeIndex(±1, true)` 前把页身份提前挪到目标页，消除「`warmNeighbors` 异步重排落在翻页动画中、用旧页当锚点把 Swiper 拉回」的竞态（`Reader.ets` `nextPage`/`prevPage`/`onTtsProgress`）。真机 `33Z0224424136564`：确定性 A/B 四例（左/右翻页 × 提前锚点开关）对照出「修复前 `after=cur` 回弹 / 修复后 `after=tgt` 正确」，并自然抓到两次真实 `warmNeighbors` 重排落在动画中（`inFlight=1` 且 `anchor=target`）；装回干净版本后无回归（详见 §阅读 T-READ-7） |
 | T-READ-8 段首无首行缩进 | ✅ | 2026-11-03 落地 + **真机闭环**：`firstLineIndentFp(para, start)` 让正文段首行空两格（标题与跨页续排片段不缩进），并把同一缩进镜像进 `measureOptions`，避免度量/渲染不一致导致页尾溢出。真机 `33Z0224424136564`：像素级行首分析 —— 段首行 203–206 px vs 续行 69–70 px（≈2 字符，随 `fontSize=20` 缩放）、标题 70 px、第 2 页续排首行 69 px、两页无越界裁切；同段首行 14 字 / 续行 16 字（详见 §阅读 T-READ-8） |
+| T-READ-9 分页子页重复章名 | ✅ | 2026-11-03 落地 + **真机 A/B**：`sanitizeText` 新增 `PAGE_MARK_RE`，清掉 `nextContentUrl` 拼页时每个子页重复的「章名 + 页码」（`第五章 寻找 (第1/3页)`）与孤立页码行（裸 `1/3` 不删）；标题段落仍只补一次。真机 `33Z0224424136564`（bbiquge8《我都成超人了，灵气才复苏？》第五章，原始缓存实测含 3 行页码标题）：修复前页首 3 次 `第五章 寻找` + `(第1/3页)` 一行 → 修复后 0 处页码行、连翻 2/3 页同样 0 处；`make test-content` 19 断言全过（详见 §阅读 T-READ-9） |
 | T-TTS-1 引擎释放 | ✅ | `stop()` 增 `engine.shutdown()` 并置空、复位日志位（`TtsController.ets:226-243`） |
 | T-TTS-2 定时器自然结束 | ✅ | 末章播完 `clearTimer()`，避免 1s 定时器空转（`TtsController.ets:825-830`） |
 | T-TTS-3 错误态恢复 | ✅ | `onError` 清 in-flight、停 flush/progress 定时器、停后台；新增 `queueExhausted()`，播完后 `resume()` 可从章首重播 |
