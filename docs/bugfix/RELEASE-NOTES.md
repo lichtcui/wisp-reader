@@ -996,7 +996,7 @@ ch26 首句出现在 ch25 第 71 行 ⇒ **相邻章重复 29 章正文**。主�
 - 该源目录开头 `第84章 / 第83章 / 第82章 …` **倒序**：原记的「疑似站点目录分页本身倒排」**已证伪**（该源目录只有一页、无 `nextTocUrl`）——
   那 12 行是详情页顶部 `<dt>《剑来》最新章节列表</dt>` 预览块被 `chapterList = "dd"` 一起收进了目录，尾部另有第二次上传；见 §23。
 - release 包未复跑：纯 ArkTS + 资源改动，**无新增 JSON 字段** ⇒ 未动 `obfuscation-rules.txt` keep 列表；`make check` 待跑。
-- 埋点仍在（`PERF` 前缀，样例日志见上）—— 复验后按需删除；不影响卡顿（均在微秒~毫秒级或已排到正文之后）。
+- 埋点已于 2026-11-02 **整体移除**（`Reader.ets` / `TocCache.ets` 回到未插桩状态，见 §25）；插桩本身不影响卡顿——各段耗时均在微秒~毫秒级、或已排到正文渲染之后。
 
 ---
 
@@ -1126,3 +1126,22 @@ ch26 首句出现在 ch25 第 71 行 ⇒ **相邻章重复 29 章正文**。主�
 另：`hdc` 写不进 App 沙箱（`mkdir … Permission denied`）⇒ 下载残骸只能由 App 自身路径造出 / 清除，
 主机侧无法直接摆 `downloads/` 夹具；能双向搬运的只有 picker 的 `Documents`
 （`/storage/media/100/local/files/Docs/Documents`）。
+
+---
+
+## 25. 清理（2026-11-02）：移除 T-READ-5 的 `TEMP PERF` 埋点
+
+范围：`entry/src/main/ets/pages/Reader.ets`（+63 行插桩）、`entry/src/main/ets/model/TocCache.ets`（+7 行）。
+
+- **为什么现在删**：§22 留下的约定是「复验后按需删除」。T-READ-5 的根因已在真机复现并修复
+  （单帧 2.63 s → 拆段 + 分页延后），插桩的使命结束；它留在阅读热路径上会持续往 hilog 写 `PERF` 行。
+- **这几行插桩从未进过仓库**（始终只在工作区），所以「删掉」= 把两文件恢复到最后一次提交的状态：
+  `git diff` 逐行核对确认两文件相对 HEAD 的改动**只有**插桩、无产物代码混入 ⇒ 直接回到 HEAD，
+  不做逐行编辑；`grep -rn "PERF\|perfLog\|perfStart\|perfMeasure"` 无残留。本节因此只是留档，不是代码提交。
+- **顺带删掉一个错位注释**：插桩块尾部夹着 `/** 一页中的一个段落片段：… */`，但它落在
+  `@ComponentV2 export struct ReaderPage` 上方（描述的是段落分片、指错对象）⇒ 随块一起删除，未另补。
+- **验证（真机 `33Z0224424136564`）**：`make hap` → `make install` → `aa force-stop` → 启动后打开《剑来》，
+  正文正常渲染；横向翻页成功（dump 首行 `自己，说既然屏南县…` → `了，实属赶趟。「`）；
+  日志 `PERF` 行 **0** 条（开书前已 `hilog -r`，所以「0」是真结论而不是没清缓冲）；
+  无 ArkTS/JS 异常 —— 唯一一条 `E` 行是 `PARAM_WATCHER … Read result failed, code is: 1`，
+  属系统参数服务噪声（`C02C03` 域），不是本 App 的 tag。
