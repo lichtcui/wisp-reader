@@ -6,7 +6,7 @@
 //   加载正文：loadToc / refreshToc / load / loadChapter / applyChapter / fetchContent / fetchRemote / cachedContent / warmNeighbors
 //             （正文清洗不在本文件：统一走 model/BookContent.sanitizeText，见 T-READ-1）
 //   章内导航：isReadable / firstReadable / nextReadable / prevReadable / prevChapter / nextChapter / prevPage / nextPage / onPageChanged
-//   分页测算（横向分页核心）：availWidthPx / availHeightPx / measureOptions / measureHeight / maxCharsFit / paraMargin
+//   分页测算（横向分页核心）：availWidthPx / availHeightPx / measureOptions / measureHeight / maxCharsFit / paraMargin / firstLineIndentFp
 //                             paginateChapter / chapterPages / layoutKey / rebuildWindow / flatIndexOf / pageIdFor / indexOfPageId
 //                             （PageSeg 与 Swiper 的懒数据源在 common/PageSeg.ets、common/PageDataSource.ets）
 //   进度持久化：persistProgress / locateCurrentToc / tocPosition
@@ -855,8 +855,18 @@ export struct ReaderPage {
     return para === 0 ? this.fontSize : this.fontSize * 0.6;
   }
 
-  /** 构造度量选项，与渲染 Text 属性严格对齐（字号/字重/行高/约束宽度/对齐）。 */
-  private measureOptions(para: number): MeasureOptions {
+  /**
+   * 段首缩进（首行缩进两格，单位 fp；与设计稿 `.read-content p { text-indent: 2em }` 一致）。
+   *
+   * 只对**段落的第一个片段**生效：`start > 0` 说明该 Text 是段落跨页后的续排片段，它的首行
+   * 是上一行折行的延续，缩进会凭空多出两格空档。标题（para 0）左对齐、不缩进。
+   */
+  private firstLineIndentFp(para: number, start: number): number {
+    return para === 0 || start > 0 ? 0 : this.fontSize * 2;
+  }
+
+  /** 构造度量选项，与渲染 Text 属性严格对齐（字号/字重/行高/约束宽度/对齐/首行缩进）。 */
+  private measureOptions(para: number, start: number): MeasureOptions {
     const isTitle: boolean = para === 0;
     const options: MeasureOptions = {
       textContent: '',
@@ -867,12 +877,18 @@ export struct ReaderPage {
       lineHeight: `${this.fontSize * this.lineHeight}fp`,
       textAlign: TextAlign.Start
     };
+    // 缩进必须同时进度量：它挤掉首行两格宽度，段高会因此多出一行；
+    // 度量与渲染不一致 ⇒ 页尾按「放得下」截断，实际渲染却溢出被裁。
+    const indent: number = this.firstLineIndentFp(para, start);
+    if (indent > 0) {
+      options.textIndent = `${indent}fp`;
+    }
     return options;
   }
 
   /** 实测段落在 [start, end) 文本的渲染高度（px）。 */
   private measureHeight(para: number, text: string, start: number, end: number): number {
-    const options: MeasureOptions = this.measureOptions(para);
+    const options: MeasureOptions = this.measureOptions(para, start);
     options.textContent = text.substring(start, end);
     const size: SizeOptions = this.getUIContext().getMeasureUtils().measureTextSize(options);
     return Number(size.height);
@@ -900,6 +916,7 @@ export struct ReaderPage {
    */
   /** 排版参数指纹：任一变化都必须废弃全部分页缓存（否则页数/截断点会对不上渲染）。 */
   private layoutKey(): string {
+    // 段首缩进由 fontSize 推导（2 格），随 fontSize 一起失效，无需单列。
     return this.contentWidth.toString() + 'x' + this.contentHeight.toString() +
       '@' + this.fontSize.toString() + '/' + this.lineHeight.toString();
   }
@@ -1887,6 +1904,9 @@ export struct ReaderPage {
               .fontWeight(seg.para === 0 ? FontWeight.Bold : FontWeight.Normal)
               .lineHeight(this.fontSize * this.lineHeight)
               .fontColor(this.isSpeaking(seg) ? $r('app.color.brand') : this.textColor())
+              // 段首空两格；跨页续排片段（seg.start > 0）不缩进，标题不缩进。
+              // 与 `measureOptions` 的 textIndent 必须同步，否则度量/渲染不一致。
+              .textIndent(this.firstLineIndentFp(seg.para, seg.start))
               .width('100%')
               .margin({ bottom: seg.para === 0 ? this.fontSize : this.fontSize * 0.6 })
           }, (seg: PageSeg) => seg.chapterIndex.toString() + '_' + seg.para.toString() + '_' + seg.start.toString() + '_' + seg.end.toString())

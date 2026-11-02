@@ -742,6 +742,18 @@
   - 残余风险（本次未处理）：**手势拖拽**（非点按）期间若发生同样的异步重排，锚点仍是被拖走的那一页 ⇒ 理论上仍可能「拖回原页」。本次只针对用户反馈的点按翻页（本文件「上一页/下一页」即左/右 1/3 点按区，见 `onContentTap` 注释）。
   - 证据：`entry/src/main/ets/pages/Reader.ets`（`anchorToPage` / `nextPage` / `prevPage` / `onTtsProgress` / `onPageChanged` / `rebuildWindow` / `contentPager` 的 `.index(this.pageIndex)`）。
 
+- [x] **T-READ-8（P2）阅读页段首没有首行缩进（2026-11-03 用户反馈）**：正文每段第一行直接贴左边，与其他阅读软件的「段首空两格」不一致；设计稿阅读页 `.read-content p { text-indent: 2em }`（`docs/plan.md`）从未落到实现上。
+  - 根因：正文是逐片段渲染的 `Text`（`contentPager` 的 `ForEach(page, …)`），只设了 `.fontSize/.fontWeight/.lineHeight/.fontColor/.width/.margin`，**没有** `.textIndent`；分页度量 `measureOptions` 也没有 `textIndent`。缩进既不在数据里（`sanitizeText` 走 `trim()`，段落文本不带前导空格），也不能靠调 padding 实现（那样折行续行会跟着一起缩）。
+  - 修法（度量与渲染同一处派生）：新增 `Reader.firstLineIndentFp(para, start)` —— 仅当 `para > 0`（标题不缩进）且 `start === 0`（该 `Text` 是本段的**第一个片段**）时返回 `fontSize * 2`，否则 0；渲染 `Text` 加 `.textIndent(this.firstLineIndentFp(seg.para, seg.start))`，`measureOptions(para, start)` 在同条件下设 `textIndent: '<n>fp'`。**度量必须同步**：缩进挤掉首行两格宽度、段高会因此多出一行，两侧不一致就会出现「分页说放得下、渲染却溢出被裁」。跨页续排片段（`start > 0`）不缩进 —— 它的首行是上一行折行的延续。`layoutKey` 无需新增维度：缩进由 `fontSize` 派生，随 `fontSize` 一起失效（已在注释里写明）。
+  - 验证（主机侧 2026-11-03）：`make hap` **BUILD SUCCESSFUL**；转译产物 `…/esmodule/debug/…/pages/Reader.ts` 直证两处都进了包 —— `Text.textIndent(this.firstLineIndentFp(seg.para, seg.start))` 与 `options.textIndent = \`${indent}fp\``。`make check` 仍因**既有** `docs/research/BOOKSOURCE-REVAMP-TODO.md` 指向已过期的 `/tmp` 证据文件而失败，与本改动无关（本次未动 JSON 契约 ⇒ 不涉 keep 列表）。
+  - **真机验证（2026-11-03 · 设备 `33Z0224424136564` · debug · `make run` 重装）**：书架点《我都成超人了，灵气才复苏？》进阅读页（`第二百九十六章 死亡`），`uitest screenCap` 后做**像素级行首分析**（逐行扫描 ink 左边界，背景 `#181820`；内容区左边界 = `20vp` = 67 px）：
+    - 正文段首行 ink 左边界 **203–206 px**，同段续行 **69–70 px** ⇒ 缩进 **≈ 136 px**。该机持久化设置 `reader_font_size = 20` / `reader_line_height = 1.6`（直接读 `/data/app/el2/100/base/…/preferences/source_reader_settings`），实测行距 108 px ⇒ 每字符 67 px ⇒ **缩进 = 2 字符**；
+    - **章节标题不缩进**（左边界 70 px）—— `para 0` 的预期行为；
+    - **跨页续排片段不缩进**：翻到第 2 页，首行（上一页末段的延续）ink 左边界 69 px，其后各段首行仍 203–208 px；
+    - **度量/渲染一致（无溢出裁切）**：两页最下一行 ink 底 2526 / 2483 px，均未越过内容区下边界 2684 px；同一段首行只容纳 14 个字、续行 16 个字 ⇒ 首行**恰好少 2 字**，与缩进同步。
+  - 未覆盖：release 包未复跑（纯 ArkUI 属性、无新增 JSON 字段）；改字号/行距后缩进随动未单独截图实测（缩进由 `this.fontSize` 派生、`layoutKey` 含 `fontSize`，机制上必然同变）。
+  - 证据：`entry/src/main/ets/pages/Reader.ets`（`firstLineIndentFp` / `measureOptions` / `measureHeight` / `layoutKey` / `contentPager` 的 `Text`）。
+
 ## 听书（Listening / TTS）
 
 - [x] **T-TTS-1（R6）单例与引擎释放**：`stop()` 释放 `engine`（`shutdown`）并考虑重置单例；`onDestroy` 后不复用失效 `ctx`。
@@ -1026,6 +1038,7 @@
 | T-READ-2 缓存内存上限 + 死码 | ✅ | `ChapterCache` 加 24 条 LRU（`touchMemory`）；删除死码 `hasCachedChapter`；`BookCover` 加 64 条 PixelMap LRU |
 | T-READ-3 预取去重 | ✅ | 2026-10-08 **已实现**：`fetchContent` 加单飞表 `inflight: Map<bookId#index, Promise<string>>`（引擎请求 + 写盘下沉到 `fetchRemote`），所有取正文入口都走它 ⇒ 同一章只请求一次、只写一次盘；顺带删死代码 `prefetch`。**2026-10-11 真机正/反对照复验通过**：修复后 key `#11` = miss×2 + join×1 + engine×1；修复前对照（旁路 `inflight.set`）key `#39`/`#45` = miss×2 + engine×2、join 0 次 → [`RELEASE-NOTES.md`](./RELEASE-NOTES.md) §15 |
 | T-READ-7 目录跳转后翻页回弹 | ✅ | 2026-11-02 落地 + **真机闭环**：`anchorToPage` 在 `changeIndex(±1, true)` 前把页身份提前挪到目标页，消除「`warmNeighbors` 异步重排落在翻页动画中、用旧页当锚点把 Swiper 拉回」的竞态（`Reader.ets` `nextPage`/`prevPage`/`onTtsProgress`）。真机 `33Z0224424136564`：确定性 A/B 四例（左/右翻页 × 提前锚点开关）对照出「修复前 `after=cur` 回弹 / 修复后 `after=tgt` 正确」，并自然抓到两次真实 `warmNeighbors` 重排落在动画中（`inFlight=1` 且 `anchor=target`）；装回干净版本后无回归（详见 §阅读 T-READ-7） |
+| T-READ-8 段首无首行缩进 | ✅ | 2026-11-03 落地 + **真机闭环**：`firstLineIndentFp(para, start)` 让正文段首行空两格（标题与跨页续排片段不缩进），并把同一缩进镜像进 `measureOptions`，避免度量/渲染不一致导致页尾溢出。真机 `33Z0224424136564`：像素级行首分析 —— 段首行 203–206 px vs 续行 69–70 px（≈2 字符，随 `fontSize=20` 缩放）、标题 70 px、第 2 页续排首行 69 px、两页无越界裁切；同段首行 14 字 / 续行 16 字（详见 §阅读 T-READ-8） |
 | T-TTS-1 引擎释放 | ✅ | `stop()` 增 `engine.shutdown()` 并置空、复位日志位（`TtsController.ets:226-243`） |
 | T-TTS-2 定时器自然结束 | ✅ | 末章播完 `clearTimer()`，避免 1s 定时器空转（`TtsController.ets:825-830`） |
 | T-TTS-3 错误态恢复 | ✅ | `onError` 清 in-flight、停 flush/progress 定时器、停后台；新增 `queueExhausted()`，播完后 `resume()` 可从章首重播 |
