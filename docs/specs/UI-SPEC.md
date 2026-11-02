@@ -152,7 +152,8 @@
 | `reader_divider` / `reader_divider_day` | `#30303A` / `#EDEDED` | 阅读页抽屉的线色（标题分割线 + 拖拽条），跟随阅读日夜主题 |
 
 颜色：`mask` L `#52000000` / D `#80000000`；`bg_page` L `#FFFFFF` / D `#121212`；
-`divider` L `#EDEDED` / D `#2A2A2A`；`brand` `#DA3838`；`text_1` `#333333`。
+`divider` L `#EDEDED` / D `#2A2A2A`；`brand` `#DA3838`；`warning` `#C77700`（警示文案；换源候选行的目录体检徽标用它）；
+`text_1` `#333333`。
 
 > 底色跟随**阅读日夜主题**（非系统主题）的面板（换源抽屉）慎用带透明度的自定义令牌：
 > 它无法按系统主题在 base/dark 间分值。换源面板的当前源标注**只用行首 3vp 品牌色竖条 +
@@ -231,6 +232,7 @@ sips -s format bmp /tmp/u1.jpeg --out /tmp/u1.bmp       # 纯 Python 解析 BMP�
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-02 | **阅读页「换源」候选行新增「目录体检」徽标**（T-SWITCH-2，真机已验证）：候选行第二行由单行 `Text` 改为 `Row({ space: 4 })` —— 体检徽标在**前**（可疑级 `⚠ 目录 N 行重复` / `⚠ 目录 N 行没有标题` 用既有 `warning` 令牌；提示级「目录末段重新编号」「目录 N 个重复标题」「目录含 N 条公告」用次要色），「最新：xxx」在**后**（`layoutWeight(1)`）并承担省略号（窄屏先截尾部，告警不被截掉）。徽标**不参与排序**：不重排候选行（体检比候选上屏晚数秒，行序抖动会造成「手指底下那一行被换掉」的误点），拦截面放在点击后的确认框（`Reader.confirmSwitch` 对可疑级追一句说明：重复行 =「换源不会消除」、无标题 =「换源后目录同样显示不出章名」）。**§1.1–§1.4 检查项均未受影响**：行高仍 60vp、第二行仍 12fp、命中测试与动效未动；§2 调用点仍 7 处，未新造令牌。文件：`components/SourceSwitchPanel.ets`、`pages/Reader.ets`、`model/TocQuality.ets`（新）、`model/SourcePrefetch.ets` |
 | 2026-11-02 | **目录抽屉改回常驻挂载：切正/倒序不再重播开启动画**（用户反馈「点正序/倒序抽屉又重开一次」）。根因：`pages/Reader.ets` 曾用 `if (this.tocDescending) { BottomDrawer } else { BottomDrawer }` 分支持序重挂载，来绕过 V2 下 `@BuilderParam` 内容不随父组件普通 `@Local` 重跑（`bd2a343` → `0eb1e1c`）；分支翻转 = 旧抽屉销毁 + 新实例 `@Local` 复位，而 `visible` 仍为 `true` ⇒ `aboutToAppear` 重播 260ms 上滑开启动画。修法：恢复**单处**常驻挂载 + `ui/common/BottomDrawer.ets` 新增 `@Param contentRevision`（内容区读它登记依赖，见 §1.1「内容刷新」），`toggleTocOrder()` 自增该值触发**原地**重渲染。**§2 调用点 8 处 → 7 处**（目录正/倒序合并为一行）；动效常量、样式与令牌未动。文件：`ui/common/BottomDrawer.ets`、`pages/Reader.ets`。**真机已验证（2026-11-02 · 设备 `33Z0224424136564`）**：切序时抽屉宿主链 elmtId 不变（`Stack 114 → Column 124 → Row 131 / List 137`）、标签 Text 恒为 elmtId 136，连拍 16 帧逐帧 OCR 每帧都有「定位」且标签在第 2–3 帧之间原地由「正序」变「倒序」⇒ 面板全程未消失/未上滑；遮罩关闭与页面点击仍正常 |
 | 2026-10-24 | **书架「更新」混合书架进度只统计网络书并精简文案**：`shelfProgressText(done,total,failed,local)` 不再把本地书同时计入进度分子和数量；`local > 0` 时显示 `网络 0/1 · 本地 2`，失败时追 ` · N 本未检查`，仅本地书时显示 `本地 2`。**样式与令牌未动**（13fp `text_3` / `maxLines(1)`）。文件：`pages/Index.ets`、`model/ShelfUpdater.ets`。主机仿真断言通过；真机（设备 `33Z0224424136564`）截图 OCR 已确认新进度文案与结束 toast |
 | 2026-10-23 | **书架「更新」进度分母包含本地书、无章节名源回退目录**：`shelfProgressText(done,total,failed,local)` 改为按架上总书数显示，并标注 `本地书 N 本跳过`（如 `检查中 1/2 · 本地书 1 本跳过`）；结束 toast 统一由 `shelfUpdateResultText(outcome)` 生成，混合书架全失败时显示「网络书检查失败，请检查网络或书源」，无新章时说明本地书跳过。**样式与令牌未动**（13fp `text_3` / `maxLines(1)`；「更新」仍 16fp `brand` + 44 热区 + `accessibilityText`），无新组件。文件：`pages/Index.ets`、`model/ShelfUpdater.ets`。主机侧 55 断言 `ALL PASS` + `make hap` / `make check` 通过；真机进度与 toast 待设备连接后复验 |

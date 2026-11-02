@@ -12,6 +12,7 @@ import { ensureSourceStore } from '../model/SourceStoreMigration';
 import { isSameBook } from '../model/SourceSwitch';
 import { dropQueuedPrefetch, previewCandidate } from '../model/SourcePrefetch';
 import { cleanChapter } from '../common/Format';
+import { TOC_QUALITY_SUSPECT, TocQuality, tocQualityLabel } from '../model/TocQuality';
 
 /** 单源搜索超时：真机实测 13 个内置源最慢 2.0s，6s 足够；死源罚站一整轮的代价要压住。 */
 const SEARCH_TIMEOUT_MS: number = 6_000;
@@ -35,6 +36,8 @@ interface SwitchRow {
   label: string;
   confidence: number;
   chapter: string;
+  /** 目录体检结论；`undefined` = 这一行没做过体检（只有最靠前的 2 个候选做）。 */
+  quality: TocQuality | undefined;
   current: boolean;
 }
 
@@ -79,7 +82,8 @@ function makeRow(
   seq: number,
   currentSourceUrl: string,
   chapter: string,
-  confidence: number
+  confidence: number,
+  quality: TocQuality | undefined
 ): SwitchRow {
   return {
     key: source.bookSourceUrl + '#' + seq.toString(),
@@ -88,11 +92,12 @@ function makeRow(
     label: source.bookSourceName.length > 0 ? source.bookSourceName : source.bookSourceUrl,
     confidence: confidence,
     chapter: chapter,
+    quality: quality,
     current: source.bookSourceUrl === currentSourceUrl
   };
 }
 
-/** 只换行内文案，保持 `key` 字段稳定（预热回填时用；列表的 `ForEach` key **另加 chapter**，见列表处的注释）。 */
+/** 只换行内文案，保持 `key` 字段稳定（预热回填时用；列表的 `ForEach` key **另加 chapter/徽标**，见列表处的注释）。 */
 function withChapter(r: SwitchRow, chapter: string): SwitchRow {
   return {
     key: r.key,
@@ -101,6 +106,21 @@ function withChapter(r: SwitchRow, chapter: string): SwitchRow {
     label: r.label,
     confidence: r.confidence,
     chapter: chapter,
+    quality: r.quality,
+    current: r.current
+  };
+}
+
+/** 只换目录体检结论（同样保持 `key` 稳定；徽标变化靠列表的 `ForEach` key 刷新）。 */
+function withQuality(r: SwitchRow, quality: TocQuality | undefined): SwitchRow {
+  return {
+    key: r.key,
+    source: r.source,
+    item: r.item,
+    label: r.label,
+    confidence: r.confidence,
+    chapter: r.chapter,
+    quality: quality,
     current: r.current
   };
 }
@@ -116,6 +136,9 @@ function withChapter(r: SwitchRow, chapter: string): SwitchRow {
  * **预热**（`SourcePrefetch`）：行一上屏就顺手把「最靠前的 2 个候选」的详情+目录爬好，
  * 其余候选只补一次 `bookInfo` 用来填行内「最新：xxx」（原来这里恒显「该源无最新章节规则」，
  * 因为换源面板不像搜索结果页有详情缓存可回退）。点「切换」时若命中预热，宿主那 7s 直接省掉。
+ * 目录爬回来的同时做一次**目录体检**（`model/TocQuality.ets`，零边际成本），
+ * 给候选行加徽标（「⚠ 目录 12 行重复」/「目录末段重新编号」），并把结论随 `onPick`
+ * 交给宿主的确认框；**不重排行**（理由见 `fillQuality`）。
  *
  * 文案分工：候选数由 `onCount` 上报宿主拼进抽屉标题（「换源 · N 个候选」，与搜索结果
  * 「选择来源 · N」同规格），内容区顶部只剩进度行（**始终占位**：检索中显示 x/y，检索完留空，
@@ -138,7 +161,8 @@ export struct SourceSwitchPanel {
   @Param busy: boolean = false;
   /** 候选行数上报：宿主拼进抽屉标题（检索中会随上屏逐次上报）。 */
   @Event onCount: (count: number) => void = () => {};
-  @Event onPick: (source: BookSource, item: BookSearchItem) => void = () => {};
+  /** `quality` 只有做过目录体检的候选（最靠前 `WARM_TOC_LIMIT` 个）才有，其余是 `undefined`。 */
+  @Event onPick: (source: BookSource, item: BookSearchItem, quality: TocQuality | undefined) => void = () => {};
 
   @Local rows: SwitchRow[] = [];
   @Local searching: boolean = false;
@@ -264,7 +288,8 @@ export struct SourceSwitchPanel {
     this.gen = this.gen + 1;
     const gen: number = this.gen;
     this.rows = cached.rows.map((r: SwitchRow, i: number): SwitchRow =>
-      makeRow(r.source, r.item, i, this.currentSourceUrl, r.chapter, this.confidenceFor(r.source.bookSourceUrl, r.confidence)));
+      makeRow(r.source, r.item, i, this.currentSourceUrl, r.chapter,
+        this.confidenceFor(r.source.bookSourceUrl, r.confidence), r.quality));
     this.scanned = cached.scanned;
     this.total = cached.total;
     this.searching = false;
@@ -385,7 +410,7 @@ export struct SourceSwitchPanel {
         }
         sites.add(site);
         added.push(makeRow(source, it, this.rows.length + added.length, this.currentSourceUrl,
-          cleanChapter(it.lastChapter), row.confidence));
+          cleanChapter(it.lastChapter), row.confidence, undefined));
       }
       if (added.length > 0) {
         this.rows = this.rows.concat(added);
@@ -404,6 +429,9 @@ export struct SourceSwitchPanel {
   /**
    * 预热：最靠前的 `WARM_TOC_LIMIT` 个候选连目录一起爬（点「切换」即命中），
    * 其余候选只补一次 `bookInfo` 填行内最新章节（串行派发，见 `SourcePrefetch`）。
+   *
+   * 只有连目录一起爬的那几个候选会拿到**目录体检**结论（零边际成本：目录本来就要爬），
+   * 回来走 `fillQuality` 加行内徽标；没爬目录的候选永远不体检，也不显示徽标。
    */
   private queuePrefetch(gen: number, rows: SwitchRow[]): void {
     for (const r of rows) {
@@ -421,7 +449,9 @@ export struct SourceSwitchPanel {
       }
       previewCandidate(r.source, r.item, (info: Book): void => {
         this.fillChapter(gen, r.key, info.lastChapterTitle);
-      }, warm);
+      }, warm, (quality: TocQuality): void => {
+        this.fillQuality(gen, r.key, quality);
+      });
     }
   }
 
@@ -441,6 +471,31 @@ export struct SourceSwitchPanel {
       }
       hit = true;
       return withChapter(r, chapter);
+    });
+    if (hit) {
+      this.saveCache();
+    }
+  }
+
+  /**
+   * 预热回来的目录体检：只回填行内徽标，**不重排行**。
+   *
+   * 为什么不重排（"把脏候选沉到后面"）：体检比候选上屏晚好几秒（目录是 10+ 次请求才回来），
+   * 行序一抖动就有「手指底下那一行被换成别的源」的误点风险，而换源是删行 + 清缓存的
+   * 破坏性动作。所以拦截交给点击后的确认框（`Reader.confirmSwitch` 会带上体检结论），
+   * 列表保持「谁先回来谁在上面」的稳定序；候选之间的区分由徽标承担。
+   */
+  private fillQuality(gen: number, key: string, quality: TocQuality): void {
+    if (gen !== this.gen) {
+      return;
+    }
+    let hit: boolean = false;
+    this.rows = this.rows.map((r: SwitchRow): SwitchRow => {
+      if (r.key !== key || r.quality !== undefined) {
+        return r;
+      }
+      hit = true;
+      return withQuality(r, quality);
     });
     if (hit) {
       this.saveCache();
@@ -523,6 +578,18 @@ export struct SourceSwitchPanel {
     .padding({ top: 8, bottom: 8 })
   }
 
+  /** 目录体检徽标文案；空串 = 没体检过或干净（`TocQuality.tocQualityLabel`）。 */
+  private qualityTag(r: SwitchRow): string {
+    return tocQualityLabel(r.quality);
+  }
+
+  /** 可疑级（同一章被列出多次）用 `warning` 令牌；提示级与「最新：」同色，不抢视线。 */
+  private qualityColor(r: SwitchRow): ResourceColor {
+    return r.quality !== undefined && r.quality.level >= TOC_QUALITY_SUSPECT
+      ? $r('app.color.warning')
+      : this.dimColor;
+  }
+
   @Builder
   currentFallbackRow() {
     Row() {
@@ -585,14 +652,27 @@ export struct SourceSwitchPanel {
         .width('100%')
         .alignItems(VerticalAlign.Center)
 
-        // 空 = 该源的搜索规则里没有 `lastChapter`，或检索还没回填（上屏即预热详情，
-        // 通常几百毫秒后这行会变成「最新：xxx」）—— 不是源故障。
-        Text(r.chapter.length > 0 ? '最新：' + r.chapter : '（该源未提供最新章节）')
-          .fontSize(12)
-          .fontColor(this.dimColor)
-          .width('100%')
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        // 目录体检徽标（只有最靠前的 2 个候选做过体检，其余没有）排在「最新：」**前面**：
+        // 这一行是 maxLines(1) + 省略号，窄屏上先被截掉的是尾部，而告警才是要先看到的那部分。
+        // 行高仍是 60vp（两行 Column，space 3），与「选择来源」同规格。
+        Row({ space: 4 }) {
+          if (this.qualityTag(r).length > 0) {
+            Text(this.qualityTag(r))
+              .fontSize(12)
+              .fontColor(this.qualityColor(r))
+              .maxLines(1)
+          }
+          // 空 = 该源的搜索规则里没有 `lastChapter`，或检索还没回填（上屏即预热详情，
+          // 通常几百毫秒后这行会变成「最新：xxx」）—— 不是源故障。
+          Text(r.chapter.length > 0 ? '最新：' + r.chapter : '（该源未提供最新章节）')
+            .fontSize(12)
+            .fontColor(this.dimColor)
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
@@ -613,7 +693,7 @@ export struct SourceSwitchPanel {
       if (this.busy || r.current) {
         return;
       }
-      this.onPick(r.source, r.item);
+      this.onPick(r.source, r.item, r.quality);
     })
   }
 
@@ -661,14 +741,14 @@ export struct SourceSwitchPanel {
         .justifyContent(FlexAlign.Center)
       } else {
         List({ space: 0 }) {
-          // key **必须带上会变的字段**（这里：预热回填的 `chapter`）：ArkUI 的 ForEach 按 key 复用子组件，
+          // key **必须带上会变的字段**（这里：预热回填的 `chapter` 与目录体检徽标）：ArkUI 的 ForEach 按 key 复用子组件，
           // key 不变就不重建 —— 只换数组里的对象（`this.rows = rows.map(...)`）不会刷新行内文案。
           // 真机踩过：预热拿到「第83章 今日无事」、日志显示已回调，界面上那一行仍是占位文案。
           ForEach(this.rows, (r: SwitchRow) => {
             ListItem() {
               this.row(r)
             }
-          }, (r: SwitchRow) => r.key + '|' + r.chapter)
+          }, (r: SwitchRow) => r.key + '|' + r.chapter + '|' + this.qualityTag(r))
         }
         .layoutWeight(1)
         .width('100%')

@@ -75,6 +75,7 @@ import { AppBackButton } from '../ui/common/AppBackButton';
 import { MoreMenuButton } from '../ui/common/MoreMenuButton';
 import { SourceSwitchPanel } from '../components/SourceSwitchPanel';
 import { SwitchOutcome, switchSource } from '../model/SourceSwitch';
+import { TocQuality, tocQualityWarning } from '../model/TocQuality';
 import { MeasureOptions } from '@ohos.measure';
 
 const PANEL_NONE: string = '';
@@ -1313,15 +1314,21 @@ export struct ReaderPage {
   /**
    * 换源会删掉当前源的书架行与全部缓存，所以先要一次显式确认；
    * 真正的执行在 `applySwitch`（`model/SourceSwitch.switchSource`）。
+   *
+   * `quality`（`model/TocQuality.ets`）来自抽屉的目录体检，只有做过体检的候选才有；
+   * **可疑级**（目录里有重复 URL 行）会在确认框里加一句警示——换源不消除它，
+   * 但用户有权在删旧行之前知道「切过去也会碰到一样的问题」。
    */
-  private confirmSwitch(target: BookSource, item: BookSearchItem): void {
+  private confirmSwitch(target: BookSource, item: BookSearchItem, quality: TocQuality | undefined): void {
     if (this.switching || this.book === undefined) {
       return;
     }
     const name: string = target.bookSourceName.length > 0 ? target.bookSourceName : target.bookSourceUrl;
+    const tocWarning: string = tocQualityWarning(quality);
     this.getUIContext().showAlertDialog({
       title: '切换到「' + name + '」',
-      message: '当前源的书架记录与缓存会被清除，阅读进度将按章节对齐迁移到新源，此操作不可撤销。',
+      message: '当前源的书架记录与缓存会被清除，阅读进度将按章节对齐迁移到新源，此操作不可撤销。' +
+        (tocWarning.length > 0 ? '\n\n⚠ ' + tocWarning : ''),
       autoCancel: true,
       primaryButton: {
         value: '取消',
@@ -2069,7 +2076,8 @@ export struct ReaderPage {
           onCount: (count: number) => {
             this.switchCount = count;
           },
-          onPick: (source: BookSource, item: BookSearchItem) => this.confirmSwitch(source, item)
+          onPick: (source: BookSource, item: BookSearchItem, quality: TocQuality | undefined) =>
+            this.confirmSwitch(source, item, quality)
         })
       }
     }
