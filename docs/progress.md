@@ -36,7 +36,7 @@
 | M4 | 阅读页（横向分页翻页）+ 目录（含分页）+ 进度 + 阅读设置 | ✅ 已完成（真机验证：目录/跳转/字号/进度重启恢复；修 bindSheet + 正文清洗；**收尾项已补**）|
 | M5 | 听书 + 系统 TTS + 后台播放 + AVSession | ✅ 已完成（真机验证：PCM→AudioRenderer→AVSession 成为 top session，锁屏控件/媒体键可控，切后台不断，定时关闭，段落高亮/进度同步）|
 | M6 | 规则调试器 + 缓存清理 + 备份恢复 | ✅ 功能全部落地：规则调试器 UI（`pages/RuleDebugger.ets`，真机验收未做）、备份/恢复（`pages/BackupManage.ets`，含 2026-10-07 修的真「全量覆盖」）、目录缓存统计/清理、**缓存上限策略（`model/CacheTrim.ets`，2026-10-07 实现并真机六项压测通过）**。仅余规则调试器页真机验收 → [`research/CACHE-LIMIT-PLAN.md`](./research/CACHE-LIMIT-PLAN.md) |
-| v1.1 | **换源**（阅读页顶栏入口 / 书名 + 作者严格匹配 / 进度按章节序号迁移） | ✅ 已完成（真机验证往返切换 + 缓存清理，见上文同名节）；**2026-10-13 又修「候选被静默丢掉 + 每轮白等 13 源」并加预热，真机复验通过（候选 2→7 行、切换 ≤1s）**|
+| v1.1 | **换源**（阅读页顶栏入口 / 书名 + 作者严格匹配 / 进度按章节序号迁移） | ✅ 已完成（真机验证往返切换 + 缓存清理，见上文同名节）；**2026-10-13 又修「候选被静默丢掉 + 每轮白等 13 源」并加预热，真机复验通过（候选 2→7 行、切换 ≤1s）**；**2026-11-02 候选行加「目录体检」徽标（`model/TocQuality.ets`），主机侧 67 断言 + 真机逐行复验通过**|
 | v1.2 | **书架「更新」**（手动批量查新章；详情优先，缺章节名时回退目录） | ✅ 主体已于 **2026-10-13 真机验收 12 项**；2026-10-23 修正混合书架进度分母与无 `lastChapter` 源误报失败，并已完成真机复验 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-SHELF-7 |
 | v1.3 | **TTS 预生成（服务端章级缓存 + job worker）** | 🔶 **阶段一（服务端）2026-10-13 完成并 7/7 验收**；**阶段二（App 侧）同日实现，`make hap` + `make check` + 主机仿真 `make test-pregen` 87/87 通过**；**同日 D17：停用远端 VITS 实时链路**（实时改系统 TTS，VPS 只留给预生成缓存；跨章 16k↔24k 按章重建渲染器）。真机验收（2026-10-14 第二轮，自造短章本地书《短章测试》）：**缓存章路线全线贯通** —— ① D17 系统 TTS 实时 16 kHz ✓（`renderer ready rate=16000` + `begin para=0 route=realtime`）；② **缓存章 24 kHz 命中 ✓**（`route=cache` → `preg playing key=ec27bbff…` → `play para=1..6`）；③ **跨章 16k↔24k 双向重建渲染器 ✓**（`render rate 16000 -> 24000` 与 `24000 -> 16000`）；④ 音频未算完的章**出声前**退实时 ✓（`preg fallback=realtime why=notfound`，同章不混声线/采样率）；⑤ **听完即删 ✓**（`preg cache delete … code=204` + 设备 `pregkeys/` 清空）且下一章无人干预自动续；⑥ 顺带修三个真 bug：**本地书 pregKey 被静默丢弃**（正文不进 `ChapterCache` ⇒ 改 sidecar `filesDir/pregkeys/`，权威顺序「条目在就只信条目」）、**`%f` 日记打成 `rate=}f`**（hilog 不支持 `%f` ⇒ 新门禁 `scripts/check-hilog-format.sh` 接进 `make check`）、**提交后立刻进章把刚提交的缓存键抹掉**（404 = job 还没算完，旧逻辑当失效 ⇒ 现 `notfound` 一律保留键、**不跳过下载**，`pending=` 只进日志，仿真 91/91；**真机待验**）。未跑：拖动/变速逐项拍照、锁屏媒体卡、`expired` 分支、Wi-Fi 门禁取证（待 `ip route`）→ [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-TTS-7、[`research/TTS-PREGEN-IMPL.md`](./research/TTS-PREGEN-IMPL.md) §3.6 / §4.2 |
 | v2 | QuickJS/Boa JS 引擎、在线 TTS、真分页 | ⏳ |
@@ -399,6 +399,19 @@ Checkpoint 2 除“与人对齐后再进 Phase 4”外已通过。Phase 3 的 `T
   重开抽屉「上次检索到的 7 个候选」秒上屏、`bbiquge8 ↔ 小说` 往返后书架进度 `104章/1308章` 未丢。
   留一条未解释的观测：曾有一次换源后重开抽屉 7 行全无「当前」标记（随后三次复现均正常）。
   证据 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-SWITCH-1、[`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §18。
+- **换源候选「目录体检」（2026-11-02，主机侧 + 真机均已验证）**：用户拿真机问「《剑来》目录为什么长成 `第84章…第73章` + `第一卷第一章…第1218章` + `第1章…第84章`」，
+  查通后确认：`小说` 源的 `chapterList = "dd"` 把详情页顶部 `<dt>《剑来》最新章节列表</dt>` 预览块（12 行、最新在前）一起收进了目录，
+  尾部还有另一次从 `第1章` 重新编号的上传（1321 行 / **1309 个唯一 URL**；该源目录只有一页、无 `nextTocUrl`，T-READ-5 里「目录分页倒排」的猜测据此改正）。
+  用户的后续诉求是「让脏源排序靠后」，落地位置选在**换源候选**：只有最靠前 2 个候选本来就会爬整份目录（预热），体检**零新增请求**；
+  而跨源共识在这里本就失效 —— `bbiquge8` 同一本书 **1309 行 / 0 重复 URL**，但末段同样从 `第1章` 重新编号 ⇒ 能区分候选的只有「重复 URL 行」。
+  新 `model/TocQuality.ets`（纯函数三级：`SUSPECT` 重复 URL 行·**整份目录没有标题** / `NOTICE` 末段重新编号·重号标题·公告 / `CLEAN`）+ `SourcePrefetch.onToc` 回填 +
+  候选行第二行徽标（`⚠ …` 用 `warning` 令牌），**不重排行**（体检回来得晚，行序抖动会误点），拦截面放在点击后的确认框。
+  主机侧 `make test-toc`（**67 断言**）+ 两份真实目录复核：`小说` 12 重复 URL / level=SUSPECT，`bbiquge8` 0 重复 / level=NOTICE。
+  **真机复验**（2026-11-02，`uitest dumpLayout`）：7 个候选逐行与主机预测一致 —— `bbiquge8` = `目录末段重新编号`、
+  `黑炎小说` = `⚠ 目录 1331 行没有标题`、当前源 `小说` 行无徽标（当前源不是候选）；点「切换」弹出的确认框实测带上了
+  `⚠ 该源目录有 1331 行没有标题，换源后目录同样显示不出章名。`，点「取消」未发生切换。
+  真机顺带逮到一个误报并已修：`黑炎小说` 一度显示 `目录含 1331 条公告`（整份目录都判不出章节号）⇒ 新增 `untitled` 信号 + 「不按第N章编号就不判公告」的闸门。
+  证据 → [`bugfix/TASKS.md`](./bugfix/TASKS.md) §T-SWITCH-2、[`bugfix/RELEASE-NOTES.md`](./bugfix/RELEASE-NOTES.md) §23、[`specs/UI-SPEC.md`](./specs/UI-SPEC.md) §5（2026-11-02）。
 
 **未决**
 
