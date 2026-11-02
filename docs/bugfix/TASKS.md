@@ -957,7 +957,7 @@
     `scripts/shelf-updater-sim.py` ALL PASS，`make native-fresh` / `make check` / `make hap` 通过。
   - 证据：`model/ShelfRepository.ets`（`replaceShelf`）、`pages/BackupManage.ets`（`doImport` / `confirmImport` 文案）
 
-- [~] **T-DATA-8 恢复备份此前必然失败：移除 `TEMP ACCEPTANCE PROBE`，并补验恢复后孤儿下载目录清理（2026-11-02，主机侧通过、真机待验）**：
+- [x] **T-DATA-8 恢复备份此前必然失败：移除 `TEMP ACCEPTANCE PROBE`，并补验恢复后孤儿下载目录清理（2026-11-02，主机侧 + 真机均已验证）**：
   `model/BackupRecovery.ets::applyRestorePayload()` 在 `replaceAll(payload.sources, …)` 之后**无条件**
   `throw new Error('injected restore failure after source replace')` —— 这是随 `8f03561` 一起进仓库的验收脚手架
   （用来验恢复日志 `backup-restore.pending.json` 的回滚分支），没有环境开关兜底、也没标临时。
@@ -968,9 +968,24 @@
   - 证据：`model/BackupRecovery.ets`（`applyRestorePayload`）、`docs/progress.md` §整书下载
   - 验证（主机侧）：`make hap NO_DAEMON=1` BUILD SUCCESSFUL（13 s）；`rg -n "tempAcceptanceProbe|injected" entry/src/main/ets` 无残留；
     `check-keep-props` / `check-hilog-format` / `check-source-consumers` / `check-t16-bench` 通过。
-  - **待验（真机）**：① 正常恢复不再注入失败 —— 导出 → 清库 → 导入 → `aa force-stop` 重启复读，三项计数与书架一致；
-    ② 恢复后的孤儿下载清理真的发生 —— 给一本书下几章（生成 `manifest.json`）→ 导出备份 → 删掉该书 → 导入 →
-    看 `filesDir/downloads/` 下旧 `bookId` 目录是否被清掉、在架书目录是否保留（`replaceShelf()` 计数校验通过后才清，故中途失败时不能提前清）。
+  - **真机验证（2026-11-02 · 设备 `33Z0224424136564` · debug HAP（23:43 构建，含本次改动）· `make install` → `aa force-stop` → 启动）**：
+    ① **首次导入不再注入失败**：新进程（force-stop 后启动、本进程内尚未导入过）走 设置 → 备份与恢复（`13 个 / 3 本 / 3 条`）→ 导出 → 导入
+    （导入的是删掉《登神长阶》的那份备份），hilog 给出完整链 `restore journal created sources=13 books=3 progress=3` →
+    `restore journal cleared` → `restore committed sources=13 books=2 progress=2`，**无 `injected`、无 `import … failed`**；
+    导入后 `aa force-stop` 重启，书架 2 本、DB（主库 + `-wal`）`2 books / 2 progress` ⇒ 提交已落盘。
+    ② **孤儿下载清理真的发生**：先造两份「下载被强杀」的残骸 —— 打开《剑来》`4b445f13` 点「下载书籍」、8 s 后 `aa force-stop`
+    ⇒ `files/downloads/4b445f13/` 35 个章节文件、无 `manifest.json`；同样造《登神长阶》`466d1230` ⇒ 20 个文件。
+    再导出备份（3 本）到 picker 的 `Documents`，主机侧把 `466d1230` 的 book / progress 两项删掉（2 本 / 2 条）后推回设备导入 ⇒
+    恢复后 `files/downloads/` **只剩 `4b445f13`**、`466d1230` 目录已被 `sweepOrphanDownloads()` 删掉（保留集合 == 备份里的 `bookId` 集合）。
+    ③ **顺带（删书清理下载目录）**：从书架删掉《剑来》后 `files/downloads/` 变成**空根**（无子项）⇒ `BookRemoval` 的下载清理同样生效。
+  - **状态复原**：导回全量备份（`13 个 / 3 本 / 3 条`），fixture `sourcereader_backup_orphan.json` / `…_dup.json` 已从 picker 目录删除
+    （设备上留一份本次导出的 `sourcereader_backup_2026-11-03.json`），App 重启到书架。注：**`hdc` 写不进 App 沙箱**
+    （`mkdir … Permission denied`）⇒ 下载残骸只能由 App 自身路径造出 / 清除，主机侧无法直接摆 `downloads/` 夹具。
+  - **残余覆盖缺口（登记，不阻塞）**：删掉探针后，**「恢复中途失败 → `recoverPendingRestore()` 回滚」这条分支在进程内没有强制触发手段**
+    （探针原本就是干这个的）。本轮试过的替代注入都没走通 —— `books` / `progress` 的重复 `bookId` 在**校验阶段**就被拒
+    （真机实测 `import validate failed msg=books[3].bookId is duplicated`，未写库即返回），而 apply 阶段全程仅 ~30 ms，
+    无法在 `createRestoreJournal()` 与 `restore committed` 之间可靠 `force-stop`（中途杀进程还可能留下真实半写库，风险大于收益）。
+    ⇒ 该分支目前只有代码走读、无运行时证据。
 
 ---
 
