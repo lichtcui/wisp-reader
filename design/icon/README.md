@@ -1,4 +1,10 @@
-# App 图标 / App Icon
+# App 图标 / App Icon（旧版，已退役）
+
+> ⚠️ 本目录是**最早的红底「源」书页图标**，已退役（后续依次为 `design/icon-ghost`、当前 [`design/icon-v2`](../icon-v2/README.md)）。
+> 工程当前引用的是 v2：`AppScope` / `entry` 的 `foreground.png`、`background.png` 与 `startIcon.png`
+> 均由 `design/icon-v2/src/export.py --apply` 生成。
+> **不要再跑 `export.sh --apply`**，否则会把工程资源覆盖回旧图标。以下内容仅作历史与工具参考
+> （`src/iconlib.py` 仍被 v2 的导出脚本复用）。
 
 Source Reader 的图标源文件、导出产物与替换步骤。
 
