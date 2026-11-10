@@ -296,10 +296,11 @@ struct Index {
   @Builder
   shelfUpdateAction() {
     Row() {
-      Text('更新')
-        .fontSize(16)
-        .fontColor(this.shelfUpdating ? $r('app.color.text_3') : $r('app.color.brand'))
-        .maxLines(1)
+      Image($r('app.media.refresh_ccw'))
+        .width(22)
+        .height(22)
+        .objectFit(ImageFit.Contain)
+        .opacity(this.shelfUpdating ? 0.35 : 1)
     }
     .height(44)
     .padding({ left: 8, right: 8 })
