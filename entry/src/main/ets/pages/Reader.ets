@@ -3,7 +3,7 @@
 //   状态（@Local）：chapters / chapterIndex / paragraphs / paragraphIndex / pages / pageIndex / sliderValue
 //                   menuVisible / panel / tocDescending / tocContentRevision / fontSize / lineHeight / nightMode / oneHandMode / tts
 //   生命周期：aboutToAppear / aboutToDisappear / onTtsProgress（@Monitor 听书进度 → 高亮 + 跟随滚动）
-//   加载正文：loadToc / refreshToc / load / loadChapter / applyChapter / fetchContent / fetchRemote / cachedContent / warmNeighbors
+//   加载正文：loadToc / refreshToc / load / loadChapter / refreshCurrentChapter / applyChapter / fetchContent / fetchRemote / cachedContent / warmNeighbors
 //             （正文清洗不在本文件：统一走 model/BookContent.sanitizeText，见 T-READ-1）
 //   章内导航：isReadable / firstReadable / nextReadable / prevReadable / prevChapter / nextChapter / prevPage / nextPage / onPageChanged
 //   分页测算（横向分页核心）：availWidthPx / availHeightPx / measureOptions / measureHeight / maxCharsFit / paraMargin / firstLineIndentFp
@@ -18,8 +18,10 @@
 //   下载：onDownloadChanged / refreshDownloadState / downloadMenuElement / startDownload / cancelDownload
 //         exportMenuElement / exportDownloadedAsTxt
 //   换源：openSourceSwitch / confirmSwitch / applySwitch / resetContentState / switchMessage（逻辑在 model/SourceSwitch.ets）
+//   刷新本章：refreshCurrentChapter（绕过缓存重取正文，见 §Chapter content）
 //   @Builder 子视图：topBar / bottomBar / contentPager（Swiper 分页）/ tocDrawerContent / settingsDrawerContent /
-//                    iconButton / funcButton / moreButton / buildTocItems / readableCount / toggleTocOrder
+//                    iconButton / funcButton / moreButton / sourceSwitchButton / refreshChapterButton /
+//                    buildTocItems / readableCount / toggleTocOrder
 // ──────────────────────────────────────────────────────────────────────
 
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
@@ -68,7 +70,12 @@ import {
   relinkLocalTxt
 } from '../model/LocalBook';
 import { sanitizeText } from '../model/BookContent';
-import { BookDownloadState, getDownloadedChapter, inspectDownload } from '../model/DownloadStore';
+import {
+  BookDownloadState,
+  getDownloadedChapter,
+  inspectDownload,
+  writeDownloadedChapter
+} from '../model/DownloadStore';
 import { BookDownloader } from '../model/BookDownloader';
 import { exportDownloadedTxt } from '../model/BookTxtExport';
 import { TtsController } from '../model/TtsController';
@@ -88,6 +95,8 @@ const PANEL_SETTINGS: string = 'settings';
 const PANEL_SOURCE: string = 'source';
 /** 滑动手势守卫的兜底时长：某次触摸没走到 onChange / onAnimationEnd 时别让守卫永久卡住。 */
 const SWIPE_WATCHDOG_MS: number = 2000;
+/** 顶栏自定义图标画板（vp）。SVG 内已按 20vp 墨迹 + 2vp 居中留白裁好，两个按钮共用同一尺寸。 */
+const READER_TOP_ICON_SIZE: number = 24;
 
 @ComponentV2
 export struct ReaderPage {
@@ -114,6 +123,8 @@ export struct ReaderPage {
   @Local paragraphs: string[] = [];
   @Local paragraphIndex: number = 0;
   @Local loading: boolean = true;
+  /** 顶栏「刷新本章」进行中：禁用连点、图标变淡；不动 `loading`，避免整页闪一次加载态。 */
+  @Local refreshing: boolean = false;
   @Local failed: string = '';
   @Local menuVisible: boolean = false;
   @Local panel: string = PANEL_NONE;
@@ -590,8 +601,11 @@ export struct ReaderPage {
    * `warmNeighbors()` 邻居 + 下一次切章再暖同一批邻居 —— 两边各发一次引擎请求、
    * 各写一次 `putCachedChapter`，而后到的结果还会被 `loadChapter` 的 `loadGen`
    * 守卫丢弃。去重后调用方共享同一个 promise：只请求一次、只写盘一次（T-READ-3）。
+   *
+   * `force=true` 只给「刷新本章」用：跳过 downloaded / cached 两层读路径，仍走
+   * `inflight` 单飞（复用正在飞的同一章请求，那同样是从书源现取的最新正文）。
    */
-  private async fetchContent(chapter: Chapter, index: number): Promise<string> {
+  private async fetchContent(chapter: Chapter, index: number, force: boolean = false): Promise<string> {
     const src: BookSource | undefined = this.source;
     const book: Book | undefined = this.book;
     if (src === undefined || book === undefined) {
@@ -602,7 +616,7 @@ export struct ReaderPage {
       return localCtx !== undefined ? loadLocalContent(localCtx, book, index) : '';
     }
     const ctx: common.UIAbilityContext | undefined = this.ctx();
-    if (ctx !== undefined) {
+    if (ctx !== undefined && !force) {
       const downloaded: string | undefined =
         getDownloadedChapter(ctx, book.bookId, index, chapter.url);
       if (downloaded !== undefined) {
@@ -708,6 +722,85 @@ export struct ReaderPage {
         this.paragraphs = [];
         this.loading = false;
       }
+    }
+  }
+
+  /**
+   * 顶栏「刷新本章」：重新向书源取当前章正文（对齐 Legado 阅读菜单里重新加载本章的语义）。
+   *
+   * 背景：目录有 stale 重爬（`refreshToc`），**正文缓存却不会自己过期** —— 书源在章节
+   * 发布后又改过内容（错字修订 / 防盗章替换）时，本 App 没有任何入口能拿到新正文。
+   *
+   * 三层缓存必须一起覆盖，否则下次打开又读回旧文本：
+   *  - `paraCache` / 页流：`applyChapter` 覆盖段落、删本章分页并就地重排；
+   *  - `ChapterCache`（内存 + `filesDir/chapters`）：`fetchRemote` 的 `putCachedChapter`
+   *    整体覆写条目，顺带作废跟着正文走的 TTS 预生成音频键；
+   *  - `DownloadStore`（已下载章节，`cachedContent` 里优先级最高）：存在时显式覆写。
+   *
+   * 不复用 `loadChapter`：那条路径会命中缓存、失败时还会清空当前正文。这里保留段落锚点
+   * 就地重排，失败只提示、正文原样留着。本地书正文来自导入的 TXT，没有可重取的源。
+   *
+   * 已知边界：听书播放中刷新不会重做已经生成的音频（音频与文本可能短暂不一致），
+   * 且进度写入会被 `ProgressOwner` 丢弃，由音频时钟继续独占。
+   */
+  private async refreshCurrentChapter(): Promise<void> {
+    if (this.refreshing || this.loading) {
+      return;
+    }
+    const src: BookSource | undefined = this.source;
+    const book: Book | undefined = this.book;
+    const index: number = this.chapterIndex;
+    if (src === undefined || book === undefined || !this.isReadable(index)) {
+      return;
+    }
+    if (isLocalBook(book)) {
+      this.toast('本地书籍无需刷新');
+      return;
+    }
+    this.refreshing = true;
+    // 作废在飞的 loadChapter / warmNeighbors，避免旧正文回来盖掉刷新结果。
+    const gen: number = ++this.loadGen;
+    try {
+      const chapter: Chapter = this.chapters[index];
+      // 留一份旧正文：书源偶发返回空串时，不把本章缓存和正在读的页面一起清掉。
+      const previous: string | undefined = this.cachedContent(chapter, index);
+      const content: string = await this.fetchContent(chapter, index, true);
+      if (content.trim().length === 0) {
+        const rollbackCtx: common.UIAbilityContext | undefined = this.ctx();
+        if (rollbackCtx !== undefined && previous !== undefined) {
+          putCachedChapter(rollbackCtx, book.bookId, index, chapter.url, previous);
+        }
+        hilog.warn(DOMAIN, TAG, 'refresh: empty body book=%{public}s index=%{public}d', book.name, index);
+        if (gen === this.loadGen) {
+          this.toast('书源返回空内容，已保留原正文');
+        }
+        return;
+      }
+      if (gen !== this.loadGen) {
+        return; // 期间用户翻了章：结果丢弃，但缓存已更新，下次打开自然是新正文。
+      }
+      const ctx: common.UIAbilityContext | undefined = this.ctx();
+      if (ctx !== undefined && getDownloadedChapter(ctx, book.bookId, index, chapter.url) !== undefined) {
+        try {
+          writeDownloadedChapter(ctx, book.bookId, index, chapter.url, content);
+        } catch (err) {
+          hilog.warn(DOMAIN, TAG, 'refresh: downloaded chapter rewrite failed: %{public}s',
+            (err as BusinessError).message);
+        }
+      }
+      this.applyChapter(index, content, this.paragraphIndex);
+      await this.persistProgress();
+      this.toast('本章已刷新');
+      hilog.info(DOMAIN, TAG, 'chapter refreshed book=%{public}s index=%{public}d len=%{public}d',
+        book.name, index, content.length);
+    } catch (err) {
+      if (gen === this.loadGen) {
+        hilog.warn(DOMAIN, TAG, 'chapter refresh failed book=%{public}s index=%{public}d msg=%{public}s',
+          book.name, index, (err as BusinessError).message);
+        this.toast('刷新失败，请稍后重试');
+      }
+    } finally {
+      this.refreshing = false;
     }
   }
 
@@ -1721,6 +1814,57 @@ export struct ReaderPage {
     .onClick(action)
   }
 
+  /**
+   * 顶栏两个自定义 SVG 按钮刻意用 **0 参数 @Builder + 直读 @Local**：多参数 @Builder
+   * 不会随父组件 @Local 动态刷新（见 Index.ets §5.3 K10），而图标颜色跟 `nightMode`、
+   * 刷新态跟 `refreshing` 都必须实时变。
+   *
+   * 图标按日夜各放一份资源：阅读日夜是**页内状态**，不随系统主题，不能用资源限定词；
+   * 且两个图标一个是 stroke、一个是 fill，`Image.fillColor` 对 stroke 是否覆盖没有可靠
+   * 保证，双份资源最确定。色值与 color.json 的 reader_text_day / reader_text 一致。
+   * 尺寸沿用 UI-SPEC §1.7：44×44 热区、`READER_TOP_ICON_SIZE` 24vp 画板。两个 SVG 内部
+   * 已按 **20vp 墨迹 + 2vp 居中留白** 裁好（与既有 `refresh_ccw.svg` 一致），画板尺寸用
+   * 同一个常量控制，不要单独放大某一个按钮；横向的换源图标高度按固有比例约 13.5vp，属正常。
+   */
+  @Builder
+  sourceSwitchButton() {
+    Row() {
+      Image(this.nightMode
+        ? $r('app.media.reader_switch_source_night')
+        : $r('app.media.reader_switch_source_day'))
+        .width(READER_TOP_ICON_SIZE)
+        .height(READER_TOP_ICON_SIZE)
+        .objectFit(ImageFit.Contain)
+    }
+    .width(44)
+    .height(44)
+    .justifyContent(FlexAlign.Center)
+    .accessibilityText('换源')
+    .accessibilityLevel('yes')
+    .onClick(() => this.openSourceSwitch())
+  }
+
+  @Builder
+  refreshChapterButton() {
+    Row() {
+      Image(this.nightMode
+        ? $r('app.media.reader_refresh_chapter_night')
+        : $r('app.media.reader_refresh_chapter_day'))
+        .width(READER_TOP_ICON_SIZE)
+        .height(READER_TOP_ICON_SIZE)
+        .objectFit(ImageFit.Contain)
+        .opacity(this.refreshing ? 0.4 : 1)
+    }
+    .width(44)
+    .height(44)
+    .justifyContent(FlexAlign.Center)
+    .accessibilityText(this.refreshing ? '正在刷新本章' : '刷新本章')
+    .accessibilityLevel('yes')
+    .onClick(() => {
+      this.refreshCurrentChapter();
+    })
+  }
+
   @Builder
   moreButton() {
     MoreMenuButton({
@@ -1747,12 +1891,13 @@ export struct ReaderPage {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .padding({ left: 4 })
-      this.iconButton($r('sys.symbol.arrow_2_circlepath'), '换源',
-        () => this.openSourceSwitch())
+      this.sourceSwitchButton()
+      this.refreshChapterButton()
       MoreMenuButton({
         items: this.moreMenuItems(),
         color: this.dimColor(),
-        label: '更多'
+        label: '更多',
+        dotSize: 5
       })
     }
     .width('100%')

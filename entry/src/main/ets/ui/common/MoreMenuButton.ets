@@ -7,6 +7,8 @@ export struct MoreMenuButton {
   @Param label: string = '更多';
   /** Optional explicit dot color (e.g. the reader's day/night dim token). */
   @Param color: ResourceColor | undefined = undefined;
+  /** 点直径（vp）。默认 4 保持其它页面原样；阅读页顶栏传 5，与 20vp 主体图标对齐。 */
+  @Param dotSize: number = 4;
 
   @Local pressed: boolean = false;
 
@@ -31,9 +33,9 @@ export struct MoreMenuButton {
 
   build() {
     Row({ space: 3 }) {
-      Row().width(4).height(4).borderRadius(2).backgroundColor(this.dotColor())
-      Row().width(4).height(4).borderRadius(2).backgroundColor(this.dotColor())
-      Row().width(4).height(4).borderRadius(2).backgroundColor(this.dotColor())
+      Row().width(this.dotSize).height(this.dotSize).borderRadius(this.dotSize / 2).backgroundColor(this.dotColor())
+      Row().width(this.dotSize).height(this.dotSize).borderRadius(this.dotSize / 2).backgroundColor(this.dotColor())
+      Row().width(this.dotSize).height(this.dotSize).borderRadius(this.dotSize / 2).backgroundColor(this.dotColor())
     }
     .width(44)
     .height(44)

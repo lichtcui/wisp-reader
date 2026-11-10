@@ -256,5 +256,17 @@ sips -s format bmp /tmp/u1.jpeg --out /tmp/u1.bmp       # 纯 Python 解析 BMP�
 |---|---|---|
 | 返回键 | `AppBackButton`（原 spec 名 `AppNavBack`） | `ui/common/AppBackButton.ets` |
 | 省略号功能键 | `MoreMenuButton`（原 `AppMoreButton`），44×44 热区 | `ui/common/MoreMenuButton.ets` |
+| 阅读页「换源」 | 自定义 SVG 图标（非 `SymbolGlyph`），44×44 热区 / 24vp 图标；位于标题右侧、刷新左侧 | `pages/Reader.ets` 的 `sourceSwitchButton()`；资源 `media/reader_switch_source_day.svg` / `_night.svg` |
+| 阅读页「刷新本章」 | 同上规格；进行中降透明度并禁连点，重取本章正文后保留段落锚点就地重排 | `pages/Reader.ets` 的 `refreshChapterButton()` / `refreshCurrentChapter()`；资源 `media/reader_refresh_chapter_day.svg` / `_night.svg` |
+
+图标颜色：**阅读日夜是页内状态、不随系统主题**，不能靠 `resources/dark` 限定词；两个图标一个是
+`stroke` 一个是 `fill`，`Image.fillColor` 对 `stroke` 是否覆盖没有可靠保证，故按 `nightMode`
+各选一份 SVG（色值与 `reader_text_day` / `reader_text` 一致）。这两个按钮用 **0 参数 `@Builder`
+\+ 直读 `@Local`**：多参数 builder 不随父组件 `@Local` 刷新，日夜切换会换不了图标。
+
+尺寸：右侧三个按钮统一 44×44 热区 + 24vp 画板（`Reader.ets` 的 `READER_TOP_ICON_SIZE`），
+SVG 墨迹框统一 **20vp 宽 + 2vp 居中留白**（与 `refresh_ccw.svg` 一致，勿再裁到外接框撑满 24vp）；
+换源是横向图标，高度按固有比例约 13.5vp。省略号功能键经 `MoreMenuButton.dotSize=5`
+把主体宽度对齐到 21vp（组件默认 4，其它页面不受影响）。
 
 返回键约定：4 个设置页保留系统 `NavDestination.title()` 自带箭头；自绘顶栏页统一 `AppBackButton`。
