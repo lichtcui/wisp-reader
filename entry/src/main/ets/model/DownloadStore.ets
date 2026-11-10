@@ -192,6 +192,7 @@ export function inspectDownload(
   const complete: boolean = manifest !== undefined &&
     readable > 0 &&
     manifest.chapterCount === readable &&
+    downloaded >= readable &&
     manifest.tocUrl === book.tocUrl &&
     manifest.tocFingerprint === fingerprint;
   const canUpdate: boolean = manifest !== undefined && readable > 0;
