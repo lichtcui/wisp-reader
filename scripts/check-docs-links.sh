@@ -25,10 +25,13 @@ for f in files:
     text = open(f, encoding='utf-8').read()
     for line_no, line in enumerate(text.splitlines(), 1):
         for target in LINK.findall(line):
-            if target.startswith(('http://', 'https://', 'mailto:', '#')):
+            if target.startswith(('http://', 'https://', 'mailto:', '#', 'file:')):
                 continue
             path = target.split('#')[0]
             if not path:
+                continue
+            # 绝对路径不在仓库内（常见于 /tmp 临时证据），本脚本只校验仓库相对链接。
+            if path.startswith('/'):
                 continue
             checked += 1
             resolved = os.path.normpath(os.path.join(os.path.dirname(f), path))

@@ -127,12 +127,15 @@ doctor: ## 自检：.so / index.d.ts / HAP 是否落后于源码 + 设备是否�
 	@scripts/doctor.sh
 
 check: ## 自检文档与契约（行号目录 / md 链接 / JSON keep 列表 / hilog 格式 / 书源读路径）
-	@scripts/docs-toc.sh --check
-	@scripts/check-docs-links.sh
-	@scripts/check-keep-props.sh
-	@scripts/check-hilog-format.sh
-	@scripts/check-source-consumers.sh
-	@scripts/check-t16-bench.sh
+	@fail=0; \
+	scripts/docs-toc.sh --check || fail=1; \
+	scripts/check-docs-links.sh || fail=1; \
+	scripts/check-keep-props.sh || fail=1; \
+	scripts/check-hilog-format.sh || fail=1; \
+	scripts/check-source-consumers.sh || fail=1; \
+	scripts/check-t16-bench.sh || fail=1; \
+	if [ "$$fail" -ne 0 ]; then echo "✗ check 有失败项（见上）"; fi; \
+	exit $$fail
 
 ## ── 文档 ────────────────────────────────────────────────────────────────────
 

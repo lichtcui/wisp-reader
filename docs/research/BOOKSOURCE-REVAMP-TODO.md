@@ -725,17 +725,17 @@ restore / monitor / launch / cancel / resume；debug 真机完成三态、取消
 - [x] `make check` 通过
 
 **Evidence（2026-10-19，debug 真机 `33Z0224424136564`）：**运行中、完成、取消三态分别见
-[running-full](/private/tmp/t5-final-running-full-20261019-1.json)、
-[done](/private/tmp/t5-final-done-20261019-1.json)、
-[cancelled](/private/tmp/t5-final-cancelled-20261019-1.json)；取消按钮即时反馈见
-[bar-stop](/tmp/cp5-stop2-2-bar2.txt)，作业条运行态与随后自然完成另见
-[job-return](/tmp/cp5-final2-job-return.json)、[job-after](/tmp/cp5-final2-job-after.json)，继续后见
-[resumed](/private/tmp/t5-final-resumed-20261019-1.json)。无结果筛选布局见
-[noresult](/private/tmp/t5-final-noresult-20261019-1.json)，结果面只有「关闭不可用 / 删除不可用」，
+`running-full`、
+`done`、
+`cancelled`；取消按钮即时反馈见
+`bar-stop`，作业条运行态与随后自然完成另见
+`job-return`、`job-after`，继续后见
+`resumed`。无结果筛选布局见
+`noresult`，结果面只有「关闭不可用 / 删除不可用」，
 没有针对无结果或超时的批量入口；批量动作均带条数与二次确认，执行集合只取 `unavailable`。
 3000 行检测段的顶部、底部和连续快速滑动布局分别见
-[top](/tmp/t5-3000-detect-top.json)、[bottom](/tmp/t5-3000-detect-bottom.json)、
-[fling20](/tmp/t5-3000-detect-fling20.json)，每份 dump 中 `ListItem` 数为 4、4、5；结合
+`top`、`bottom`、
+`fling20`，每份 dump 中 `ListItem` 数为 4、4、5；结合
 Checkpoint 3 的滚动回调帧距 p50 `8 ms` / p95 `9 ms` / max `24 ms`，未出现 `>=34 ms` 间隔。
 
 **Dependencies:** T3.4、T4.3
@@ -757,12 +757,12 @@ Checkpoint 3 的滚动回调帧距 p50 `8 ms` / p95 `9 ms` / max `24 ms`，未�
 
 **Evidence（2026-10-19，debug 真机 `33Z0224424136564`）：**生产页面在首次 `reload()` 后调用
 `runner.restore()`，并持续订阅 `runner.updatedAt` / `runner.status`。切到检测段后作业条仍在见
-[cross-segment](/private/tmp/t5-final-cross-segment-20261019-1.json)；返回书架/列表页再进入书源页，
+`cross-segment`；返回书架/列表页再进入书源页，
 作业条显示 `0/13 · 完整检测`、进度和可点击的「取消」，见
-[return-running](/tmp/cp5-final2-return.json)；同轮作业状态此时为
-[running](/tmp/cp5-final2-job-return.json)（`done=0`、`cursor=0`），随后自然完成为
-[done](/tmp/cp5-final2-job-after.json)（`done=13`、`cursor=13`）。运行中可直接从作业条点「取消」，
-按钮即时进入「正在停止…」，见 [bar-stop](/tmp/cp5-stop2-2-bar2.txt)；本轮不把这次随后完成的运行
+`return-running`；同轮作业状态此时为
+`running`（`done=0`、`cursor=0`），随后自然完成为
+`done`（`done=13`、`cursor=13`）。运行中可直接从作业条点「取消」，
+按钮即时进入「正在停止…」，见 `bar-stop`；本轮不把这次随后完成的运行
 表述为「已取消」终态。
 
 **Dependencies:** T5.1
@@ -786,7 +786,7 @@ Checkpoint 3 的滚动回调帧距 p50 `8 ms` / p95 `9 ms` / max `24 ms`，未�
 为 7 天，检测段默认 `SCOPE_INCREMENTAL`，范围条另有「全部」「未测」「上次失败」与分组菜单；
 书源段提供「未测」「失败」筛选，「全部重测」明确走所有启用源。同一批 13 个启用源上，增量扫描
 `13/13` 用时 `00:08`，完整全量 `13/13` 用时 `00:12`，原始布局见
-[incremental](/tmp/t5-incremental-done.json) 与 [full](/tmp/t5-full-done.json)。增量结果为预检通过 9、
+`incremental` 与 `full`。增量结果为预检通过 9、
 无结果 2、超时 1、不可用 1；完整全量为可用 11、无结果 2、不可用 0。完整档耗时更高且结论更严格，
 未把预检通过升级成「可用」。
 
@@ -815,10 +815,10 @@ Checkpoint 3 的滚动回调帧距 p50 `8 ms` / p95 `9 ms` / max `24 ms`，未�
 `SPEC-DETECT-UI.md` 的 Success 6 已与实现对齐，检查 `SPEC-DETECT-UI.md`、`SPEC-DETECT-JOB.md`
 与 `UI-SPEC.md` 后无剩余明确偏差。旧备份 `1007`、`1017` 与新导出均为 `schemaVersion=1`、13 个源，
 顶层键、源键集合与数组路径一致，差异仅为预期 `confidence`；三份文件见
-[1007](/tmp/t5-backup-old-1007.json)、[1017](/tmp/t5-backup-old-1017.json)、
-[new](/tmp/t5-backup-new.json)。`make run-release` 完成 release 编译、签名、安装、force-stop 与启动，
+`1007`、`1017`、
+`new`。`make run-release` 完成 release 编译、签名、安装、force-stop 与启动，
 按 bundle 过滤后的 release hilog 无 ArkTS `TypeError` / `ReferenceError` / `FATAL`，见
-[构建日志](/tmp/t5-final-run-release.log) 与 [hilog](/tmp/t5-final-release-hilog2.log)。
+`构建日志` 与 `hilog`。
 
 **Dependencies:** T5.1–T5.3
 **Files likely touched:** `docs/specs/UI-SPEC.md`、`docs/progress.md`、
@@ -846,8 +846,8 @@ Checkpoint 3 的滚动回调帧距 p50 `8 ms` / p95 `9 ms` / max `24 ms`，未�
 3. 3000 行滚动无感知掉帧、搜索更新 ≤100 ms：Checkpoint 3 的滚动回调为 p50 `8 ms` / p95 `9 ms`，
    检测段 max `24 ms`、无 `>=34 ms`；防抖后搜索投影 `12 ms`（端到端含 150 ms 防抖为 `163 ms`）。
    T5 的检测段顶部/底部/连续滑动 dump 仅物化 4–5 个 `ListItem`，见
-   [top](/tmp/t5-3000-detect-top.json)、[bottom](/tmp/t5-3000-detect-bottom.json)、
-   [fling20](/tmp/t5-3000-detect-fling20.json)。
+   `top`、`bottom`、
+   `fling20`。
 4. L1 预检 3000 源 ≤20 分钟、全程有进度可取消：T0.2 实测选择并发 16 / L1 8 s（3000 源估算约
    4.4 min）；T2.3 真源 3171 条 L1 墙钟 237 s。详见 [`T2.3-DETECT-TRUTH-TABLE.md`](./T2.3-DETECT-TRUTH-TABLE.md)
    与本文件 T0.2。
@@ -859,11 +859,11 @@ Checkpoint 3 的滚动回调帧距 p50 `8 ms` / p95 `9 ms` / max `24 ms`，未�
    [`T0.1-LONG-TASK-EVIDENCE.md`](./T0.1-LONG-TASK-EVIDENCE.md) 与本文件 T4.4 Evidence。
 7. 备份格式逐字段兼容、旧备份可导入：旧 `1007`、`1017` 与新导出均为 schema `1`、13 源，顶层键、
    源键集合及数组路径一致，差异仅为预期 `confidence`；文件见
-   [1007](/tmp/t5-backup-old-1007.json)、[1017](/tmp/t5-backup-old-1017.json)、
-   [new](/tmp/t5-backup-new.json)。
+   `1007`、`1017`、
+   `new`。
 8. release 下新增落盘字段可读：`make check` 通过（200 个 keep 名字）；`make run-release` 编译、签名、
    安装、force-stop、启动成功，release 日志无 ArkTS `TypeError` / `ReferenceError` / `FATAL`，见
-   [构建日志](/tmp/t5-final-run-release.log) 与 [hilog](/tmp/t5-final-release-hilog2.log)。
+   `构建日志` 与 `hilog`。
 9. `make test` / `make check` 通过：`make test` 65 passed，`make test-detect` 135 条断言通过，
    `make check` 通过；本轮最终重跑结果记录在交付说明。
 10. 3000 条默认「启用」、异常分档置顶、搜索与筛选首屏可见：Checkpoint 3 已验证默认视图 2000/3000、
