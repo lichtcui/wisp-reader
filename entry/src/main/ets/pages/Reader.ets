@@ -3,7 +3,7 @@
 //   状态（@Local）：chapters / chapterIndex / paragraphs / paragraphIndex / pages / pageIndex / sliderValue
 //                   menuVisible / panel / tocDescending / tocContentRevision / fontSize / lineHeight / nightMode / oneHandMode / tts
 //   生命周期：aboutToAppear / aboutToDisappear / onTtsProgress（@Monitor 听书进度 → 高亮 + 跟随滚动）
-//   加载正文：loadToc / refreshToc / load / loadChapter / refreshCurrentChapter / applyChapter / fetchContent / fetchRemote / cachedContent / warmNeighbors
+//   加载正文：loadToc / refreshToc / load / loadChapter / refreshCurrentChapter / applyChapter / fetchContent / fetchRemote / cachedContent / warmNeighbors / warmNeighbor
 //             （正文清洗不在本文件：统一走 model/BookContent.sanitizeText，见 T-READ-1）
 //   章内导航：isReadable / firstReadable / nextReadable / prevReadable / prevChapter / nextChapter / prevPage / nextPage / onPageChanged
 //   分页测算（横向分页核心）：availWidthPx / availHeightPx / measureOptions / measureHeight / maxCharsFit / paraMargin / firstLineIndentFp
@@ -847,28 +847,41 @@ export struct ReaderPage {
       return;
     }
     const gen: number = this.loadGen;
-    const targets: number[] = [this.prevReadable(this.chapterIndex), this.nextReadable(this.chapterIndex)];
-    for (const n of targets) {
-      if (n < 0 || this.paraCache.has(n)) {
-        continue;
-      }
-      const chapter: Chapter = this.chapters[n];
-      const cached: string | undefined = this.cachedContent(chapter, n);
-      let content: string | undefined = cached;
-      if (content === undefined) {
-        try {
-          content = await this.fetchContent(chapter, n);
-        } catch (err) {
-          continue;
-        }
-      }
-      if (content !== undefined) {
-        this.paraCache.set(n, sanitizeText(content, chapter.title));
-      }
+    const targets: number[] = [];
+    const prev: number = this.prevReadable(this.chapterIndex);
+    const next: number = this.nextReadable(this.chapterIndex);
+    if (prev >= 0) {
+      targets.push(prev);
     }
+    // 单章书 / 边界上 prev 与 next 可能同值，去重后只暖一次。
+    if (next >= 0 && next !== prev) {
+      targets.push(next);
+    }
+    // 两章互不依赖：并发取，未缓存时跨章可滑动的等待时间不再相加。
+    await Promise.all(targets.map((n: number): Promise<void> => this.warmNeighbor(n)));
     if (gen === this.loadGen && this.sized) {
       // 手势/动画在飞时只挂起：立即重排会平移下标，把还在滑动的 Swiper 拽回原页（T-READ-7 手势路径）。
       this.scheduleWindowRebuild();
+    }
+  }
+
+  /** 暖载单章（`warmNeighbors` 的并发单元）：已解析则跳过，缓存未命中再走引擎单飞。 */
+  private async warmNeighbor(n: number): Promise<void> {
+    if (n < 0 || this.paraCache.has(n)) {
+      return;
+    }
+    const chapter: Chapter = this.chapters[n];
+    const cached: string | undefined = this.cachedContent(chapter, n);
+    let content: string | undefined = cached;
+    if (content === undefined) {
+      try {
+        content = await this.fetchContent(chapter, n);
+      } catch (err) {
+        return;
+      }
+    }
+    if (content !== undefined) {
+      this.paraCache.set(n, sanitizeText(content, chapter.title));
     }
   }
 
