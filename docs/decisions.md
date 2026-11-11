@@ -13,7 +13,7 @@
 | D6 | 封面由 Rust 代下（带 header/Cookie），落盘后 ArkTS 加载（二进制不过 NAPI） | 部分站点封面需 Cookie/Referer | `downloadCover` |
 | D7 | 状态管理 **V2**（`@ComponentV2` / `@Local` / `@Param` / `@Monitor`）；跨页 `AppStorageV2`、跨启动 `PersistenceV2` | 与既有页面一致（V1/V2 不可混用于同一组件） | 全部 UI |
 | D8 | 视觉：白 + 红（`#DA3838`，红系轻渐变 `#e35a5a → #da3838`），颜色走 `resources/{base,dark}/element/color.json` 令牌化 | 参考 `harmony-pokerouge` | 全部 UI |
-| D9 | bundle `com.lichtcui.sourcereader`；`compatibleSdkVersion 5.0.0(12)` / `targetSdkVersion 6.1.1(24)` | 目标设备与 SDK 约束 | `AppScope`、`build-profile.json5` |
+| D9 | bundle `com.lichtcui.wispreader`（2026-11-11 由 `com.lichtcui.sourcereader` 更名）；`compatibleSdkVersion 5.0.0(12)` / `targetSdkVersion 6.1.1(24)` | 目标设备与 SDK 约束 | `AppScope`、`build-profile.json5` |
 | D10 | JS 例外：`@js:` 的 **L1 字符串模式**仍走 `resolve_js_l1` 解析，失败才排除（非 L1 才直接排除）；v1 不做 JS 运行时 | 内置 13 个源里有 L1 用法，一律砍掉会误伤 | `search_url.rs`、`gate.rs` |
 | D11 | v1 不做：JS 运行时、登录型源、发现(explore)、真分页、在线 TTS（**换源自 v1.1 起解禁，见 D16**） | 控制范围，先跑通主链路 | 全局 |
 | D12 | 端侧自建 TTS（GPT-SoVITS 音色替代系统 TTS）是**并行增量**、未立项，不改动 M5 代码 | 与 M5 系统 TTS 路线不冲突，可独立推进。**→ 2026-10-12 已封存**：P4–P6 原型真机跑通（ZipVoice 端侧 RTF 0.49–0.54），但 OHOS 交叉编译的 ORT 对一切动态 shape 输出的 `GetShape()` 返回 ~4× 虚高帧数（mel 1614 vs 正确 400）⇒ 波形全 NaN / 电流声；升级 ORT、降级、换 vocoder、换模型四条路同因堵死，**重启前提 = ORT 上游修复**。证据与可恢复产物见 [`archive/TTS-LOCAL-ONNX/`](./archive/TTS-LOCAL-ONNX/README.md) | [`research/TTS-PLAN.md`](./research/TTS-PLAN.md)（原计划）、[`archive/TTS-LOCAL-ONNX/`](./archive/TTS-LOCAL-ONNX/README.md)（封存记录） |

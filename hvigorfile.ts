@@ -14,13 +14,13 @@ type SigningFile = {
   release: SigningConfig | null;
 };
 
-const signingMode: string = process.env.SOURCE_READER_SIGNING_MODE ?? 'debug';
+const signingMode: string = process.env.WISP_READER_SIGNING_MODE ?? 'debug';
 if (signingMode !== 'debug' && signingMode !== 'release') {
-  throw new Error('PUBLICATION_BLOCKED: SOURCE_READER_SIGNING_MODE must be debug or release');
+  throw new Error('PUBLICATION_BLOCKED: WISP_READER_SIGNING_MODE must be debug or release');
 }
 
-const signingFile: string = process.env.SOURCE_READER_SIGNING_FILE ??
-  join(homedir(), '.ohos', 'source-reader', 'signing.json');
+const signingFile: string = process.env.WISP_READER_SIGNING_FILE ??
+  join(homedir(), '.ohos', 'wisp-reader', 'signing.json');
 if (!existsSync(signingFile)) {
   throw new Error('PUBLICATION_BLOCKED: external signing config is missing; run scripts/migrate-signing.sh');
 }

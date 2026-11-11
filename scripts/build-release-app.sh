@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 OUT_DIR=build/outputs/default
-APP="$OUT_DIR/source-reader-default-signed.app"
+APP="$OUT_DIR/wisp-reader-default-signed.app"
 
 "$ROOT/scripts/release-preflight.sh"
 
@@ -24,7 +24,7 @@ if [ -z "${HVIGORW:-}" ]; then
   exit 1
 fi
 
-SOURCE_READER_SIGNING_MODE=release "$HVIGORW" assembleApp \
+WISP_READER_SIGNING_MODE=release "$HVIGORW" assembleApp \
   --mode project -p product=default -p buildMode=release
 
 node - "$OUT_DIR" "$APP" <<'NODE'

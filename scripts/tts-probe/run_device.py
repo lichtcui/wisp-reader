@@ -24,7 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DEVECO = Path("/Applications/DevEco-Studio.app")
 DEFAULT_HDC = DEFAULT_DEVECO / "Contents/sdk/default/openharmony/toolchains/hdc"
 DEFAULT_CACHE = Path.home() / ".cache/source-reader/tts-probe"
-DEFAULT_BUNDLE = "com.lichtcui.sourcereader"
+DEFAULT_BUNDLE = "com.lichtcui.wispreader"
 DEFAULT_ABILITY = "EntryAbility"
 DEFAULT_REMOTE_ROOT = "data/storage/el2/base/haps/entry/files/tts-probe"
 

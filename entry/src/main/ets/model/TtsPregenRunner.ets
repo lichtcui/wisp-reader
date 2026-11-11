@@ -16,7 +16,7 @@ import {
 } from './TtsPregen';
 
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReaderTts';
+const TAG: string = 'WispReaderTts';
 /** 轮询间隔（IMPL §3.3）。一次查询是 ms 级，别做成忙轮询。 */
 const POLL_MS: number = 5000;
 

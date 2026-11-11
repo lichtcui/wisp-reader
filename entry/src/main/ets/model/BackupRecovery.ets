@@ -18,7 +18,7 @@ import { sweepOrphanDownloads } from './DownloadStore';
 import { BookDownloader } from './BookDownloader';
 
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReaderBackup';
+const TAG: string = 'WispReaderBackup';
 const FILE_CHUNK_BYTES: number = 1024 * 1024;
 const ENCODE_CHUNK_CHARS: number = Math.floor(FILE_CHUNK_BYTES / 4);
 const RESTORE_JOURNAL_NAME: string = 'backup-restore.pending.json';

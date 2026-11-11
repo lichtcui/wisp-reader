@@ -14,7 +14,7 @@ cd "$ROOT"
 
 DEVECO="${DEVECO:-/Applications/DevEco-Studio.app}"
 HDC="${HDC:-$DEVECO/Contents/sdk/default/openharmony/toolchains/hdc}"
-BUNDLE="${BUNDLE:-com.lichtcui.sourcereader}"
+BUNDLE="${BUNDLE:-com.lichtcui.wispreader}"
 HAP=entry/build/default/outputs/default/entry-default-signed.hap
 
 FAIL=0

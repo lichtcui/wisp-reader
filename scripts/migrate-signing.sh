@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="$ROOT/build-profile.json5"
-TARGET="${SOURCE_READER_SIGNING_FILE:-$HOME/.ohos/source-reader/signing.json}"
+TARGET="${WISP_READER_SIGNING_FILE:-$HOME/.ohos/wisp-reader/signing.json}"
 FORCE=0
 
 case "${1:-}" in

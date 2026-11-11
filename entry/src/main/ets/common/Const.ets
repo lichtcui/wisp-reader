@@ -1,6 +1,6 @@
 import { Book, BookSearchItem, BookSource, Chapter } from '../engine/types';
 
-export const APP_NAME: string = '源阅读';
+export const APP_NAME: string = '幽光阅读';
 export const GITHUB_URL: string = 'https://github.com/lichtcui';
 
 export const TAB_SHELF: number = 0;

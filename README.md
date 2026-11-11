@@ -1,4 +1,4 @@
-# 源阅读（Source Reader）
+# 幽光阅读（Wisp Reader）
 
 HarmonyOS NEXT 原生阅读 App，兼容 [Legado](https://github.com/gedoor/legado) 书源格式。
 

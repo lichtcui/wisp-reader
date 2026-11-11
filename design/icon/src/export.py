@@ -1,4 +1,4 @@
-"""Render the Source Reader app icon sources into every required asset.
+"""Render the Wisp Reader (幽光阅读) app icon sources into every required asset.
 
 Pipeline
     background.svg + foreground.svg

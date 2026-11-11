@@ -12,8 +12,8 @@ type SigningFile = {
   debug: SigningConfig | null;
 };
 
-const signingFile = process.env.SOURCE_READER_SIGNING_FILE ??
-  join(homedir(), '.ohos', 'source-reader', 'signing.json');
+const signingFile = process.env.WISP_READER_SIGNING_FILE ??
+  join(homedir(), '.ohos', 'wisp-reader', 'signing.json');
 if (!existsSync(signingFile)) {
   throw new Error(`TTS probe signing config missing: ${signingFile}`);
 }

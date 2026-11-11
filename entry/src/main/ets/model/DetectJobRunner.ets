@@ -53,7 +53,7 @@ import {
 } from './DetectJob';
 
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReaderDetect';
+const TAG: string = 'WispReaderDetect';
 const DETECT_DIR: string = 'detect';
 const JOB_FILE: string = 'job.json';
 const DATA_TRANSFER_MODE: string = 'dataTransfer';
@@ -690,7 +690,7 @@ export class DetectJobRunner {
   private async detectWantAgent(): Promise<WantAgent> {
     const info: wantAgent.WantAgentInfo = {
       wants: [{
-        bundleName: 'com.lichtcui.sourcereader',
+        bundleName: 'com.lichtcui.wispreader',
         abilityName: 'EntryAbility'
       }],
       actionType: wantAgent.OperationType.START_ABILITY,

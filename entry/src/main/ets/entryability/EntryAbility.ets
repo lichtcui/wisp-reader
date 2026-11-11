@@ -10,7 +10,7 @@ import { TtsController } from '../model/TtsController';
 import { recoverPendingRestore, RestoreRecoveryResult } from '../model/BackupRecovery';
 
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReader';
+const TAG: string = 'WispReader';
 
 export default class EntryAbility extends UIAbility {
   private startupReady: Promise<void> = Promise.resolve();

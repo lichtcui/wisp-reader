@@ -18,7 +18,7 @@ import { ENGINE_COVER_TIMEOUT_MS } from '../common/Const';
  * is not an image).
  */
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReaderCover';
+const TAG: string = 'WispReaderCover';
 const pixmapCache: Map<string, image.PixelMap> = new Map();
 const pathCache: Map<string, string> = new Map();
 /** Same cover visible in multiple components at once: share one download/decode. */

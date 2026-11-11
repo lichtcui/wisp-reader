@@ -1,5 +1,5 @@
 [Unit]
-Description=Source Reader TTS pre-generation worker (GPT-SoVITS v2ProPlus -> chapter cache)
+Description=Wisp Reader TTS pre-generation worker (GPT-SoVITS v2ProPlus -> chapter cache)
 # Design + acceptance evidence: docs/research/TTS-PREGEN-IMPL.md
 After=network.target tts.service
 

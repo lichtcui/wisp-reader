@@ -22,7 +22,7 @@ import {
 import { GroupTitle } from '../components/ListCells';
 
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReaderBackup';
+const TAG: string = 'WispReaderBackup';
 const FILE_CHUNK_BYTES: number = 1024 * 1024;
 const ENCODE_CHUNK_CHARS: number = Math.floor(FILE_CHUNK_BYTES / 4);
 const BACKUP_TEMP_SUFFIX: string = '.tmp';
@@ -195,13 +195,13 @@ export struct BackupManagePage {
       await recoverPendingRestore(ctx);
       const savePicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(ctx);
       const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
-      options.newFileNames = ['sourcereader_backup_' + this.dateStr() + '.json'];
+      options.newFileNames = ['wispreader_backup_' + this.dateStr() + '.json'];
       options.fileSuffixChoices = ['JSON|.json'];
       const uris: string[] = await savePicker.save(options);
       if (uris.length === 0) {
         return;
       }
-      tempPath = ctx.cacheDir + '/sourcereader_backup_' + Date.now().toString() + '_' +
+      tempPath = ctx.cacheDir + '/wispreader_backup_' + Date.now().toString() + '_' +
         Math.floor(Math.random() * 1000000).toString() + BACKUP_TEMP_SUFFIX;
       const tempFile: fileIo.File = await fileIo.open(
         tempPath,

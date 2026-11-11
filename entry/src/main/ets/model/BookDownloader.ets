@@ -20,7 +20,7 @@ import {
 } from './DownloadStore';
 
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReaderDownload';
+const TAG: string = 'WispReaderDownload';
 const DATA_TRANSFER_MODE: string = 'dataTransfer';
 const AUDIO_PLAYBACK_MODE: string = 'audioPlayback';
 const PROGRESS_NOTIFY_INTERVAL_MS: number = 1000;
@@ -332,7 +332,7 @@ export class BookDownloader {
   private async downloadWantAgent(): Promise<WantAgent> {
     const info: wantAgent.WantAgentInfo = {
       wants: [{
-        bundleName: 'com.lichtcui.sourcereader',
+        bundleName: 'com.lichtcui.wispreader',
         abilityName: 'EntryAbility'
       }],
       actionType: wantAgent.OperationType.START_ABILITY,

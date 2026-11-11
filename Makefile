@@ -15,12 +15,12 @@ HDC      := $(NDK_HOME)/toolchains/hdc
 HVIGORW  := $(DEVECO)/Contents/tools/hvigor/bin/hvigorw
 JAVA     := $(DEVECO)/Contents/jbr/Contents/Home/bin/java
 
-BUNDLE   := com.lichtcui.sourcereader
+BUNDLE   := com.lichtcui.wispreader
 ABILITY  := EntryAbility
 HAP      := entry/build/default/outputs/default/entry-default-signed.hap
 SO       := entry/libs/arm64-v8a/liblegado_core.so
 DTS      := entry/src/main/cpp/types/liblegado_core/index.d.ts
-APP      := build/outputs/default/source-reader-default-signed.app
+APP      := build/outputs/default/wisp-reader-default-signed.app
 SIGN_TOOL := $(NDK_HOME)/toolchains/lib/hap-sign-tool.jar
 # hvigorw 依赖 DevEco 自带的 node/ohpm，必须在 PATH 里（否则报找不到 node）。
 export DEVECO_SDK_HOME := $(SDK)
@@ -80,10 +80,10 @@ native-fresh: ## 校验 Rust .so 与 NAPI 声明没有落后于源码
 	@scripts/check-native-fresh.sh
 
 hap: native-fresh ## 编译 debug HAP（NO_DAEMON=1 可关 daemon）
-	SOURCE_READER_SIGNING_MODE=debug $(HVIGORW) assembleHap --mode module -p product=default -p buildMode=debug $(DAEMON_FLAG)
+	WISP_READER_SIGNING_MODE=debug $(HVIGORW) assembleHap --mode module -p product=default -p buildMode=debug $(DAEMON_FLAG)
 
 hap-release: native-fresh ## 编译 release HAP（含混淆 + 独立签名）
-	SOURCE_READER_SIGNING_MODE=release $(HVIGORW) assembleHap --mode module -p product=default -p buildMode=release $(DAEMON_FLAG)
+	WISP_READER_SIGNING_MODE=release $(HVIGORW) assembleHap --mode module -p product=default -p buildMode=release $(DAEMON_FLAG)
 
 app-release: native-fresh ## 构建唯一 Release APP（缺少 Release 身份时阻断）
 	HVIGORW=$(HVIGORW) scripts/build-release-app.sh

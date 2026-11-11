@@ -72,10 +72,10 @@ export PATH="/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applicatio
 ## 签名
 
 - 仓库内的 `build-profile.json5` 保持 `signingConfigs: []`，不放本地路径或口令。`hvigorfile.ts` 按
-  `SOURCE_READER_SIGNING_MODE=debug|release`（默认 `debug`）从仓库外读取身份：
+  `WISP_READER_SIGNING_MODE=debug|release`（默认 `debug`）从仓库外读取身份：
 
   ```text
-  ~/.ohos/source-reader/signing.json   # chmod 600
+  ~/.ohos/wisp-reader/signing.json   # chmod 600
   { "debug": { "type": "HarmonyOS", "material": { ... } }, "release": null }
   ```
 
@@ -101,7 +101,7 @@ make verify-app      # hap-sign-tool verify-app + digest + release profile + bun
 make verify-profile  # 单独复核 profile 类型、bundle、有效期与 Debug 隔离
 ```
 
-- 产物固定为 `build/outputs/default/source-reader-default-signed.app`；`verify-app` 最后输出 SHA-256。
+- 产物固定为 `build/outputs/default/wisp-reader-default-signed.app`；`verify-app` 最后输出 SHA-256。
 - `verify-app` / `verify-profile` 与 `app-release` 都会先跑 `scripts/release-preflight.sh`，没有独立 Release 身份时统一输出
   `PUBLICATION_BLOCKED`。
 
@@ -111,10 +111,10 @@ make verify-profile  # 单独复核 profile 类型、bundle、有效期与 Debug
 HDC=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc
 $HDC list targets                       # 当前设备 UDID：33Z0224424136564
 $HDC install -r entry/build/default/outputs/default/entry-default-signed.hap
-$HDC shell aa force-stop com.lichtcui.sourcereader
-$HDC shell aa start -a EntryAbility -b com.lichtcui.sourcereader
+$HDC shell aa force-stop com.lichtcui.wispreader
+$HDC shell aa start -a EntryAbility -b com.lichtcui.wispreader
 $HDC shell hilog -r                     # 清日志
-$HDC shell hilog -x | grep com.lichtcui.sourcereader   # 按 bundle 名筛（= make log）；裸 hilog -x | grep 会刷屏
+$HDC shell hilog -x | grep com.lichtcui.wispreader   # 按 bundle 名筛（= make log）；裸 hilog -x | grep 会刷屏
 ```
 
 **坑**：仅 `aa start` 不会重跑 `aboutToAppear`；要重跑页面逻辑必须先 `aa force-stop`。
@@ -135,7 +135,7 @@ $HDC shell hilog -x | grep com.lichtcui.sourcereader   # 按 bundle 名筛（= m
 
 ## 调试要点
 
-- 日志 tag：**每个文件自己一个**（`SourceReaderTts` / `SourceReaderReader` / `SourceReaderCache` / `SourceReaderCover` / `RuleDebugger` 用 `SourceReaderPoC`）⇒
+- 日志 tag：**每个文件自己一个**（`WispReaderTts` / `WispReaderReader` / `WispReaderCache` / `WispReaderCover` / `RuleDebugger` 用 `WispReaderPoC`）⇒
   **不要用 `-T` 猜 tag**（会拿到空结果、看着像「没触发」），按 bundle 名筛（`make log`）。
 - Rust 侧 `panic`/`unwrap` 会在设备上崩溃，尽量 `Result` 化。
 - ArkTS 严格模式：不用 `any`；`getHostContext()` 返回 `Context | undefined` 需判空。

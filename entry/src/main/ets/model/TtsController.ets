@@ -64,10 +64,10 @@ import {
   pregenErrorMessage, sweepPregFiles
 } from './TtsPregen';
 
-const ENGINE_NAME: string = 'source-reader-tts';
-const SESSION_TAG: string = 'source-reader-listen';
+const ENGINE_NAME: string = 'wisp-reader-tts';
+const SESSION_TAG: string = 'wisp-reader-listen';
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReaderTts';
+const TAG: string = 'WispReaderTts';
 /** Rough offline-TTS reading rate used for the progress/time estimate. */
 const CHARS_PER_SECOND: number = 5.0;
 /** Paragraphs synthesized ahead of the playback head. */
@@ -624,7 +624,7 @@ export class TtsController {
     try {
       const wantAgentInfo: wantAgent.WantAgentInfo = {
         wants: [{
-          bundleName: 'com.lichtcui.sourcereader',
+          bundleName: 'com.lichtcui.wispreader',
           abilityName: 'EntryAbility'
         }],
         actionType: wantAgent.OperationType.START_ABILITY,
@@ -651,7 +651,7 @@ export class TtsController {
     try {
       const wantAgentInfo: wantAgent.WantAgentInfo = {
         wants: [{
-          bundleName: 'com.lichtcui.sourcereader',
+          bundleName: 'com.lichtcui.wispreader',
           abilityName: 'EntryAbility'
         }],
         actionType: wantAgent.OperationType.START_ABILITY,

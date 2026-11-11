@@ -36,7 +36,7 @@ import { getChapterPositions } from './ShelfRepository';
  */
 
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReaderCache';
+const TAG: string = 'WispReaderCache';
 
 const JSON_SUFFIX: string = '.json';
 const COVER_PREFIX: string = 'cover_';

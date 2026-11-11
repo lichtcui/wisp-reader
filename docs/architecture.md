@@ -134,7 +134,7 @@ rust/legado-core/    薄 NAPI 层（cdylib），依赖 legado-engine
 | 备份恢复 / 本地书 | `pages/BackupManage.ets`、`model/BackupRecovery.ets`、`model/LocalBook.ets`（本地 TXT 导入；Legado 风格文件名由 `Format.splitTitleAuthor()` 拆书名/作者并自愈旧行；`toc.json` 缺失或损坏时从 `book.txt` 自动重建，仅正文缺失时原地重新关联并保留 `bookId` / 进度）；恢复开始先取消活动下载，书架全量恢复数量校验通过后由 `DownloadStore.sweepOrphanDownloads` 清理不在备份中的下载目录 |
 | 规则调试器（已实现） | `pages/RuleDebugger.ets` |
 | 颜色 / Design Token | `src/main/resources/{base,dark}/element/color.json`；规范见 [`plan.md`](./plan.md) §2 |
-| 权限 / SDK 版本 / bundle / 混淆 / 签名注入 | `src/main/module.json5`、`AppScope/app.json5`、`build-profile.json5`、`hvigorfile.ts`、`entry/obfuscation-rules.txt`；签名材料在仓库外 `~/.ohos/source-reader/signing.json` |
+| 权限 / SDK 版本 / bundle / 混淆 / 签名注入 | `src/main/module.json5`、`AppScope/app.json5`、`build-profile.json5`、`hvigorfile.ts`、`entry/obfuscation-rules.txt`；签名材料在仓库外 `~/.ohos/wisp-reader/signing.json` |
 
 改完的必走闭环：`make run`（编译 → 安装 → force-stop → 启动）；Rust 侧先 `make test`。
 踩坑按症状查 [`PITFALLS.md`](./PITFALLS.md)。

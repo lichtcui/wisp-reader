@@ -1,5 +1,5 @@
 [Unit]
-Description=Source Reader remote TTS (sherpa-onnx VITS)
+Description=Wisp Reader remote TTS (sherpa-onnx VITS)
 After=network.target
 
 [Service]

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SIGNING_FILE="${SOURCE_READER_SIGNING_FILE:-$HOME/.ohos/source-reader/signing.json}"
+SIGNING_FILE="${WISP_READER_SIGNING_FILE:-$HOME/.ohos/wisp-reader/signing.json}"
 
 node - "$SIGNING_FILE" <<'NODE'
 const fs = require('node:fs');

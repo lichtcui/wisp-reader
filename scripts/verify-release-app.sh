@@ -14,8 +14,8 @@ case "$MODE" in
     ;;
 esac
 
-BUNDLE="${BUNDLE:-com.lichtcui.sourcereader}"
-APP="${APP_PATH:-build/outputs/default/source-reader-default-signed.app}"
+BUNDLE="${BUNDLE:-com.lichtcui.wispreader}"
+APP="${APP_PATH:-build/outputs/default/wisp-reader-default-signed.app}"
 JAVA="${JAVA:-$DEVECO/Contents/jbr/Contents/Home/bin/java}"
 SIGN_TOOL="${SIGN_TOOL:-$DEVECO_SDK_HOME/default/openharmony/toolchains/lib/hap-sign-tool.jar}"
 
@@ -30,7 +30,7 @@ if [ ! -x "$JAVA" ] || [ ! -f "$SIGN_TOOL" ]; then
   exit 1
 fi
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/source-reader-release.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/wisp-reader-release.XXXXXX")"
 CERT="$TMP/cert-chain.cer"
 PROFILE="$TMP/profile.p7b"
 PROFILE_JSON="$TMP/profile.json"

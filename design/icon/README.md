@@ -6,7 +6,7 @@
 > **不要再跑 `export.sh --apply`**，否则会把工程资源覆盖回旧图标。以下内容仅作历史与工具参考
 > （`src/iconlib.py` 仍被 v2 的导出脚本复用）。
 
-Source Reader 的图标源文件、导出产物与替换步骤。
+Wisp Reader（幽光阅读）的图标源文件、导出产物与替换步骤。
 
 ## 设计
 
@@ -96,8 +96,8 @@ python3 -m venv /tmp/fontenv && /tmp/fontenv/bin/pip install fonttools
    ```bash
    HDC=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc
    $HDC install -r entry/build/default/outputs/default/entry-default-signed.hap
-   $HDC shell aa force-stop com.lichtcui.sourcereader
-   $HDC shell aa start -a EntryAbility -b com.lichtcui.sourcereader
+   $HDC shell aa force-stop com.lichtcui.wispreader
+   $HDC shell aa start -a EntryAbility -b com.lichtcui.wispreader
    ```
 
 > 桌面图标由系统缓存，替换后若仍是旧图，可卸载重装或换桌面再切回。

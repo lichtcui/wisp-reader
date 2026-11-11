@@ -23,7 +23,7 @@ import { TTS_PREGEN_ENGINE, TTS_PREGEN_SPEED_SCALE } from '../common/Const';
  */
 
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReaderTts';
+const TAG: string = 'WispReaderTts';
 
 /** 连接/读超时：作业提交要读 40 章正文，给宽一点；轮询要短，别拖住 UI。 */
 const PREGEN_CONNECT_TIMEOUT_MS: number = 5000;

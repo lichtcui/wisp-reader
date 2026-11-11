@@ -90,7 +90,7 @@ import { MeasureOptions } from '@ohos.measure';
 const PANEL_NONE: string = '';
 const PANEL_TOC: string = 'toc';
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReaderReader';
+const TAG: string = 'WispReaderReader';
 const PANEL_SETTINGS: string = 'settings';
 const PANEL_SOURCE: string = 'source';
 /** 滑动手势守卫的兜底时长：某次触摸没走到 onChange / onAnimationEnd 时别让守卫永久卡住。 */

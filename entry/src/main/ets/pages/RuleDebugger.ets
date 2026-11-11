@@ -4,7 +4,7 @@ import { GroupTitle, InsetDivider, SegmentedCell } from '../components/ListCells
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0x0000;
-const TAG: string = 'SourceReaderPoC';
+const TAG: string = 'WispReaderPoC';
 
 const CONTENT_TYPES: string[] = ['html', 'json'];
 

@@ -128,7 +128,7 @@ export struct SettingsPage {
           InsetDivider()
           NavCell({
             label: 'GitHub',
-            value: 'lichtcui/source-reader',
+            value: 'lichtcui/wisp-reader',
             showArrow: true,
             onTap: () => this.onNavigate('GitHub')
           })
@@ -140,7 +140,7 @@ export struct SettingsPage {
             onTap: () => this.onNavigate('法律与免责声明')
           })
 
-          Text('源阅读 · 兼容 Legado 书源 · 仅供学习交流')
+          Text('幽光阅读 · 兼容 Legado 书源 · 仅供学习交流')
             .fontSize(12)
             .fontColor($r('app.color.text_5'))
             .margin({ top: 32, bottom: 40 })
