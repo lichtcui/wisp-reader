@@ -10,6 +10,8 @@
 //   ⚠️ L1 是 v1 唯一保留的 JS 形态（见 decisions.md D10）：只做字符串替换，不加 JS 运行时
 // ──────────────────────────────────────────────────────────────────────
 
+use std::sync::OnceLock;
+
 use regex::Regex;
 
 use crate::types::BookSource;
@@ -59,9 +61,12 @@ pub fn build_request(source: &BookSource, keyword: &str) -> Option<RequestSpec> 
 pub fn resolve_js_l1(search_url: &str, base_url: &str, keyword: &str) -> Option<String> {
     let js_body = search_url.strip_prefix("@js:")?;
     let key_enc = urlencoding(keyword);
-    let re =
+    // 静态正则：`@js:` 解析对每个 POST 源都会执行，避免每次重新编译。
+    static URL_RE: OnceLock<Regex> = OnceLock::new();
+    let re = URL_RE.get_or_init(|| {
         Regex::new(r#"(?s)url\s*=\s*baseUrl\s*\+\s*"([^"]*)"\s*\+\s*(?:encodeURI\s*\(\s*)?key(?:\))?"#)
-            .ok()?;
+            .expect("static L1 url regex is valid")
+    });
     if let Some(caps) = re.captures(js_body) {
         let path = caps.get(1).map(|m| m.as_str()).unwrap_or("");
         let path_resolved = resolve_template(path, &key_enc);
@@ -210,11 +215,17 @@ fn extract_post_body(s: &str) -> Option<String> {
             }
         }
     }
-    let re_single = Regex::new(r"'body'\s*:\s*'([^']*)'").ok()?;
+    static BODY_SINGLE_RE: OnceLock<Regex> = OnceLock::new();
+    let re_single = BODY_SINGLE_RE.get_or_init(|| {
+        Regex::new(r"'body'\s*:\s*'([^']*)'").expect("static body regex is valid")
+    });
     if let Some(caps) = re_single.captures(s) {
         return Some(caps[1].to_string());
     }
-    let re_double = Regex::new(r#""body"\s*:\s*"([^"]*)""#).ok()?;
+    static BODY_DOUBLE_RE: OnceLock<Regex> = OnceLock::new();
+    let re_double = BODY_DOUBLE_RE.get_or_init(|| {
+        Regex::new(r#""body"\s*:\s*"([^"]*)""#).expect("static body regex is valid")
+    });
     if let Some(caps) = re_double.captures(s) {
         return Some(caps[1].to_string());
     }
@@ -222,11 +233,17 @@ fn extract_post_body(s: &str) -> Option<String> {
 }
 
 fn extract_charset(s: &str) -> Option<String> {
-    let re_single = Regex::new(r"'charset'\s*:\s*'([^']*)'").ok()?;
+    static CHARSET_SINGLE_RE: OnceLock<Regex> = OnceLock::new();
+    let re_single = CHARSET_SINGLE_RE.get_or_init(|| {
+        Regex::new(r"'charset'\s*:\s*'([^']*)'").expect("static charset regex is valid")
+    });
     if let Some(caps) = re_single.captures(s) {
         return Some(caps[1].to_string().to_lowercase());
     }
-    let re_double = Regex::new(r#""charset"\s*:\s*"([^"]*)""#).ok()?;
+    static CHARSET_DOUBLE_RE: OnceLock<Regex> = OnceLock::new();
+    let re_double = CHARSET_DOUBLE_RE.get_or_init(|| {
+        Regex::new(r#""charset"\s*:\s*"([^"]*)""#).expect("static charset regex is valid")
+    });
     if let Some(caps) = re_double.captures(s) {
         return Some(caps[1].to_string().to_lowercase());
     }

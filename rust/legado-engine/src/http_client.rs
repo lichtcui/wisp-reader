@@ -281,9 +281,12 @@ pub fn parse_headers(header_str: &str) -> Vec<(String, String)> {
     if header_str.is_empty() {
         return headers;
     }
-    let Ok(re) = regex::Regex::new(r#"['"]([^'"]+)['"]\s*:\s*['"]([^'"]*)['"]"#) else {
-        return headers;
-    };
+    // 静态正则：`parse_headers` 每条源请求都会走，`Regex::new` 每次编译约几十µs。
+    static HEADER_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = HEADER_RE.get_or_init(|| {
+        regex::Regex::new(r#"['"]([^'"]+)['"]\s*:\s*['"]([^'"]*)['"]"#)
+            .expect("static header regex is valid")
+    });
     for cap in re.captures_iter(header_str) {
         headers.push((cap[1].to_string(), cap[2].to_string()));
     }

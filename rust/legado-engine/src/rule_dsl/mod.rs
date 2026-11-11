@@ -199,7 +199,11 @@ pub fn extract_toc(content: &str, content_type: &str, rule: &TocRule) -> Vec<Toc
 /// Expand every `{{...}}` placeholder against a JSON value. Supports fallbacks
 /// like `{{$.a||$.b}}`. Returns None if any placeholder fails to resolve.
 pub fn expand_template(tpl: &str, json: &serde_json::Value) -> Option<String> {
-    let re = regex::Regex::new(r"\{\{(.*?)}}").ok()?;
+    // 静态正则：`{{...}}` 模板在目录/正文规则里频繁出现，避免每次重新编译。
+    static TEMPLATE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = TEMPLATE_RE.get_or_init(|| {
+        regex::Regex::new(r"\{\{(.*?)}}").expect("static template regex is valid")
+    });
     let mut out = tpl.to_string();
     for cap in re.captures_iter(tpl) {
         let inner = cap.get(1).map(|m| m.as_str()).unwrap_or("");
