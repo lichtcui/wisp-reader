@@ -4,7 +4,7 @@
 //                          statusVisible / shelfKeys / pickerVisible / pickerDs / expandedReason
 //   搜索主流程（滑动窗口 + 并发 8 + 每源超时，见 docs/decisions.md D4）：
 //     aboutToAppear / onSearchTokenChange（@Monitor）/ startSearch / drain / searchOne / searchGen（代次守卫）/ nextIndex
-//   富化与合并：enrichMerged / enrichOne / infoCache / rebuildGroups / bucketOf /
+//   富化与合并：enrichMerged / enrichOne / infoCache / scheduleRebuild / cancelScheduledRebuild / rebuildGroups / bucketOf /
 //               weightOf / metaLine / primaryOrigin（`作者：`/`最新章节：` 前缀清洗在 common/Format）
 //   置信度（失败扣分/成功回分，持久化）：persistConfidence / confidenceLabel / failLabel / sourceSummary /
 //                                        okCount / failCount / successPct / elapsedLabel
@@ -42,6 +42,11 @@ import { ENGINE_INFO_TIMEOUT_MS } from '../common/Const';
 const SEARCH_TIMEOUT_MS: number = 10_000;
 /** 搜索并发上限：由 Rust `buffer_unordered` 按输入顺序调度（高置信先执行）。 */
 const SEARCH_CONCURRENCY: number = 8;
+/**
+ * 逐源结果合并成一次全量重建的节流窗口。`rebuildGroups` 的代价与已累积条目数成正比，
+ * 每源都重建在 3000 源场景是 O(源数²)，所以只置脏、按窗口合并。
+ */
+const MERGE_REBUILD_MS: number = 150;
 
 /** Same name + author from several sources merged into one list entry. */
 interface SearchGroup {
@@ -101,6 +106,8 @@ export struct SearchResultPage {
   private rowByUrl: Map<string, SourceRow> = new Map<string, SourceRow>();
   private sourceMap: Map<string, BookSource> = new Map<string, BookSource>();
   private rawItems: BookSearchItem[] = [];
+  /** 合并重建的定时器；`-1` = 空闲。见 `scheduleRebuild`。 */
+  private rebuildTimer: number = -1;
   private searchGen: number = 0;
   private nextIndex: number = 0;
   private infoCache: Map<string, Book> = new Map<string, Book>();
@@ -113,6 +120,13 @@ export struct SearchResultPage {
     }
     this.ctx = ctx;
     this.prepareSearch();
+  }
+
+  aboutToDisappear(): void {
+    // 页面已离开：停掉还在派发的搜索（`drain` 的每轮循环都验代次），
+    // 并撤掉挂起的合并窗口 —— 都不该再写已销毁组件的 @Local。
+    this.searchGen = this.searchGen + 1;
+    this.cancelScheduledRebuild();
   }
 
   private async prepareSearch(): Promise<void> {
@@ -158,6 +172,8 @@ export struct SearchResultPage {
   private async startSearch(): Promise<void> {
     this.searchGen = this.searchGen + 1;
     const gen: number = this.searchGen;
+    // 上一轮可能还有未落地的合并窗口：结果集即将被清空，先撤掉它。
+    this.cancelScheduledRebuild();
     this.rawItems = [];
     this.groups = [];
     this.statuses = [];
@@ -225,8 +241,11 @@ export struct SearchResultPage {
           status = result.sources[0];
         }
         if (result.items.length > 0) {
-          this.rawItems = this.rawItems.concat(result.items);
-          this.rebuildGroups();
+          // 逐源只累积 + 标脏：`rebuildGroups` 是 O(累积条目)，3000 源时每源重建会 O(源数²)。
+          for (let k: number = 0; k < result.items.length; k++) {
+            this.rawItems.push(result.items[k]);
+          }
+          this.scheduleRebuild();
         }
       }
     } catch (err) {
@@ -240,6 +259,9 @@ export struct SearchResultPage {
     this.statuses = next;
     if (this.statuses.length === this.sources.length) {
       this.searching = false;
+      // 收尾强制同步重建一次：窗口内最后几个源的结果不能等定时器（可能在页面离开后才到点）。
+      this.cancelScheduledRebuild();
+      this.rebuildGroups();
       await this.persistConfidence(this.statuses.slice());
       this.enrichMerged(gen);
     }
@@ -362,6 +384,28 @@ export struct SearchResultPage {
   }
 
   // ── Merge + sort (Legado `SearchModel.mergeItems` semantics) ───
+
+  /**
+   * 合并窗口：搜索期间逐源结果只把 `rawItems` 标脏，窗口到点才全量重建一次。
+   * 结果仍在持续上屏（最多晚 150 ms），但避免了「每源一次全量分组 + 排序 + 整列表刷新」。
+   */
+  private scheduleRebuild(): void {
+    if (this.rebuildTimer >= 0) {
+      return;
+    }
+    this.rebuildTimer = setTimeout((): void => {
+      this.rebuildTimer = -1;
+      this.rebuildGroups();
+    }, MERGE_REBUILD_MS);
+  }
+
+  /** 撤掉挂起的合并窗口（新一轮搜索 / 收尾同步重建 / 页面离开）。 */
+  private cancelScheduledRebuild(): void {
+    if (this.rebuildTimer >= 0) {
+      clearTimeout(this.rebuildTimer);
+      this.rebuildTimer = -1;
+    }
+  }
 
   private rebuildGroups(): void {
     const key: string = this.searchKey.trim();
