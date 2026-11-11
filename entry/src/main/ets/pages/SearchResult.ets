@@ -1,6 +1,6 @@
-// ─── 文件索引（改本文件先看这里；本文件约 1041 行）──────────────────────────
+// ─── 文件索引（改本文件先看这里；本文件约 1229 行）──────────────────────────
 // 下面只列**成员名**，不列行号（行号会漂）；定位用 `grep -n "<名字>" entry/src/main/ets/pages/SearchResult.ets`。
-//   状态（@Local/@Param）：keyword / searchToken / groups / statuses / searching / total / enriching /
+//   状态（@Local/@Param）：keyword / searchToken / groupCount / statuses / searching / total / enriching /
 //                          statusVisible / shelfKeys / pickerVisible / pickerDs / expandedReason
 //   搜索主流程（滑动窗口 + 并发 8 + 每源超时，见 docs/decisions.md D4）：
 //     aboutToAppear / onSearchTokenChange（@Monitor）/ startSearch / drain / searchOne / searchGen（代次守卫）/ nextIndex
@@ -79,6 +79,44 @@ interface StatusRow {
   id?: string;
 }
 
+/**
+ * 结果列表的懒加载数据源：与来源抽屉同一套 `IDataSource` 模式。
+ * 搜索结果可达数百组，`ForEach` 会在每次合并窗口重建全部行；`LazyForEach` 只构建可视区。
+ */
+class SearchGroupDataSource implements IDataSource {
+  private listeners: DataChangeListener[] = [];
+  private items: SearchGroup[] = [];
+
+  totalCount(): number {
+    return this.items.length;
+  }
+
+  getData(index: number): SearchGroup {
+    return this.items[index];
+  }
+
+  registerDataChangeListener(listener: DataChangeListener): void {
+    if (this.listeners.indexOf(listener) < 0) {
+      this.listeners.push(listener);
+    }
+  }
+
+  unregisterDataChangeListener(listener: DataChangeListener): void {
+    const i: number = this.listeners.indexOf(listener);
+    if (i >= 0) {
+      this.listeners.splice(i, 1);
+    }
+  }
+
+  /** 重新下发整份分组（列表内容由合并窗口整体替换，不做增量 diff）。 */
+  setItems(items: SearchGroup[]): void {
+    this.items = items;
+    for (const l of this.listeners) {
+      l.onDataReloaded();
+    }
+  }
+}
+
 @ComponentV2
 export struct SearchResultPage {
   @Param keyword: string = '';
@@ -86,7 +124,10 @@ export struct SearchResultPage {
   @Event onOpenDetail: (source: BookSource, item: BookSearchItem) => void = () => {};
 
   @Local searchKey: string = '';
-  @Local groups: SearchGroup[] = [];
+  // 结果列表由 `SearchGroupDataSource` + `LazyForEach` 虚拟化；数组本身只供富化读取。
+  private groups: SearchGroup[] = [];
+  /** 供 `build()` 判空/显示条数；只在分组数变化时才触发整页重渲染。 */
+  @Local groupCount: number = 0;
   @Local statuses: SourceStatus[] = [];
   @Local searching: boolean = false;
   @Local total: number = 0;
@@ -117,6 +158,8 @@ export struct SearchResultPage {
   private searchGen: number = 0;
   private nextIndex: number = 0;
   private infoCache: Map<string, Book> = new Map<string, Book>();
+  /** 结果行的懒加载数据源；`rebuildGroups` 每次落地时整份下发并 `onDataReloaded`。 */
+  private groupDs: SearchGroupDataSource = new SearchGroupDataSource();
 
   aboutToAppear(): void {
     const ctx: common.UIAbilityContext | undefined =
@@ -182,6 +225,8 @@ export struct SearchResultPage {
     this.cancelScheduledMerge();
     this.rawItems = [];
     this.groups = [];
+    this.groupCount = 0;
+    this.groupDs.setItems([]);
     this.statuses = [];
     this.pendingStatuses = [];
     this.doneCount = 0;
@@ -508,6 +553,8 @@ export struct SearchResultPage {
       return 0;
     });
     this.groups = groups;
+    this.groupCount = groups.length;
+    this.groupDs.setItems(groups);
   }
 
   private bucketOf(g: SearchGroup, key: string): number {
@@ -823,7 +870,7 @@ export struct SearchResultPage {
           .height(14)
           .color($r('app.color.brand'))
       }
-      Text(this.isSearching() ? '正在搜索…结果仍在更新，排序可能变化' : `共 ${this.groups.length} 条结果`)
+      Text(this.isSearching() ? '正在搜索…结果仍在更新，排序可能变化' : `共 ${this.groupCount} 条结果`)
         .fontSize(12)
         .fontColor(this.isSearching() ? $r('app.color.text_3') : $r('app.color.text_4'))
         .layoutWeight(1)
@@ -1097,7 +1144,7 @@ export struct SearchResultPage {
   build() {
     Stack() {
       Column() {
-        if (this.groups.length === 0) {
+        if (this.groupCount === 0) {
           Column() {
             if (this.searching || this.enriching) {
               LoadingProgress()
@@ -1118,7 +1165,8 @@ export struct SearchResultPage {
         } else {
           this.searchBanner()
           List({ space: 0 }) {
-            ForEach(this.groups, (g: SearchGroup) => {
+            // 行数可达数百条：LazyForEach 只构建可视区，合并窗口重下发时也只 diff 可见行。
+            LazyForEach(this.groupDs, (g: SearchGroup) => {
               ListItem() {
                 Column() {
                   this.resultItem(g)
