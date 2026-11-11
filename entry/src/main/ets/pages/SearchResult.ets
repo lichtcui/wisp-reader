@@ -4,7 +4,7 @@
 //                          statusVisible / shelfKeys / pickerVisible / pickerDs / expandedReason
 //   搜索主流程（滑动窗口 + 并发 8 + 每源超时，见 docs/decisions.md D4）：
 //     aboutToAppear / onSearchTokenChange（@Monitor）/ startSearch / drain / searchOne / searchGen（代次守卫）/ nextIndex
-//   富化与合并：enrichMerged / enrichOne / infoCache / scheduleRebuild / cancelScheduledRebuild / rebuildGroups / bucketOf /
+//   富化与合并：enrichMerged / enrichOne / infoCache / scheduleMerge / cancelScheduledMerge / flushMerge / rebuildGroups / bucketOf /
 //               weightOf / metaLine / primaryOrigin（`作者：`/`最新章节：` 前缀清洗在 common/Format）
 //   置信度（失败扣分/成功回分，持久化）：persistConfidence / confidenceLabel / failLabel / sourceSummary /
 //                                        okCount / failCount / successPct / elapsedLabel
@@ -106,8 +106,14 @@ export struct SearchResultPage {
   private rowByUrl: Map<string, SourceRow> = new Map<string, SourceRow>();
   private sourceMap: Map<string, BookSource> = new Map<string, BookSource>();
   private rawItems: BookSearchItem[] = [];
-  /** 合并重建的定时器；`-1` = 空闲。见 `scheduleRebuild`。 */
-  private rebuildTimer: number = -1;
+  /** 合并窗口定时器；`-1` = 空闲。见 `scheduleMerge`。 */
+  private mergeTimer: number = -1;
+  /** 尚未落地的状态：只在 flush 时整体赋给 `statuses`，避免逐源 `slice()` 的 O(源数²)。 */
+  private pendingStatuses: SourceStatus[] = [];
+  /** 已完成的源数。不能用 `statuses.length` 判收尾：`statuses` 现在滞后窗口至多 150ms。 */
+  private doneCount: number = 0;
+  private groupsDirty: boolean = false;
+  private statusesDirty: boolean = false;
   private searchGen: number = 0;
   private nextIndex: number = 0;
   private infoCache: Map<string, Book> = new Map<string, Book>();
@@ -126,7 +132,7 @@ export struct SearchResultPage {
     // 页面已离开：停掉还在派发的搜索（`drain` 的每轮循环都验代次），
     // 并撤掉挂起的合并窗口 —— 都不该再写已销毁组件的 @Local。
     this.searchGen = this.searchGen + 1;
-    this.cancelScheduledRebuild();
+    this.cancelScheduledMerge();
   }
 
   private async prepareSearch(): Promise<void> {
@@ -173,10 +179,14 @@ export struct SearchResultPage {
     this.searchGen = this.searchGen + 1;
     const gen: number = this.searchGen;
     // 上一轮可能还有未落地的合并窗口：结果集即将被清空，先撤掉它。
-    this.cancelScheduledRebuild();
+    this.cancelScheduledMerge();
     this.rawItems = [];
     this.groups = [];
     this.statuses = [];
+    this.pendingStatuses = [];
+    this.doneCount = 0;
+    this.groupsDirty = false;
+    this.statusesDirty = false;
     this.enriching = false;
     this.statusVisible = false;
     this.pickerVisible = false;
@@ -245,7 +255,8 @@ export struct SearchResultPage {
           for (let k: number = 0; k < result.items.length; k++) {
             this.rawItems.push(result.items[k]);
           }
-          this.scheduleRebuild();
+          this.groupsDirty = true;
+          this.scheduleMerge();
         }
       }
     } catch (err) {
@@ -254,14 +265,17 @@ export struct SearchResultPage {
     if (gen !== this.searchGen) {
       return;
     }
-    const next: SourceStatus[] = this.statuses.slice();
-    next.push(status);
-    this.statuses = next;
-    if (this.statuses.length === this.sources.length) {
+    // 只入缓冲 + 标脏：逐个 `statuses.slice()` 在 3000 源时累计约 450 万次引用拷贝，
+    // 且每次赋值都触发底栏/抽屉的 O(源数) 重算（见 `sourceSummary` / `okCount`）。
+    this.pendingStatuses.push(status);
+    this.doneCount += 1;
+    this.statusesDirty = true;
+    this.scheduleMerge();
+    if (this.doneCount === this.sources.length) {
       this.searching = false;
-      // 收尾强制同步重建一次：窗口内最后几个源的结果不能等定时器（可能在页面离开后才到点）。
-      this.cancelScheduledRebuild();
-      this.rebuildGroups();
+      // 收尾同步落地：窗口内最后几个源的结果不能等定时器（可能在页面离开后才到点）。
+      this.cancelScheduledMerge();
+      this.flushMerge();
       await this.persistConfidence(this.statuses.slice());
       this.enrichMerged(gen);
     }
@@ -343,8 +357,13 @@ export struct SearchResultPage {
       if (gen !== this.searchGen) {
         return;
       }
-      this.rebuildGroups();
+      // 富化每批都可能换掉行 key：同样只标脏，交给 150ms 窗口合并。
+      this.groupsDirty = true;
+      this.scheduleMerge();
     }
+    // 收尾同步落地，保证 `enriching` 变 false 时列表已是最终态。
+    this.cancelScheduledMerge();
+    this.flushMerge();
     this.enriching = false;
   }
 
@@ -386,24 +405,39 @@ export struct SearchResultPage {
   // ── Merge + sort (Legado `SearchModel.mergeItems` semantics) ───
 
   /**
-   * 合并窗口：搜索期间逐源结果只把 `rawItems` 标脏，窗口到点才全量重建一次。
-   * 结果仍在持续上屏（最多晚 150 ms），但避免了「每源一次全量分组 + 排序 + 整列表刷新」。
+   * 合并窗口：搜索期间逐源结果只把 `rawItems` / `pendingStatuses` 标脏，窗口到点才落地一次。
+   * 结果仍在持续上屏（最多晚 150 ms），但避免了「每源一次全量分组 + 排序 + 整列表刷新」
+   * 与「每源一次 statuses 全量拷贝 + O(源数) 统计重算」。
    */
-  private scheduleRebuild(): void {
-    if (this.rebuildTimer >= 0) {
+  private scheduleMerge(): void {
+    if (this.mergeTimer >= 0) {
       return;
     }
-    this.rebuildTimer = setTimeout((): void => {
-      this.rebuildTimer = -1;
-      this.rebuildGroups();
+    this.mergeTimer = setTimeout((): void => {
+      this.mergeTimer = -1;
+      this.flushMerge();
     }, MERGE_REBUILD_MS);
   }
 
-  /** 撤掉挂起的合并窗口（新一轮搜索 / 收尾同步重建 / 页面离开）。 */
-  private cancelScheduledRebuild(): void {
-    if (this.rebuildTimer >= 0) {
-      clearTimeout(this.rebuildTimer);
-      this.rebuildTimer = -1;
+  /** 撤掉挂起的合并窗口（新一轮搜索 / 收尾同步落地 / 页面离开）。 */
+  private cancelScheduledMerge(): void {
+    if (this.mergeTimer >= 0) {
+      clearTimeout(this.mergeTimer);
+      this.mergeTimer = -1;
+    }
+  }
+
+  /** 把窗口内积累的状态与条目一次性落地；重复调用是安全的。 */
+  private flushMerge(): void {
+    if (this.statusesDirty) {
+      this.statusesDirty = false;
+      // 整体换引用（不拷贝）：`pendingStatuses` 随后只 push 到新数组，旧数组不再被修改。
+      this.statuses = this.pendingStatuses;
+      this.pendingStatuses = [];
+    }
+    if (this.groupsDirty) {
+      this.groupsDirty = false;
+      this.rebuildGroups();
     }
   }
 
