@@ -454,15 +454,18 @@ export function newDetectJobState(): DetectJobState {
  * Keeping both operation and cursor on the same sorted ids makes restarts exact.
  */
 export function canonicalDetectSourceIds(sourceIds: string[]): string[] {
-  const seen: string[] = [];
+  const unique: string[] = [];
+  // `Set` 而非 `unique.indexOf(...)`：3000 源时把 O(n²) 的字符串比较降到 O(n)。
+  const seen: Set<string> = new Set<string>();
   for (let i = 0; i < sourceIds.length; i++) {
     const id: string = sourceIds[i].trim();
-    if (id.length > 0 && seen.indexOf(id) < 0) {
-      seen.push(id);
+    if (id.length > 0 && !seen.has(id)) {
+      seen.add(id);
+      unique.push(id);
     }
   }
-  seen.sort(compareText);
-  return seen;
+  unique.sort(compareText);
+  return unique;
 }
 
 export function normalizeDetectMode(mode: string): string {
