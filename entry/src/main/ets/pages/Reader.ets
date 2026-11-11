@@ -788,7 +788,9 @@ export struct ReaderPage {
             (err as BusinessError).message);
         }
       }
-      this.applyChapter(index, content, this.paragraphIndex);
+      // 同章刷新保留当前页身份：长段落跨页时只靠 paragraphIndex 会落回该段起始页，
+      // 视觉上往回跳一页（pageId 含段内 start 偏移，可精确回到原页）。
+      this.applyChapter(index, content, this.paragraphIndex, false, this.currentPageId);
       await this.persistProgress();
       this.toast('本章已刷新');
       hilog.info(DOMAIN, TAG, 'chapter refreshed book=%{public}s index=%{public}d len=%{public}d',
@@ -805,7 +807,8 @@ export struct ReaderPage {
   }
 
   /** Commit a loaded chapter body to the reading surface. */
-  private applyChapter(index: number, content: string, restoreParagraph: number, restoreAtEnd: boolean = false): void {
+  private applyChapter(index: number, content: string, restoreParagraph: number, restoreAtEnd: boolean = false,
+    restorePageId: string = ''): void {
     const chapter: Chapter = this.chapters[index];
     const paragraphs: string[] = sanitizeText(content, chapter.title);
     this.chapterIndex = index;
@@ -820,7 +823,9 @@ export struct ReaderPage {
     // 显式载入新章时清空“当前可视页身份”，否则 rebuildWindow 会用旧章的页身份
     // 在跨章页流里重新命中旧页（旧章常作为 prev 邻居仍保留在窗口内），导致
     // 「下一章」/目录点击相邻章时视觉上停在原地不跳转。
-    this.currentPageId = '';
+    // 同章刷新（restorePageId 非空）是例外：章节与内容位置不变，保留页身份才能
+    // 精确回到长段落中间的当前页；若正文已变化导致该页不存在，rebuildWindow 会回退段落锚点。
+    this.currentPageId = restorePageId;
     this.loading = false;
     // 首次进入时尺寸尚未测出（contentWidth/Height 还是默认值），若立即 rebuildWindow
     // 会用错误的默认尺寸排版，onAreaChange 再重排一次，就会先闪一帧“未铺满”页面。

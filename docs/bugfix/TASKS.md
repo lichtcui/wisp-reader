@@ -779,12 +779,19 @@
   - 未覆盖：release 包未复跑（纯 ArkTS 文本逻辑、无新增 JSON 字段 ⇒ 不涉 keep 列表 / 混淆面）；「老进度恰好停在页码标题行上」的极端定位未单独验（本修复只删行，段落下标整体前移，受影响的书可能偏移 1–2 段）；**修复前已预生成的听书音频**仍按旧段落数入缓存，这类章（既要拼页、又被预生成过）的高亮时间轴可能偏一段，`pregTimeline` 对超界块锚点做了钳制、不会崩，重算一次即自愈。
   - 证据：`entry/src/main/ets/model/BookContent.ets`（`PAGE_MARK_RE` / `sanitizeText`）、`scripts/book-content-sim.py`、`Makefile`（`make test-content`）。
 
-- [~] **T-READ-10（P2）阅读页顶栏「刷新本章」（2026-11-10，实现完成，真机待验）**：书源在章节发布后修订正文（错字 / 防盗章替换）时，App 原先没有入口重取正文 —— 目录有 stale 重爬，正文缓存却永不过期，已下载章节更是优先级最高。用户只能清缓存或换源。
+- [x] **T-READ-10（P2）阅读页顶栏「刷新本章」（2026-11-10，2026-11-11 真机验收）**：书源在章节发布后修订正文（错字 / 防盗章替换）时，App 原先没有入口重取正文 —— 目录有 stale 重爬，正文缓存却永不过期，已下载章节更是优先级最高。用户只能清缓存或换源。
   - 实现（ArkTS，`pages/Reader.ets`）：顶栏新增「刷新本章」按钮（0 参数 `@Builder`，44×44 热区，日/夜两套 SVG，`accessibilityText="刷新本章"`）；`refreshCurrentChapter()` 在 `refreshing || loading` 时忽略连点，本地书只提示「本地书籍无需刷新」，其余走 `fetchContent(chapter, index, true)` 强制绕过 `DownloadStore` / `ChapterCache` 缓存（仍复用 in-flight 单飞表，避免与预取重复请求）。
-  - 三层缓存一起覆盖：`applyChapter` 重排段落/页流并按 `paragraphIndex` 恢复阅读位置；`putCachedChapter` 覆写内存 + `filesDir/chapters` 条目（顺带作废 TTS 预生成键）；已下载章节存在时再 `writeDownloadedChapter` 覆写。`loadGen++` 作废旧的在飞载章/预取，结果回来时若用户已翻章只更缓存、不动 UI。
+  - 三层缓存一起覆盖：`applyChapter` 重排段落/页流并按当前页身份（`chapterIndex@para@start`）恢复阅读位置（长段落跨页时不会跳回该段起始页；页身份失效再回退段落锚点）；`putCachedChapter` 覆写内存 + `filesDir/chapters` 条目（顺带作废 TTS 预生成键）；已下载章节存在时再 `writeDownloadedChapter` 覆写。`loadGen++` 作废旧的在飞载章/预取，结果回来时若用户已翻章只更缓存、不动 UI。
   - 失败语义：请求失败 / 空正文都保留当前正文不清屏；空正文额外把旧正文写回 `ChapterCache` 并提示「书源返回空内容，已保留原正文」；正常提示「本章已刷新」。已知边界（代码注释与验收口径均已写明）：听书播放中刷新不会重放已生成音频、进度写入由 `ProgressOwner` 暂管（音频时钟独占），文本与音频可能短暂不一致。
   - 验收标准：① 联网书打开任意章，点刷新后正文替换且阅读位置停在同一段；② 强杀重进仍读到新正文（内存 + 文件缓存都已覆写）；③ 已下载章节点刷新后，`files/downloads/<bookId>/<index>.json` 的 `content` 与屏幕一致；④ 本地 TXT 书只提示、不发请求；⑤ 断网/失败时正文不变、toast 为「刷新失败，请稍后重试」；⑥ TTS 播放中刷新不崩、不打断播放。
-  - 主机侧验证（2026-11-10）：`make hap` **BUILD SUCCESSFUL**；`make check` 六项全绿（含本次同时修的 docs-links 与聚合退出码）；`make test` / `test-pregen` / `test-toc` / `test-content` / `test-detect` 全过；`Reader.ets` 无新增 ArkTS 告警。**真机尚未验**：2026-11-10 设备 `33Z0224424136564` 在 `make run` 安装启动成功后掉线（`hdc list targets` = `[Empty]`），以上 ①–⑥ 待设备恢复后补验。
+  - 主机侧验证（2026-11-10）：`make hap` **BUILD SUCCESSFUL**；`make check` 六项全绿（含本次同时修的 docs-links 与聚合退出码）；`make test` / `test-pregen` / `test-toc` / `test-content` / `test-detect` 全过；`Reader.ets` 无新增 ArkTS 告警。
+  - 真机验证（2026-11-11 · 设备 `33Z0224424136564` · debug，`make run` 重装）：
+    - ① 正文替换：剑来第 83 章（index=2）刷新前 `一座落魄山，群峰绵延…`，刷新后 `陈山主总算现身…`；log `chapter refreshed book=剑来 index=2 len=2050`，OCR 到 toast「本章已刷新」。
+    - ② 强杀重进：`aa force-stop` 后重开仍为刷新后的正文（`files/chapters/4b445f13_2.json` 已覆写）。
+    - ③ 已下载章节：下载目录存在时刷新，`chapters/4b445f13_2.json` 与 `downloads/4b445f13/2.json` 同一 mtime、同为 2050 字节且内容一致。
+    - ⑤ 断网（控制中心飞行模式，`ping` 已不可达）刷新：正文不变，log `chapter refresh failed ... msg=network_error`，toast「刷新失败，请稍后重试」。
+    - ① 位置修正：首验发现从「段中起页」（页首 `与山主道谢…`）刷新会跳回该段起始页（`陈山主…`）；已改为同章刷新保留 `pageIdFor` 页身份，复测刷新后仍停在 `与山主道谢…` 原页。
+    - 未覆盖：④ 设备上无本地 TXT 书，仅验证代码分支（`isLocalBook` → toast）；⑥ 当前构建 `LISTENING_FEATURE_ENABLED=false`，听书入口未开放，无法在设备上构造播放中刷新。
   - 文件：`entry/src/main/ets/pages/Reader.ets`（`refreshing` / `refreshCurrentChapter` / `fetchContent` 的 `force` 参数 / 顶栏 `refreshChapterButton`）、`docs/specs/UI-SPEC.md` §6。
   - 证据：`entry/src/main/ets/pages/Reader.ets`（`refreshCurrentChapter`、`fetchContent(force)`、`refreshChapterButton`、`topBar`）。
 
